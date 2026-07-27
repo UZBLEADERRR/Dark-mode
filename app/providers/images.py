@@ -1,0 +1,254 @@
+"""Scene image generation, with one adapter per provider.
+
+All three adapters accept the same thing — a prompt plus zero or more hero
+reference photos — and return raw image bytes, so the pipeline never has to know
+which provider is configured.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import io
+import random
+from pathlib import Path
+
+import httpx
+from PIL import Image, ImageDraw, ImageFilter
+
+from .. import config
+
+
+class ImageError(RuntimeError):
+    pass
+
+
+_OPENAI_SIZES = {
+    "16:9": "1536x1024",
+    "9:16": "1024x1536",
+    "1:1": "1024x1024",
+    "4:5": "1024x1536",
+}
+_FAL_RATIOS = {"16:9": "16:9", "9:16": "9:16", "1:1": "1:1", "4:5": "3:4"}
+
+
+def _data_uri(path: Path) -> str:
+    suffix = path.suffix.lower().lstrip(".") or "png"
+    mime = "image/jpeg" if suffix in {"jpg", "jpeg"} else f"image/{suffix}"
+    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
+
+
+def _mime_for(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    return "image/png"
+
+
+# --- Gemini ------------------------------------------------------------------
+
+async def _gemini(
+    client: httpx.AsyncClient, prompt: str, refs: list[Path], aspect: str
+) -> bytes:
+    if not config.GEMINI_API_KEY:
+        raise ImageError("GEMINI_API_KEY is not set.")
+
+    parts: list[dict] = [{"text": prompt}]
+    for ref in refs:
+        parts.append(
+            {
+                "inline_data": {
+                    "mime_type": _mime_for(ref),
+                    "data": base64.b64encode(ref.read_bytes()).decode(),
+                }
+            }
+        )
+
+    url = f"{config.GEMINI_BASE}/models/{config.GEMINI_IMAGE_MODEL}:generateContent"
+    headers = {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
+
+    async def _post(with_image_config: bool) -> httpx.Response:
+        generation: dict = {"responseModalities": ["IMAGE"]}
+        if with_image_config:
+            generation["imageConfig"] = {"aspectRatio": aspect}
+        body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": generation}
+        return await client.post(url, headers=headers, json=body)
+
+    resp = await _post(config.GEMINI_USE_IMAGE_CONFIG)
+    if resp.status_code == 400 and config.GEMINI_USE_IMAGE_CONFIG:
+        # Older image models reject imageConfig; retry without it and crop later.
+        resp = await _post(False)
+    if resp.status_code >= 400:
+        raise ImageError(f"Gemini image error {resp.status_code}: {resp.text[:300]}")
+
+    payload = resp.json()
+    for candidate in payload.get("candidates", []):
+        for part in candidate.get("content", {}).get("parts", []):
+            blob = part.get("inlineData") or part.get("inline_data")
+            if blob and blob.get("data"):
+                return base64.b64decode(blob["data"])
+    raise ImageError(f"Gemini returned no image. Response: {str(payload)[:300]}")
+
+
+# --- fal.ai ------------------------------------------------------------------
+
+async def _fal(
+    client: httpx.AsyncClient, prompt: str, refs: list[Path], aspect: str, size: tuple[int, int]
+) -> bytes:
+    if not config.FAL_KEY:
+        raise ImageError("FAL_KEY is not set.")
+
+    headers = {"Authorization": f"Key {config.FAL_KEY}", "Content-Type": "application/json"}
+    if refs:
+        model = config.FAL_IMAGE_MODEL
+        body = {
+            "prompt": prompt,
+            "image_urls": [_data_uri(r) for r in refs],
+            "aspect_ratio": _FAL_RATIOS.get(aspect, "16:9"),
+            "num_images": 1,
+        }
+    else:
+        model = config.FAL_TEXT2IMG_MODEL
+        body = {
+            "prompt": prompt,
+            "image_size": {"width": size[0], "height": size[1]},
+            "num_images": 1,
+        }
+
+    resp = await client.post(f"https://fal.run/{model}", headers=headers, json=body)
+    if resp.status_code >= 400:
+        raise ImageError(f"fal.ai error {resp.status_code}: {resp.text[:300]}")
+
+    images = resp.json().get("images") or []
+    if not images:
+        raise ImageError("fal.ai returned no images.")
+
+    url = images[0].get("url", "")
+    if url.startswith("data:"):
+        return base64.b64decode(url.split(",", 1)[1])
+    download = await client.get(url)
+    download.raise_for_status()
+    return download.content
+
+
+# --- OpenAI ------------------------------------------------------------------
+
+async def _openai(
+    client: httpx.AsyncClient, prompt: str, refs: list[Path], aspect: str
+) -> bytes:
+    if not config.OPENAI_API_KEY:
+        raise ImageError("OPENAI_API_KEY is not set.")
+
+    headers = {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
+    size = _OPENAI_SIZES.get(aspect, "1536x1024")
+
+    if refs:
+        files = [
+            ("image[]", (ref.name, ref.read_bytes(), _mime_for(ref)))
+            for ref in refs[:4]
+        ]
+        data = {"model": config.OPENAI_IMAGE_MODEL, "prompt": prompt, "size": size, "n": "1"}
+        resp = await client.post(
+            f"{config.OPENAI_BASE}/images/edits", headers=headers, data=data, files=files
+        )
+    else:
+        resp = await client.post(
+            f"{config.OPENAI_BASE}/images/generations",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"model": config.OPENAI_IMAGE_MODEL, "prompt": prompt, "size": size, "n": 1},
+        )
+
+    if resp.status_code >= 400:
+        raise ImageError(f"OpenAI image error {resp.status_code}: {resp.text[:300]}")
+
+    items = resp.json().get("data") or []
+    if not items:
+        raise ImageError("OpenAI returned no images.")
+    entry = items[0]
+    if entry.get("b64_json"):
+        return base64.b64decode(entry["b64_json"])
+    if entry.get("url"):
+        download = await client.get(entry["url"])
+        download.raise_for_status()
+        return download.content
+    raise ImageError("OpenAI image response contained no data.")
+
+
+# --- fallback ----------------------------------------------------------------
+
+def _placeholder(size: tuple[int, int], seed: str) -> bytes:
+    """A soft gradient so one failed scene cannot sink an otherwise good render."""
+    rng = random.Random(seed)
+    width, height = size
+    top = (rng.randint(10, 70), rng.randint(10, 70), rng.randint(40, 110))
+    bottom = (rng.randint(90, 180), rng.randint(60, 140), rng.randint(80, 160))
+
+    image = Image.new("RGB", (width, height), top)
+    draw = ImageDraw.Draw(image)
+    for y in range(height):
+        ratio = y / max(height - 1, 1)
+        draw.line(
+            [(0, y), (width, y)],
+            fill=tuple(int(top[i] + (bottom[i] - top[i]) * ratio) for i in range(3)),
+        )
+    image = image.filter(ImageFilter.GaussianBlur(radius=max(width, height) / 220))
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# --- public API --------------------------------------------------------------
+
+async def generate_image(
+    *,
+    prompt: str,
+    negative_prompt: str,
+    reference_paths: list[Path],
+    aspect: str,
+    size: tuple[int, int],
+    provider: str | None = None,
+    out_path: Path,
+    attempts: int = 3,
+) -> tuple[Path, str | None]:
+    """Generate one scene image. Returns the path and a warning if it fell back."""
+    provider = (provider or config.IMAGE_PROVIDER).lower()
+    full_prompt = prompt
+    if negative_prompt and provider in {"gemini", "openai"}:
+        # These two have no negative-prompt field, so fold it into the instruction.
+        full_prompt = f"{prompt}\n\nDo not include: {negative_prompt}."
+
+    last_error: Exception | None = None
+    timeout = httpx.Timeout(240.0, connect=30.0)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(attempts):
+            try:
+                if provider == "gemini":
+                    payload = await _gemini(client, full_prompt, reference_paths, aspect)
+                elif provider == "fal":
+                    body = prompt
+                    if negative_prompt:
+                        body = f"{prompt}"
+                    payload = await _fal(client, body, reference_paths, aspect, size)
+                elif provider == "openai":
+                    payload = await _openai(client, full_prompt, reference_paths, aspect)
+                else:
+                    raise ImageError(f"Unknown image provider '{provider}'.")
+
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_bytes(payload)
+                # Normalise to RGB PNG so ffmpeg never trips on CMYK or alpha.
+                with Image.open(out_path) as img:
+                    img.convert("RGB").save(out_path, format="PNG")
+                return out_path, None
+            except Exception as exc:  # noqa: BLE001 - retried, then reported
+                last_error = exc
+                if attempt < attempts - 1:
+                    await asyncio.sleep(2 * (attempt + 1))
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(_placeholder(size, prompt))
+    return out_path, f"Image generation failed, used a placeholder: {last_error}"

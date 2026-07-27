@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Video Studio</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">▶</span>
+      <div>
+        <h1>AI Video Studio</h1>
+        <p>Mavzu yozing — skript, ovoz, rasm, subtitr va render avtomatik.</p>
+      </div>
+    </div>
+    <div id="health" class="pills"></div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab is-active" data-tab="create" role="tab">Yangi video</button>
+    <button class="tab" data-tab="jobs" role="tab">Loyihalar</button>
+    <button class="tab" data-tab="library" role="tab">Herolar va musiqa</button>
+  </nav>
+
+  <main>
+    <!-- ── Yangi video ─────────────────────────────────────────────── -->
+    <section id="tab-create" class="panel is-active">
+      <div class="grid">
+        <form id="create-form" class="card">
+          <h2>Video buyurtmasi</h2>
+
+          <label class="field">
+            <span>Mavzu <em>*</em></span>
+            <textarea name="topic" rows="3" required
+              placeholder="Masalan: Ipak yo'li bo'ylab sayohat qilgan uch savdogarning haqiqiy tarixi"></textarea>
+          </label>
+
+          <div class="row">
+            <label class="field">
+              <span>Format</span>
+              <select name="video_format" id="format-select"></select>
+            </label>
+            <label class="field">
+              <span>Til</span>
+              <select name="language" id="language-select"></select>
+            </label>
+          </div>
+
+          <label class="field" id="duration-field">
+            <span>Taxminiy uzunlik: <b id="duration-label">3 daqiqa</b></span>
+            <input type="range" name="target_seconds" id="duration" min="30" max="900" step="15" value="180" />
+          </label>
+
+          <div class="row">
+            <label class="field">
+              <span>Vizual uslub</span>
+              <input name="art_style" value="cinematic photorealistic, dramatic lighting, 35mm film" />
+            </label>
+            <label class="field">
+              <span>Ohang</span>
+              <input name="tone" value="cinematic documentary" />
+            </label>
+          </div>
+
+          <div class="row">
+            <label class="field">
+              <span>Rasm generatori</span>
+              <select name="image_provider" id="image-provider"></select>
+            </label>
+            <label class="field">
+              <span>Ovoz</span>
+              <select name="tts_provider" id="tts-provider"></select>
+            </label>
+          </div>
+
+          <label class="field toggle">
+            <input type="checkbox" id="use-upload" />
+            <span>Ovozni o'zim yuklayman (AI ovoz yaratmaydi)</span>
+          </label>
+
+          <label class="field hidden" id="audio-field">
+            <span>Audio fayl (mp3, wav, m4a…)</span>
+            <input type="file" id="audio-file" accept="audio/*" />
+            <small>Subtitrlar shu audiodan so'zma-so'z vaqt bilan olinadi (OPENAI_API_KEY kerak).</small>
+          </label>
+
+          <div class="row">
+            <label class="field">
+              <span>Subtitr uslubi</span>
+              <select name="subtitle_style">
+                <option value="bold">Qalin (oq + qora kontur)</option>
+                <option value="karaoke">Karaoke (so'z yonadi)</option>
+                <option value="clean">Toza (fon quti)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Fon musiqasi</span>
+              <select name="music_id" id="music-select"><option value="">— yo'q —</option></select>
+            </label>
+          </div>
+
+          <label class="field toggle">
+            <input type="checkbox" name="burn_subtitles" checked />
+            <span>Subtitrni videoga yoqib chiqarish</span>
+          </label>
+
+          <label class="field toggle">
+            <input type="checkbox" id="review-first" checked />
+            <span>Render'dan oldin sahnalarni ko'rib chiqaman va tahrirlayman</span>
+          </label>
+
+          <div class="field">
+            <span>Herolar <small>(sahnalarda qatnashadi)</small></span>
+            <div id="hero-picker" class="hero-picker"><p class="muted">Hali hero yuklanmagan.</p></div>
+          </div>
+
+          <button type="submit" class="primary" id="submit-btn">Video yaratish</button>
+          <p id="create-error" class="error hidden"></p>
+        </form>
+
+        <div class="card" id="active-card">
+          <h2>Jarayon</h2>
+          <div id="active-empty" class="muted">Hozircha ishlayotgan loyiha yo'q.</div>
+          <div id="active" class="hidden"></div>
+        </div>
+      </div>
+
+      <div id="editor" class="card hidden">
+        <div class="editor-head">
+          <div>
+            <h2>Sahnalarni tahrirlash</h2>
+            <p class="muted" id="editor-note"></p>
+          </div>
+          <button class="primary" id="render-btn" style="width:auto">🎬 Videoni render qilish</button>
+        </div>
+        <div id="editor-scenes" class="editor-grid"></div>
+      </div>
+    </section>
+
+    <!-- ── Loyihalar ───────────────────────────────────────────────── -->
+    <section id="tab-jobs" class="panel">
+      <div class="card">
+        <h2>Loyihalar</h2>
+        <div id="jobs-list" class="jobs"></div>
+      </div>
+    </section>
+
+    <!-- ── Kutubxona ───────────────────────────────────────────────── -->
+    <section id="tab-library" class="panel">
+      <div class="grid">
+        <div class="card">
+          <h2>Herolar</h2>
+          <p class="muted">Personaj rasmini yuklang — AI uni sahnalarda o'sha qiyofada chizadi.</p>
+          <form id="hero-form" class="stack">
+            <input name="name" placeholder="Ism (masalan: Alisher)" required />
+            <input name="description" placeholder="Tavsif: 30 yoshli, qora soch, ko'k chopon" />
+            <input type="file" name="image" accept="image/*" required />
+            <button class="primary" type="submit">Hero qo'shish</button>
+          </form>
+          <div id="hero-list" class="hero-grid"></div>
+        </div>
+
+        <div class="card">
+          <h2>Musiqa</h2>
+          <p class="muted">Fon musiqasi ovoz ostida avtomatik pasayadi.</p>
+          <form id="music-form" class="stack">
+            <input name="name" placeholder="Trek nomi" required />
+            <input type="file" name="audio" accept="audio/*" required />
+            <button class="primary" type="submit">Musiqa qo'shish</button>
+          </form>
+          <div id="music-list" class="stack"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
