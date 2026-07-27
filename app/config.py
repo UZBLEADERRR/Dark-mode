@@ -32,19 +32,25 @@ def _int(name: str, default: int) -> int:
 # --- storage -----------------------------------------------------------------
 DATA_DIR = Path(_env("DATA_DIR", "./data")).resolve()
 PROJECTS_DIR = DATA_DIR / "projects"
-HEROES_DIR = DATA_DIR / "heroes"
-MUSIC_DIR = DATA_DIR / "music"
 DB_PATH = DATA_DIR / "app.db"
 
+# Hero photos and music live in SQLite as blobs, not loose files — one database
+# file is the whole library, so a single Railway volume keeps everything.
 STORAGE_BACKEND = _env("STORAGE_BACKEND", "local").lower()  # local | supabase
 SUPABASE_URL = _env("SUPABASE_URL").rstrip("/")
 SUPABASE_SERVICE_KEY = _env("SUPABASE_SERVICE_KEY")
 SUPABASE_BUCKET = _env("SUPABASE_BUCKET", "videos")
 
-# --- LLM (Claude) ------------------------------------------------------------
+# --- LLM ---------------------------------------------------------------------
+# auto -> Claude when ANTHROPIC_API_KEY is set, otherwise Gemini. With only a
+# Gemini key configured the whole app (script, prompts, subtitles, images,
+# voice) runs on that single key.
+LLM_PROVIDER = _env("LLM_PROVIDER", "auto").lower()
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
 LLM_MODEL = _env("LLM_MODEL", "claude-opus-5")
 LLM_EFFORT = _env("LLM_EFFORT", "high")
+GEMINI_TEXT_MODEL = _env("GEMINI_TEXT_MODEL", "gemini-2.5-pro")
+GEMINI_TEXT_FALLBACK = _env("GEMINI_TEXT_FALLBACK", "gemini-2.5-flash")
 
 # --- image generation --------------------------------------------------------
 IMAGE_PROVIDER = _env("IMAGE_PROVIDER", "gemini").lower()  # gemini | fal | openai
@@ -143,8 +149,21 @@ def caption_budget(width: int, height: int) -> dict[str, int | float]:
 
 
 def ensure_dirs() -> None:
-    for path in (DATA_DIR, PROJECTS_DIR, HEROES_DIR, MUSIC_DIR):
+    for path in (DATA_DIR, PROJECTS_DIR):
         path.mkdir(parents=True, exist_ok=True)
+
+
+def llm_provider() -> str:
+    """Which model writes the script. Falls back to whichever key exists."""
+    if LLM_PROVIDER in {"anthropic", "claude"}:
+        return "anthropic"
+    if LLM_PROVIDER == "gemini":
+        return "gemini"
+    return "anthropic" if ANTHROPIC_API_KEY else "gemini"
+
+
+def llm_ready() -> bool:
+    return bool(ANTHROPIC_API_KEY) if llm_provider() == "anthropic" else bool(GEMINI_API_KEY)
 
 
 def image_provider_ready(provider: str | None = None) -> bool:

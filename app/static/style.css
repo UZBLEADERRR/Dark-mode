@@ -180,7 +180,9 @@ button.ghost.danger:hover { border-color: var(--accent); color: var(--accent); }
 
 .status { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: .74rem; font-weight: 600; }
 .status.queued  { background: rgba(139,147,167,.18); color: var(--muted); }
-.status.running { background: rgba(77,156,255,.18); color: var(--accent-2); }
+.status.running,
+.status.rendering { background: rgba(77,156,255,.18); color: var(--accent-2); }
+.status.review  { background: rgba(255,182,72,.18); color: var(--warn); }
 .status.done    { background: rgba(53,208,127,.16); color: var(--ok); }
 .status.failed  { background: rgba(255,77,77,.16); color: var(--accent); }
 
@@ -214,6 +216,38 @@ video { width: 100%; border-radius: 11px; background: #000; display: block; marg
 details { margin-top: 12px; }
 summary { cursor: pointer; color: var(--muted); font-size: .85rem; padding: 4px 0; }
 pre { white-space: pre-wrap; word-break: break-word; font: 12px/1.6 ui-monospace, monospace; color: var(--muted); }
+
+/* ── scene editor ──────────────────────────────────────────────── */
+#editor { margin-top: 18px; }
+.editor-head {
+  display: flex; flex-wrap: wrap; gap: 12px;
+  align-items: center; justify-content: space-between; margin-bottom: 14px;
+}
+.editor-head h2 { margin: 0; }
+.editor-head p { margin: 2px 0 0; font-size: .82rem; }
+
+.editor-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+
+.ed-scene {
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;
+}
+.ed-scene.dirty { border-color: var(--warn); }
+.ed-scene > img { width: 100%; aspect-ratio: 16/10; object-fit: cover; background: #000; display: block; }
+.ed-body { padding: 11px 12px; display: grid; gap: 9px; }
+.ed-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ed-head b { font-size: .84rem; }
+.ed-head small { color: var(--muted); font-size: .74rem; }
+.ed-scene label { display: block; font-size: .74rem; color: var(--muted); margin-bottom: 3px; font-weight: 550; }
+.ed-scene textarea { min-height: 58px; font-size: .82rem; padding: 8px 10px; }
+.ed-scene select { font-size: .82rem; padding: 7px 10px; }
+.ed-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ed-actions button { flex: 1 1 auto; }
+.flag {
+  display: inline-block; padding: 1px 7px; border-radius: 99px;
+  font-size: .68rem; font-weight: 600;
+  background: rgba(255,182,72,.18); color: var(--warn);
+}
 
 .meta-block { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 10px; }
 .meta-block h4 { margin: 0 0 6px; font-size: .82rem; color: var(--muted); font-weight: 600; }

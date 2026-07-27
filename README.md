@@ -3,30 +3,28 @@
 Mavzu nomini yozasiz — ilova skript yozadi, ovoz beradi, har bir sahna uchun rasm
 yaratadi, subtitr qo'shadi va tayyor MP4 ni render qiladi.
 
-Yuklab qo'ygan **hero** rasmlaringiz sahnalarda reference sifatida ishlatiladi, shuning
-uchun personajlar butun video davomida bir xil qiyofada chiqadi.
+**Bitta Gemini kaliti yetarli.** Skript, rasm promptlari, subtitr, ovoz va YouTube
+matnlari — hammasi o'sha bitta kalitdan ishlaydi.
 
 ---
 
 ## Nima qiladi
 
 ```
-Mavzu  ─▶  Director   ─▶  Imagesmith  ─▶  Ovoz    ─▶  Rasmlar  ─▶  Subtitler
-           (skript)       (promptlar)     (TTS)       (AI)         (vaqt)
-                                                                      │
-                          MP4  ◀── render ◀── Ken Burns ◀────────────┘
-                                   (ffmpeg)    zoom/pan
+Mavzu ─▶ director ─▶ imagesmith ─▶ ovoz ─▶ rasmlar ─▶  ✋ KO'RIB CHIQISH
+        (skript)     (promptlar)   (TTS)    (AI)         (tahrirlash)
+                                                              │
+                     MP4 ◀── render ◀── Ken Burns ◀───────────┘
+                             (ffmpeg)   zoom / pan
 ```
 
-- **Ken Burns** — har bir rasm sekin zoom in/out yoki pan qiladi, sahnalar orasida
-  cross-fade bo'ladi.
-- **Sinxronlash** — har bir sahna klipi o'z ovozidan aynan `TRANSITION_SECONDS`
-  uzunroq render qilinadi va cross-fade o'sha ortiqchani "yeydi". Natijada sahna *k*
-  timeline'da aynan ovozning kumulyativ vaqtiga tushadi — rasm, ovoz va subtitr
-  necha sahna bo'lishidan qat'i nazar bir joyda turadi.
-- **Subtitr** — Claude qayerda qatorni bo'lishni hal qiladi, kod esa qachon
-  ko'rinishini ovoz provayderidan kelgan so'z-vaqtlaridan hisoblaydi. Shu bo'linish
-  tufayli AI xato so'z yozsa ham subtitr vaqti buzilmaydi.
+Qoralama tayyor bo'lgach ilova to'xtaydi va sahnalarni ko'rsatadi. Istalgan
+sahnaning matnini, rasm promptini, kamera harakatini yoki ekran yozuvini
+o'zgartirasiz, kerak bo'lsa faqat o'sha sahnaning rasmini/ovozini qayta
+yaratasiz — butun video qaytadan hisoblanmaydi. Keyin **Render** bosasiz.
+
+Ko'rib chiqish kerak bo'lmasa, formada "Render'dan oldin ko'rib chiqaman"
+katagini olib tashlang — u holda hammasi bir yo'la tugaydi.
 
 ## AI skills
 
@@ -34,7 +32,7 @@ Mavzu  ─▶  Director   ─▶  Imagesmith  ─▶  Ovoz    ─▶  Rasmlar  �
 |---|---|
 | `director` | Mavzuni sahna-ba-sahna skriptga aylantiradi (yoki tayyor ovozni sahnalarga bo'ladi) |
 | `imagesmith` | Har bir sahnani rasm generatori tushunadigan promptga aylantiradi |
-| `subtitler` | Subtitr qatorlarini bo'ladi, kod ularni so'z-vaqtlariga bog'laydi |
+| `subtitler` | Subtitr qatorlarini qayerda bo'lishni hal qiladi |
 | `publisher` | YouTube sarlavha, tavsif, teglar, chapterlar, thumbnail prompt |
 
 ## Provayderlar
@@ -43,13 +41,37 @@ Hammasi adapter — `.env` orqali almashtirasiz, kod o'zgarmaydi.
 
 | Tur | Variantlar |
 |---|---|
-| Rasm | `gemini` (hero konsistensiyasi eng yaxshi), `fal` (Flux Kontext), `openai` (gpt-image-1) |
-| Ovoz | `elevenlabs` (so'z-vaqti bilan), `openai`, `gemini`, yoki **o'z audiongizni yuklash** |
+| Skript | `gemini` (default), `anthropic` (Claude) |
+| Rasm | `gemini`, `fal` (Flux Kontext), `openai` (gpt-image-1) |
+| Ovoz | `gemini`, `elevenlabs`, `openai`, yoki **o'z audiongizni yuklash** |
 | Subtitr vaqti | ElevenLabs timestamps → Whisper → proporsional taxmin |
-| Saqlash | Supabase Storage (tavsiya) yoki lokal disk |
+| Saqlash | Lokal disk (default) yoki Supabase Storage |
 
-Faqat `ANTHROPIC_API_KEY` + bitta rasm kaliti + bitta ovoz kaliti bo'lsa yetadi.
-Qaysi kalit bor-yo'qligi UI tepasidagi yorliqlarda ko'rinadi.
+Qaysi kalit bor-yo'qligi UI tepasidagi yorliqlarda ko'rinadi; kalitsiz provayder
+tanlanmaydi va job yaratilganda aniq xabar beriladi.
+
+## Ma'lumotlar qayerda
+
+- **Herolar va musiqa** — SQLite bazasida, rasm/audio ham blob sifatida ichida.
+  Alohida fayl papkasi kerak emas: bitta `app.db` — butun kutubxona.
+- **Renderlar** — `DATA_DIR/projects/<job>/` ichida. Video tayyor bo'lgach
+  yuklab olasiz. Supabase yoqilgan bo'lsa nusxasi bucket'ga ham chiqadi.
+
+## Animatsiya
+
+Har bir rasm sekin zoom qiladi yoki suriladi (Ken Burns), sahnalar orasida
+cross-fade bo'ladi. Ikkita narsa buni "slayd-shou" emas, "kamera" qilib
+ko'rsatadi:
+
+1. Rasm avval kadrdan **2 barobar katta** qilib olinadi — shuning uchun zoom
+   paytida piksel cho'zilmaydi, aksincha kichraytiriladi va tiniq qoladi.
+2. Harakat **chiziqli emas, easing bilan** (smoothstep). Boshida va oxirida
+   deyarli qimirlamaydi, o'rtada tezlashadi — o'rtadagi tezlik chetlarnikidan
+   ~45 barobar katta. Chiziqli harakatdagi "keskin boshlanib keskin to'xtash"
+   yo'qoladi.
+
+Har bir sahna uchun 8 xil harakatdan birini tanlash mumkin (muharrirdan ham):
+zoom in/out, chap/o'ng/yuqori/past surilish, va zoom+surilish kombinatsiyalari.
 
 ---
 
@@ -57,34 +79,21 @@ Qaysi kalit bor-yo'qligi UI tepasidagi yorliqlarda ko'rinadi.
 
 1. Reponi Railway'da **New Project → Deploy from GitHub repo** qilib ulang.
    `Dockerfile` avtomatik topiladi (ffmpeg va shriftlar shu yerda o'rnatiladi).
-2. **Variables** bo'limiga `.env.example` dagi kalitlarni qo'ying. Minimum:
+2. **Variables** ga eng kamida shuni qo'ying:
 
    ```
-   ANTHROPIC_API_KEY=...
-   IMAGE_PROVIDER=gemini
-   GEMINI_API_KEY=...
-   TTS_PROVIDER=elevenlabs
-   ELEVENLABS_API_KEY=...
-   STORAGE_BACKEND=supabase
-   SUPABASE_URL=https://xxxx.supabase.co
-   SUPABASE_SERVICE_KEY=...
+   GEMINI_API_KEY=AIza...
    ```
 
-3. **Volume** qo'shing va `/data` ga mount qiling (`DATA_DIR=/data`). Bu bo'lmasa
-   hero rasmlari va loyihalar har deploy'da o'chib ketadi.
+   Tamom. Qolgan hammasining default qiymati bor.
+
+3. **Volume** qo'shing va `/data` ga mount qiling, `DATA_DIR=/data` deb belgilang.
+   Bu bo'lmasa herolar bazasi har deploy'da o'chib ketadi.
 4. Deploy tugagach domenni oching — UI shu yerda.
 
-> Railway diski efemer. `STORAGE_BACKEND=supabase` qo'yilsa tayyor videolar public
-> bucket'ga yuklanadi va yuklab olish linki deploy'dan keyin ham ishlaydi.
-> Bucket avtomatik yaratiladi.
-
-### Supabase sozlash
-
-Supabase loyihangizda **Settings → API** dan `service_role` kalitini oling va
-`SUPABASE_SERVICE_KEY` ga qo'ying. `videos` nomli public bucket ilova ishga
-tushganda o'zi yaratiladi.
-
----
+Videolar deploy'dan keyin ham turishi kerak bo'lsa `STORAGE_BACKEND=supabase`
+qo'ying va `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` bering; bucket avtomatik
+yaratiladi.
 
 ## Lokal ishga tushirish
 
@@ -92,8 +101,8 @@ tushganda o'zi yaratiladi.
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 sudo apt-get install -y ffmpeg          # macOS: brew install ffmpeg
-cp .env.example .env                    # kalitlarni to'ldiring
-set -a && source .env && set +a
+
+export GEMINI_API_KEY=AIza...
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -103,30 +112,37 @@ Docker bilan:
 
 ```bash
 docker build -t ai-video-studio .
-docker run --rm -p 8000:8000 --env-file .env -v "$PWD/data:/data" ai-video-studio
+docker run --rm -p 8000:8000 -e GEMINI_API_KEY=AIza... -v "$PWD/data:/data" ai-video-studio
 ```
 
 ---
 
 ## Ishlatish
 
-1. **Herolar va musiqa** bo'limida personaj rasmlarini yuklang (ism + qisqa tavsif).
+1. **Herolar va musiqa** bo'limida personaj rasmini yuklang (ism + qisqa tavsif).
    Tavsif AI ga qiyofani saqlashda yordam beradi.
-2. **Yangi video** bo'limida:
-   - Mavzuni yozing
-   - Format tanlang (16:9, 9:16 Shorts, 1:1, 4:5)
-   - Taxminiy uzunlikni belgilang
-   - Tilni tanlang
-   - Sahnalarda qatnashadigan herolarni belgilang
-   - **Video yaratish** bosing
-3. O'ng tomonda progress, jurnal va tugagach video pleyer chiqadi.
-   **⬇ Videoni yuklab olish** tugmasi bitta bosishda MP4 ni beradi, `.srt` alohida.
+2. **Yangi video**: mavzu, format, uzunlik, til, herolar → **Video yaratish**.
+3. Qoralama tayyor bo'lgach pastda **sahna muharriri** ochiladi:
+   - **Matn** — ovoz va subtitr shundan olinadi. O'zgartirsangiz "ovoz eskirgan"
+     belgisi chiqadi va render paytida o'sha sahna qayta o'qiladi.
+   - **Rasm prompti** — o'zgartirsangiz "rasm eskirgan" belgisi chiqadi.
+   - **Kamera harakati** va **ekran yozuvi**.
+   - **💾 Saqlash** — o'zgarishni yozadi.
+   - **🖼 Rasmni qayta** / **🎙 Ovozni qayta** — faqat o'sha sahnani darhol
+     qayta yaratadi.
+4. **🎬 Videoni render qilish** — eskirgan sahnalar avtomatik yangilanadi, keyin
+   video yig'iladi.
+5. Tugagach **⬇ Videoni yuklab olish**. Subtitr `.srt` alohida.
+
+Video tayyor bo'lgandan keyin ham tahrirlab, **qayta render** qilishingiz mumkin.
 
 ### Tayyor ovoz yuklash
 
 "Ovozni o'zim yuklayman" katagini belgilab audio fayl bering. Ilova uni
 transkripsiya qiladi, sahnalarga bo'ladi va rasmlarni aynan siz gapirgan
 vaqtlarga moslaydi. Buning uchun `OPENAI_API_KEY` kerak (so'z-vaqtlari uchun).
+Bu rejimda sahna matnini tahrirlash faqat subtitrni o'zgartiradi — audio
+o'zgarmaydi, shuning uchun sinxron buzilmaydi.
 
 ---
 
@@ -140,18 +156,31 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `TRANSITION_SECONDS` | `0.6` | Sahnalar orasidagi cross-fade |
 | `VIDEO_CRF` | `20` | Kichikroq raqam = yaxshiroq sifat, kattaroq fayl |
 | `VIDEO_PRESET` | `medium` | `ultrafast`…`veryslow` — render tezligi |
-| `MUSIC_VOLUME` | `0.10` | Fon musiqasi balandligi (ovoz ostida avtomatik pasayadi) |
+| `MUSIC_VOLUME` | `0.10` | Fon musiqasi (ovoz ostida avtomatik pasayadi) |
 | `MAX_CONCURRENT_JOBS` | `1` | Bir vaqtda nechta render — RAM yetsa oshiring |
+
+## API
+
+| Endpoint | Vazifasi |
+|---|---|
+| `POST /api/jobs` | Yangi video (`auto_render: false` — qoralamada to'xtaydi) |
+| `POST /api/jobs/with-audio` | Tayyor ovoz bilan |
+| `GET /api/jobs/{id}` | Holat, progress, sahnalar, jurnal |
+| `PATCH /api/jobs/{id}/scenes/{i}` | Sahnani tahrirlash |
+| `POST /api/jobs/{id}/scenes/{i}/regenerate` | Faqat o'sha sahnani qayta yaratish |
+| `POST /api/jobs/{id}/render` | Render qilish / qayta render |
+| `GET /api/jobs/{id}/download` | MP4 yuklab olish |
+| `GET /api/health` | Qaysi kalitlar bor, formatlar, harakatlar |
 
 ## Loyiha tuzilishi
 
 ```
 app/
-├── main.py            FastAPI: API, fayl yuklash, yuklab olish
-├── pipeline.py        Bosqichlarni ketma-ket boshqaradi
+├── main.py            FastAPI: API, yuklash, tahrirlash, yuklab olish
+├── pipeline.py        Ikki bosqich: draft (qoralama) va render
 ├── config.py          Barcha env sozlamalari
-├── store.py           SQLite: herolar, musiqa, joblar
-├── skills/            Claude promptlari (director, imagesmith, subtitler, publisher)
+├── store.py           SQLite: herolar (blob), musiqa (blob), joblar
+├── skills/            AI promptlari + provayder adapteri (llm.py)
 ├── providers/         Tashqi API adapterlari (images, tts, align, storage)
 ├── render/            ffmpeg: kenburns, subtitles (ASS), video
 └── static/            UI (vanilla HTML/CSS/JS, build kerak emas)
@@ -162,7 +191,8 @@ app/
 - Bitta sahna rasmi yaratilmasa butun render to'xtamaydi — o'sha sahnaga gradient
   qo'yiladi va ogohlantirish job natijasida ko'rinadi.
 - Musiqa mikslashda `sidechaincompress` ishlatiladi (ovoz ostida musiqa pasayadi).
-  Agar ffmpeg build'da bu filtr bo'lmasa, render avtomatik oddiy mikslashga
-  qaytadi, keyin esa musiqasiz.
+  Agar ffmpeg build'da bu filtr bo'lmasa, render oddiy mikslashga, keyin esa
+  musiqasiz rejimga qaytadi.
 - 10 daqiqalik video ≈ 90 ta sahna. Render vaqti asosan rasm generatsiyasiga
-  ketadi — `IMAGE_CONCURRENCY` ni oshirsangiz tezlashadi (provayder rate-limitiga qarang).
+  ketadi — `IMAGE_CONCURRENCY` ni oshirsangiz tezlashadi (provayder
+  rate-limitiga qarang).

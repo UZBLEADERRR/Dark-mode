@@ -31,9 +31,31 @@ class CreateJobRequest(BaseModel):
     music_id: str | None = None
     subtitle_style: Literal["bold", "clean", "karaoke"] = "bold"
     burn_subtitles: bool = True
+    # False stops after the draft so scenes can be reviewed and edited first.
+    auto_render: bool = True
 
     def resolved_format(self) -> dict:
         return config.FORMATS.get(self.video_format, config.FORMATS["16:9"])
+
+
+class ScenePatch(BaseModel):
+    """Fields the user may rewrite on a single scene."""
+
+    narration: str | None = Field(default=None, max_length=4000)
+    image_prompt: str | None = Field(default=None, max_length=4000)
+    motion: str | None = None
+    on_screen_text: str | None = Field(default=None, max_length=60)
+    hero_ids: list[str] | None = None
+
+
+class RegenerateRequest(BaseModel):
+    image: bool = True
+    voice: bool = False
+
+
+class HeroPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=600)
 
 
 class Scene(BaseModel):

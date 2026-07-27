@@ -9,8 +9,21 @@ const state = {
   heroes: [],
   music: [],
   jobs: [],
+  motions: [],
   activeId: null,
   poll: null,
+  editorFor: null,   // job id whose scenes are currently drawn in the editor
+};
+
+const MOTION_LABELS = {
+  zoom_in: 'Zoom in (yaqinlashish)',
+  zoom_out: 'Zoom out (uzoqlashish)',
+  pan_left: 'Chapga surilish',
+  pan_right: 'O‘ngga surilish',
+  pan_up: 'Yuqoriga surilish',
+  pan_down: 'Pastga surilish',
+  zoom_in_pan_right: 'Zoom in + o‘ngga',
+  zoom_out_pan_left: 'Zoom out + chapga',
 };
 
 // ── api ───────────────────────────────────────────────────────────
@@ -45,10 +58,11 @@ async function loadHealth() {
   const health = await api('/api/health');
   state.health = health;
 
+  state.motions = health.motions || [];
+
   const pills = [
     ['ffmpeg', health.ffmpeg],
-    ['Claude', health.llm],
-    [`saqlash: ${health.storage}`, health.storage === 'supabase'],
+    [`skript: ${health.llm_provider}`, health.llm],
     ['transkripsiya', health.transcription],
   ];
   for (const [name, ready] of Object.entries(health.image_providers)) pills.push([`rasm: ${name}`, ready]);
@@ -207,6 +221,7 @@ $('#create-form').addEventListener('submit', async (event) => {
   const heroIds = $$('#hero-picker input:checked').map((i) => i.value);
   const data = new FormData(form);
   const uploading = $('#use-upload').checked;
+  const autoRender = !$('#review-first').checked;
 
   try {
     let job;
@@ -222,6 +237,7 @@ $('#create-form').addEventListener('submit', async (event) => {
       body.append('hero_ids', heroIds.join(','));
       body.append('subtitle_style', data.get('subtitle_style'));
       body.append('burn_subtitles', form.burn_subtitles.checked ? 'true' : 'false');
+      body.append('auto_render', autoRender ? 'true' : 'false');
       if (data.get('image_provider')) body.append('image_provider', data.get('image_provider'));
       if (data.get('music_id')) body.append('music_id', data.get('music_id'));
       body.append('audio', file);
@@ -243,6 +259,7 @@ $('#create-form').addEventListener('submit', async (event) => {
           music_id: data.get('music_id') || null,
           subtitle_style: data.get('subtitle_style'),
           burn_subtitles: form.burn_subtitles.checked,
+          auto_render: autoRender,
         }),
       });
     }
@@ -266,12 +283,15 @@ function watch(jobId) {
   state.poll = setInterval(tick, 2500);
 }
 
+const SETTLED = ['done', 'failed', 'review'];
+
 async function tick() {
   if (!state.activeId) return;
   try {
     const job = await api(`/api/jobs/${state.activeId}`);
     renderActive(job);
-    if (job.status === 'done' || job.status === 'failed') {
+    syncEditor(job);
+    if (SETTLED.includes(job.status)) {
       clearInterval(state.poll);
       state.poll = null;
       loadJobs();
@@ -282,6 +302,138 @@ async function tick() {
     $('#active').innerHTML = `<p class="error">${esc(err.message)}</p>`;
   }
 }
+
+// ── scene editor ──────────────────────────────────────────────────
+function syncEditor(job) {
+  const editable = (job.status === 'review' || job.status === 'done') && job.scenes?.length;
+  $('#editor').classList.toggle('hidden', !editable);
+  if (!editable) { state.editorFor = null; return; }
+
+  $('#editor-note').textContent = job.status === 'review'
+    ? 'Matn, prompt yoki kamera harakatini o‘zgartiring. Tayyor bo‘lsa render qiling.'
+    : 'Video tayyor. O‘zgartirish kiritsangiz qayta render qilishingiz mumkin.';
+  $('#render-btn').textContent = job.status === 'review'
+    ? '🎬 Videoni render qilish' : '🎬 Qayta render qilish';
+
+  // Only redraw when the job changed — otherwise polling would wipe out
+  // whatever the user is in the middle of typing.
+  const stamp = `${job.id}:${job.updated_at}`;
+  if (state.editorFor === stamp) return;
+  if (state.editorFor?.startsWith(`${job.id}:`) && document.activeElement?.closest('.ed-scene')) return;
+  state.editorFor = stamp;
+  drawEditor(job);
+}
+
+function drawEditor(job) {
+  const motions = state.motions.length ? state.motions : Object.keys(MOTION_LABELS);
+
+  $('#editor-scenes').innerHTML = job.scenes.map((s) => `
+    <div class="ed-scene${s.needs_image || s.needs_voice ? ' dirty' : ''}" data-index="${s.index}">
+      ${s.image_url ? `<img src="${esc(s.image_url)}" alt="" loading="lazy" />` : ''}
+      <div class="ed-body">
+        <div class="ed-head">
+          <b>Sahna ${s.index + 1}</b>
+          <small>${clock(s.start)} · ${s.duration.toFixed(1)}s
+            ${s.needs_image ? '<span class="flag">rasm eskirgan</span>' : ''}
+            ${s.needs_voice ? '<span class="flag">ovoz eskirgan</span>' : ''}</small>
+        </div>
+
+        <div>
+          <label>Matn (ovoz va subtitr)</label>
+          <textarea data-f="narration" rows="3">${esc(s.narration)}</textarea>
+        </div>
+
+        <div>
+          <label>Rasm prompti</label>
+          <textarea data-f="image_prompt" rows="3">${esc(s.image_prompt)}</textarea>
+        </div>
+
+        <div class="row">
+          <div>
+            <label>Kamera harakati</label>
+            <select data-f="motion">${motions.map((m) =>
+              `<option value="${esc(m)}"${m === s.motion ? ' selected' : ''}>${esc(MOTION_LABELS[m] || m)}</option>`).join('')}</select>
+          </div>
+          <div>
+            <label>Ekran yozuvi</label>
+            <input data-f="on_screen_text" value="${esc(s.on_screen_text)}" placeholder="ixtiyoriy" />
+          </div>
+        </div>
+
+        <div class="ed-actions">
+          <button class="ghost" data-act="save">💾 Saqlash</button>
+          <button class="ghost" data-act="image">🖼 Rasmni qayta</button>
+          ${job.uses_uploaded_audio ? '' : '<button class="ghost" data-act="voice">🎙 Ovozni qayta</button>'}
+        </div>
+        <p class="error hidden" data-err></p>
+      </div>
+    </div>`).join('');
+
+  $$('#editor-scenes .ed-scene').forEach((card) => {
+    const index = Number(card.dataset.index);
+    const errBox = $('[data-err]', card);
+    const fields = () => Object.fromEntries(
+      $$('[data-f]', card).map((el) => [el.dataset.f, el.value]));
+
+    const run = async (label, fn) => {
+      const buttons = $$('button', card);
+      buttons.forEach((b) => (b.disabled = true));
+      errBox.classList.add('hidden');
+      try {
+        await fn();
+      } catch (err) {
+        errBox.textContent = err.message;
+        errBox.classList.remove('hidden');
+      } finally {
+        buttons.forEach((b) => (b.disabled = false));
+      }
+    };
+
+    $('[data-act="save"]', card).addEventListener('click', () => run('save', async () => {
+      await api(`/api/jobs/${job.id}/scenes/${index}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields()),
+      });
+      state.editorFor = null;
+      tick();
+    }));
+
+    const regen = (body) => run('regen', async () => {
+      await api(`/api/jobs/${job.id}/scenes/${index}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields()),
+      });
+      await api(`/api/jobs/${job.id}/scenes/${index}/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      state.editorFor = null;
+      watch(job.id);
+    });
+
+    $('[data-act="image"]', card).addEventListener('click', () => regen({ image: true, voice: false }));
+    const voiceBtn = $('[data-act="voice"]', card);
+    if (voiceBtn) voiceBtn.addEventListener('click', () => regen({ image: false, voice: true }));
+  });
+}
+
+$('#render-btn').addEventListener('click', async () => {
+  if (!state.activeId) return;
+  const btn = $('#render-btn');
+  btn.disabled = true;
+  try {
+    await api(`/api/jobs/${state.activeId}/render`, { method: 'POST' });
+    state.editorFor = null;
+    watch(state.activeId);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 function renderActive(job) {
   const parts = [];
@@ -326,17 +478,14 @@ function renderActive(job) {
       </div>`);
   }
 
-  if (job.scenes?.length) {
-    parts.push(`<details><summary>Sahnalar (${job.scenes.length})</summary><div class="scenes">${
-      job.scenes.map((s) => `
-        <div class="scene">
-          <img src="${esc(s.image_url)}" alt="" loading="lazy" />
-          <p><b>${clock(s.start)}</b> · ${esc(s.motion || '')}<br>${esc((s.narration || '').slice(0, 110))}</p>
-        </div>`).join('')}</div></details>`);
+  if (job.status === 'review') {
+    parts.push('<p class="warn">Qoralama tayyor. Pastdagi muharrirda sahnalarni ' +
+      'ko‘rib chiqing, kerak bo‘lsa tahrirlang, keyin render qiling.</p>');
   }
 
   if (job.logs?.length) {
-    parts.push(`<details${job.status === 'running' ? ' open' : ''}>
+    const busy = job.status === 'running' || job.status === 'rendering';
+    parts.push(`<details${busy ? ' open' : ''}>
       <summary>Jurnal</summary>
       <div class="logs">${esc(job.logs.join('\n'))}</div></details>`);
   }
@@ -388,8 +537,9 @@ async function loadJobs() {
   try {
     await loadHealth();
     await Promise.all([loadHeroes(), loadMusic(), loadJobs()]);
-    const running = state.jobs.find((j) => j.status === 'running' || j.status === 'queued');
-    if (running) watch(running.id);
+    const resume = state.jobs.find((j) =>
+      ['running', 'queued', 'rendering', 'review'].includes(j.status));
+    if (resume) watch(resume.id);
   } catch (err) {
     document.body.insertAdjacentHTML('afterbegin',
       `<p class="error" style="margin:16px">Ilova yuklanmadi: ${esc(err.message)}</p>`);

@@ -107,6 +107,11 @@
             <span>Subtitrni videoga yoqib chiqarish</span>
           </label>
 
+          <label class="field toggle">
+            <input type="checkbox" id="review-first" checked />
+            <span>Render'dan oldin sahnalarni ko'rib chiqaman va tahrirlayman</span>
+          </label>
+
           <div class="field">
             <span>Herolar <small>(sahnalarda qatnashadi)</small></span>
             <div id="hero-picker" class="hero-picker"><p class="muted">Hali hero yuklanmagan.</p></div>
@@ -121,6 +126,17 @@
           <div id="active-empty" class="muted">Hozircha ishlayotgan loyiha yo'q.</div>
           <div id="active" class="hidden"></div>
         </div>
+      </div>
+
+      <div id="editor" class="card hidden">
+        <div class="editor-head">
+          <div>
+            <h2>Sahnalarni tahrirlash</h2>
+            <p class="muted" id="editor-note"></p>
+          </div>
+          <button class="primary" id="render-btn" style="width:auto">🎬 Videoni render qilish</button>
+        </div>
+        <div id="editor-scenes" class="editor-grid"></div>
       </div>
     </section>
 

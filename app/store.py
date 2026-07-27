@@ -22,14 +22,18 @@ CREATE TABLE IF NOT EXISTS heroes (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    filename    TEXT NOT NULL,
+    mime        TEXT NOT NULL DEFAULT 'image/png',
+    ext         TEXT NOT NULL DEFAULT '.png',
+    image       BLOB NOT NULL,
     created_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS music (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
-    filename    TEXT NOT NULL,
+    mime        TEXT NOT NULL DEFAULT 'audio/mpeg',
+    ext         TEXT NOT NULL DEFAULT '.mp3',
+    audio       BLOB NOT NULL,
     created_at  TEXT NOT NULL
 );
 
@@ -75,20 +79,28 @@ def new_id(prefix: str) -> str:
 
 
 # --- heroes ------------------------------------------------------------------
+# Metadata queries deliberately never SELECT * — the blob column would then ride
+# along on every list call.
 
-def add_hero(name: str, description: str, filename: str) -> dict[str, Any]:
+_HERO_COLS = "id, name, description, mime, ext, created_at"
+
+
+def add_hero(name: str, description: str, image: bytes, mime: str, ext: str) -> dict[str, Any]:
     hero_id = new_id("hero")
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO heroes (id, name, description, filename, created_at) VALUES (?,?,?,?,?)",
-            (hero_id, name, description, filename, _now()),
+            "INSERT INTO heroes (id, name, description, mime, ext, image, created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (hero_id, name, description, mime, ext, image, _now()),
         )
-    return {"id": hero_id, "name": name, "description": description, "filename": filename}
+    return {"id": hero_id, "name": name, "description": description, "mime": mime, "ext": ext}
 
 
 def list_heroes() -> list[dict[str, Any]]:
     with _conn() as conn:
-        rows = conn.execute("SELECT * FROM heroes ORDER BY created_at DESC").fetchall()
+        rows = conn.execute(
+            f"SELECT {_HERO_COLS} FROM heroes ORDER BY created_at DESC"
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -98,52 +110,75 @@ def get_heroes(hero_ids: list[str]) -> list[dict[str, Any]]:
     placeholders = ",".join("?" for _ in hero_ids)
     with _conn() as conn:
         rows = conn.execute(
-            f"SELECT * FROM heroes WHERE id IN ({placeholders})", hero_ids
+            f"SELECT {_HERO_COLS} FROM heroes WHERE id IN ({placeholders})", hero_ids
         ).fetchall()
     by_id = {r["id"]: dict(r) for r in rows}
     return [by_id[h] for h in hero_ids if h in by_id]
 
 
-def delete_hero(hero_id: str) -> dict[str, Any] | None:
+def get_hero_image(hero_id: str) -> tuple[bytes, str, str] | None:
     with _conn() as conn:
-        row = conn.execute("SELECT * FROM heroes WHERE id = ?", (hero_id,)).fetchone()
-        if row is None:
-            return None
-        conn.execute("DELETE FROM heroes WHERE id = ?", (hero_id,))
-    return dict(row)
+        row = conn.execute(
+            "SELECT image, mime, ext FROM heroes WHERE id = ?", (hero_id,)
+        ).fetchone()
+    return (row["image"], row["mime"], row["ext"]) if row else None
+
+
+def update_hero(hero_id: str, *, name: str | None = None, description: str | None = None) -> bool:
+    fields, values = [], []
+    if name is not None:
+        fields.append("name = ?")
+        values.append(name)
+    if description is not None:
+        fields.append("description = ?")
+        values.append(description)
+    if not fields:
+        return False
+    values.append(hero_id)
+    with _conn() as conn:
+        cur = conn.execute(f"UPDATE heroes SET {', '.join(fields)} WHERE id = ?", values)
+        return cur.rowcount > 0
+
+
+def delete_hero(hero_id: str) -> bool:
+    with _conn() as conn:
+        return conn.execute("DELETE FROM heroes WHERE id = ?", (hero_id,)).rowcount > 0
 
 
 # --- music -------------------------------------------------------------------
 
-def add_music(name: str, filename: str) -> dict[str, Any]:
+_MUSIC_COLS = "id, name, mime, ext, created_at"
+
+
+def add_music(name: str, audio: bytes, mime: str, ext: str) -> dict[str, Any]:
     music_id = new_id("mus")
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO music (id, name, filename, created_at) VALUES (?,?,?,?)",
-            (music_id, name, filename, _now()),
+            "INSERT INTO music (id, name, mime, ext, audio, created_at) VALUES (?,?,?,?,?,?)",
+            (music_id, name, mime, ext, audio, _now()),
         )
-    return {"id": music_id, "name": name, "filename": filename}
+    return {"id": music_id, "name": name, "mime": mime, "ext": ext}
 
 
 def list_music() -> list[dict[str, Any]]:
     with _conn() as conn:
-        rows = conn.execute("SELECT * FROM music ORDER BY created_at DESC").fetchall()
+        rows = conn.execute(
+            f"SELECT {_MUSIC_COLS} FROM music ORDER BY created_at DESC"
+        ).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_music(music_id: str) -> dict[str, Any] | None:
+def get_music_audio(music_id: str) -> tuple[bytes, str, str] | None:
     with _conn() as conn:
-        row = conn.execute("SELECT * FROM music WHERE id = ?", (music_id,)).fetchone()
-    return dict(row) if row else None
+        row = conn.execute(
+            "SELECT audio, mime, ext FROM music WHERE id = ?", (music_id,)
+        ).fetchone()
+    return (row["audio"], row["mime"], row["ext"]) if row else None
 
 
-def delete_music(music_id: str) -> dict[str, Any] | None:
+def delete_music(music_id: str) -> bool:
     with _conn() as conn:
-        row = conn.execute("SELECT * FROM music WHERE id = ?", (music_id,)).fetchone()
-        if row is None:
-            return None
-        conn.execute("DELETE FROM music WHERE id = ?", (music_id,))
-    return dict(row)
+        return conn.execute("DELETE FROM music WHERE id = ?", (music_id,)).rowcount > 0
 
 
 # --- jobs --------------------------------------------------------------------
@@ -235,6 +270,6 @@ def reset_stale_jobs() -> None:
     with _conn() as conn:
         conn.execute(
             "UPDATE jobs SET status='failed', error=? , updated_at=?"
-            " WHERE status IN ('running','queued')",
+            " WHERE status IN ('running','queued','rendering')",
             ("Server restarted while this job was running.", _now()),
         )
