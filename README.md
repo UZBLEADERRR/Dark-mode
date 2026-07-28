@@ -31,6 +31,7 @@ katagini olib tashlang — u holda hammasi bir yo'la tugaydi.
 | Skill | Vazifasi |
 |---|---|
 | `director` | Mavzuni sahna-ba-sahna skriptga aylantiradi (yoki tayyor ovozni sahnalarga bo'ladi) |
+| `translator` | Matnni boshqa tilga, aytilish uzunligini saqlagan holda o'giradi |
 | `imagesmith` | Har bir sahnani rasm generatori tushunadigan promptga aylantiradi |
 | `subtitler` | Subtitr qatorlarini qayerda bo'lishni hal qiladi |
 | `publisher` | YouTube sarlavha, tavsif, teglar, chapterlar, thumbnail prompt |
@@ -177,6 +178,52 @@ boshlanadi — lekin bu qulf emas, formada nima yozsangiz o'sha g'olib.
 yozgan hook jumlasi kadrga brend rangidagi fonda chiqadi. Shorts va TikTok
 uchun eng muhim uch soniya.
 
+## Tarjima
+
+Ikki xil yo'l bor.
+
+**Bitta videodan bir necha til.** «Tayyor» bo'limida **Boshqa tilga** tugmasi:
+matn tarjima qilinib, tanlagan ovozingizda qaytadan o'qiladi. Rasmlar,
+qatlamlar, kamera harakatlari va subtitr uslubi o'zgarmaydi — faqat ovoz va
+matn. Sahna uzunliklari yangi ovozga qarab o'zi qayta hisoblanadi. Bitta
+videodan 2-3 tilga shu tarzda chiqarasiz.
+
+**Tayyor videoni dublyaj qilish.** «Yaratish → Dublyaj» bo'limiga o'z
+videongizni (yoki boshqa joydan olingan videoni) yuklaysiz:
+
+```
+video ─▶ ovozni ajratish ─▶ tinglash (transkript + vaqtlar) ─▶ tarjima
+                                                                  │
+   MP4 ◀── rasm o'zgarmaydi, faqat ovoz almashadi ◀── ovozlash ◀──┘
+```
+
+Tarjima **original vaqtga sig'diriladi**: har bir jumla o'z o'rnida qoladi,
+kerak bo'lsa 0.75×–1.45× oralig'ida sekinlashtiriladi yoki tezlashtiriladi
+(bundan tashqarisi odam ovoziga o'xshamay qoladi), qolgan joyi jimlik bilan
+to'ldiriladi. Rasm umuman qayta kodlanmaydi — shuning uchun 10 daqiqalik video
+bir necha soniyada dublyaj bo'ladi.
+
+Original ovozni ostida past darajada qoldirish mumkin — musiqa va effektlar
+eshitilib turadi.
+
+Tinglash uchun **Gemini yoki OpenAI kaliti** kerak (Gemini audio ham tushunadi,
+shuning uchun bitta kalit yetadi).
+
+## Render tezligi
+
+«Boshqa» panelidan tanlanadi:
+
+| | Nima o'zgaradi |
+|---|---|
+| **Tez** | ~1.7× tezroq. Kuchli zoom paytida rasm biroz yumshoqroq |
+| **Muvozanat** | tavsiya etiladi |
+| **Sifat** | eng tiniq, sezilarli sekinroq |
+
+Sahna kliplari endi ketma-ket emas, bir vaqtda renderlanadi. Eng katta ta'sir
+qiluvchi narsa — rasmni kadrdan necha barobar katta olish (zoom sifatini
+belgilaydi va ishlash vaqtini kvadratik oshiradi), shuning uchun asosiy farq
+shundan chiqadi.
+
 ## Muqova va boshqa formatlar
 
 **Muqova.** Tayyor video ostidagi «Muqova yaratish» uchta variant chizadi — yaqin
@@ -292,6 +339,8 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs/{id}/scenes/{i}/regenerate` | Faqat o'sha sahnani qayta yaratish |
 | `POST /api/jobs/{id}/thumbnails` | Uchta muqova varianti |
 | `POST /api/jobs/{id}/repurpose` | Boshqa formatga nusxa olish |
+| `POST /api/jobs/{id}/translate` | Boshqa tilga nusxa olish |
+| `POST /api/dub` | Tayyor videoni dublyaj qilish |
 | `GET/PUT /api/brand` | Brend to'plami |
 | `GET/PUT /api/models` | Har bosqich qaysi modelni chaqiradi |
 | `GET /api/models/available?provider=` | Provayderdagi mavjud modellar |

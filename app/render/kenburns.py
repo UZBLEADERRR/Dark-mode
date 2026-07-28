@@ -130,11 +130,15 @@ def motion_filter(motion: str, frames: int, strength: float = 1.0) -> tuple[str,
 
 
 def build_filter(
-    *, motion: str, frames: int, width: int, height: int, fps: int, strength: float = 1.0
+    *, motion: str, frames: int, width: int, height: int, fps: int,
+    strength: float = 1.0, supersample: float = SUPERSAMPLE,
 ) -> str:
     """Full video filter chain turning one still into a moving clip."""
-    source_w = width * SUPERSAMPLE
-    source_h = height * SUPERSAMPLE
+    # zoompan reads every output pixel from this frame, so its size sets the
+    # per-frame cost — quadratically. It is the render's main speed dial.
+    factor = max(1.0, min(float(supersample or SUPERSAMPLE), 3.0))
+    source_w = int(width * factor) // 2 * 2
+    source_h = int(height * factor) // 2 * 2
     motion = motion if motion in MOTIONS else "zoom_in"
     zoom, x, y = motion_filter(motion, frames, strength)
 

@@ -38,6 +38,113 @@ def estimate_words(text: str, duration: float) -> list[dict]:
     return words
 
 
+async def transcribe_segments(audio_path: Path, language: str | None = None) -> list[dict]:
+    """Sentence-level `[{start, end, text}]` for a recording we did not make.
+
+    Dubbing needs to know when each line was spoken, not just what was said, so
+    the replacement can land in the same place. Whisper returns segments
+    directly; Gemini can listen to audio too, which matters because most
+    installations here have only a Gemini key.
+    """
+    if config.OPENAI_API_KEY:
+        segments = await _whisper_segments(audio_path, language)
+        if segments:
+            return segments
+    if config.GEMINI_API_KEY:
+        return await _gemini_segments(audio_path, language)
+    return []
+
+
+async def _whisper_segments(audio_path: Path, language: str | None) -> list[dict]:
+    data = {"model": config.model("openai_transcribe"), "response_format": "verbose_json"}
+    if language:
+        data["language"] = language
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
+            resp = await client.post(
+                f"{config.OPENAI_BASE}/audio/transcriptions",
+                headers={"Authorization": f"Bearer {config.OPENAI_API_KEY}"},
+                data=data,
+                files={"file": (audio_path.name, audio_path.read_bytes(),
+                                "application/octet-stream")},
+            )
+        resp.raise_for_status()
+        return [
+            {"start": float(s["start"]), "end": float(s["end"]), "text": s["text"].strip()}
+            for s in resp.json().get("segments", []) if s.get("text", "").strip()
+        ]
+    except Exception:  # noqa: BLE001 - fall through to the next transcriber
+        return []
+
+
+_SEGMENT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "segments": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "start": {"type": "NUMBER"},
+                    "end": {"type": "NUMBER"},
+                    "text": {"type": "STRING"},
+                },
+                "required": ["start", "end", "text"],
+                "propertyOrdering": ["start", "end", "text"],
+            },
+        }
+    },
+    "required": ["segments"],
+}
+
+
+async def _gemini_segments(audio_path: Path, language: str | None) -> list[dict]:
+    import base64
+    import mimetypes
+
+    mime = mimetypes.guess_type(audio_path.name)[0] or "audio/mpeg"
+    payload = {
+        "contents": [{
+            "role": "user",
+            "parts": [
+                {"inlineData": {"mimeType": mime,
+                                "data": base64.b64encode(audio_path.read_bytes()).decode()}},
+                {"text": "Transcribe this recording. Break it into the sentences as they "
+                         "are actually spoken, and give the start and end of each in "
+                         "seconds from the beginning of the file. Do not translate — "
+                         "write it in the language being spoken."
+                         + (f" The audio is in {language}." if language else "")},
+            ],
+        }],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": _SEGMENT_SCHEMA,
+        },
+    }
+    url = f"{config.GEMINI_BASE}/models/{config.model('gemini_text')}:generateContent"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
+            resp = await client.post(
+                url, headers={"x-goog-api-key": config.GEMINI_API_KEY}, json=payload)
+        resp.raise_for_status()
+        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        import json
+        raw = json.loads(text).get("segments", [])
+    except Exception:  # noqa: BLE001
+        return []
+
+    out = []
+    for entry in raw:
+        try:
+            start, end = float(entry["start"]), float(entry["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        body = str(entry.get("text", "")).strip()
+        if body and end > start:
+            out.append({"start": start, "end": end, "text": body})
+    return sorted(out, key=lambda s: s["start"])
+
+
 async def transcribe_words(audio_path: Path, language: str | None = None) -> list[dict]:
     """Word timings from OpenAI transcription. Returns [] if unavailable."""
     if not config.OPENAI_API_KEY:

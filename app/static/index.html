@@ -37,6 +37,7 @@
       <div class="mode" id="mode-tabs">
         <button type="button" data-mode="topic" aria-pressed="true">Mavzu</button>
         <button type="button" data-mode="script">Senariy</button>
+        <button type="button" data-mode="dub">Dublyaj</button>
       </div>
 
       <div class="prompt">
@@ -47,6 +48,23 @@
       <div class="prompt hidden" id="script-box">
         <textarea id="script" rows="8" maxlength="40000"
           placeholder="Videoning to'liq matnini shu yerga yozing. AI matningizni so'zma-so'z saqlaydi — faqat sahnalarga bo'lib, har biriga rasm yaratadi."></textarea>
+      </div>
+
+      <!-- Dubbing keeps someone else's picture and replaces only the voice, so
+           it needs a file rather than a topic. -->
+      <div class="drop hidden" id="dub-box">
+        <label class="file big"><input type="file" id="dub_file" accept="video/*" />
+          <span>Videoni tanlash</span></label>
+        <div class="f2">
+          <label class="f"><span>Video qaysi tilda</span>
+            <select id="dub_source"><option value="">avtomatik aniqlansin</option></select></label>
+          <label class="f"><span>Original ovoz balandligi</span>
+            <select id="dub_original">
+              <option value="0">o'chirilsin</option>
+              <option value="0.12">juda past — musiqa eshitilsin</option>
+              <option value="0.25">past</option>
+            </select></label>
+        </div>
       </div>
 
       <!-- Everything chosen so far, in one line. Tap any of it to change it. -->
@@ -260,6 +278,10 @@
   </div>
 
   <div data-panel="more">
+    <div class="f"><span>Render tezligi</span>
+      <div class="seg tight" id="speed-seg"></div>
+      <small id="speed-note"></small>
+    </div>
     <label class="sw"><input type="checkbox" id="review_first" checked /><i></i>
       <span>Render'dan oldin ko'rib chiqaman</span></label>
     <p class="note">Belgini olib tashlasangiz video bir yo'la tayyor bo'ladi —

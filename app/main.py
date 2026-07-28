@@ -25,6 +25,7 @@ from .models import (
     SceneInsert,
     SceneOrder,
     ScenePatch,
+    TranslateRequest,
 )
 from .providers import catalog, storage, tts
 from .render import kenburns, overlays as ov
@@ -38,6 +39,8 @@ IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 AUDIO_TYPES = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
                ".aac": "audio/aac", ".ogg": "audio/ogg", ".flac": "audio/flac",
                ".opus": "audio/opus", ".webm": "audio/webm"}
+VIDEO_TYPES = {".mp4": "video/mp4", ".mov": "video/quicktime", ".m4v": "video/x-m4v",
+               ".webm": "video/webm", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo"}
 
 # Rendering is CPU- and memory-hungry; more than a couple at once will thrash a
 # small Railway container, so jobs queue behind this instead of all starting.
@@ -125,6 +128,7 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "status": job["status"],
         "step": job.get("step", ""),
         "progress": job.get("progress", 0),
+        "kind": request.get("kind", "video"),
         "topic": request.get("topic", ""),
         "video_format": request.get("video_format", "16:9"),
         "language": request.get("language", "en"),
@@ -144,6 +148,7 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "scene_count": result.get("scene_count") or len(scenes),
         "metadata": result.get("metadata"),
         "thumbnails": result.get("thumbnails") or [],
+        "transcript": result.get("transcript") or [],
         "scenes": [pipeline.public_scene(job["id"], s) for s in scenes] if with_scenes else None,
         "warnings": result.get("warnings") or [],
         "logs": job.get("logs", [])[-40:],
@@ -208,6 +213,9 @@ async def health() -> dict[str, Any]:
             "image": config.model(f"{config.IMAGE_PROVIDER}_image"),
             "tts": config.model(f"{config.TTS_PROVIDER}_tts"),
         },
+        "can_dub": bool(config.GEMINI_API_KEY or config.OPENAI_API_KEY),
+        "speeds": [{"id": k, "label": v["label"]} for k, v in config.SPEED_PROFILES.items()],
+        "cores": config.CPU_COUNT,
         "motions": list(kenburns.MOTIONS),
         "transitions": list(video.TRANSITION_CHOICES),
         "caption_templates": [
@@ -738,6 +746,78 @@ async def make_thumbnails(job_id: str) -> dict[str, Any]:
     store.update_job(job_id, status="running", step="thumbnails", progress=10)
     _launch(lambda: pipeline.make_thumbnails(job_id))
     return {"id": job_id, "status": "running"}
+
+
+@app.post("/api/jobs/{job_id}/translate", status_code=202)
+async def translate_job(job_id: str, body: TranslateRequest) -> dict[str, Any]:
+    """Make this video again in another language, reusing every picture."""
+    _editable_job(job_id)
+    provider = (body.tts_provider or config.TTS_PROVIDER).lower()
+    if not config.tts_provider_ready(provider):
+        raise HTTPException(
+            status_code=400,
+            detail=f"No API key configured for the '{provider}' voice provider.")
+    if not config.llm_ready():
+        raise HTTPException(status_code=400, detail="The translator needs an AI key.")
+
+    try:
+        clone_id = await pipeline.translate_job(
+            job_id, body.language, body.voice_id, body.tts_provider)
+    except pipeline.PipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if clone_id is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return {"id": clone_id, "status": store.get_job(clone_id)["status"]}
+
+
+@app.post("/api/dub", status_code=202)
+async def dub_video(
+    video_file: UploadFile = File(..., alias="video"),
+    language: str = Form(...),
+    source_language: str = Form(""),
+    tts_provider: str | None = Form(None),
+    voice_id: str | None = Form(None),
+    original_volume: float = Form(0.0),
+    render_speed: str = Form("balanced"),
+    topic: str = Form(""),
+) -> dict[str, Any]:
+    """Dub a finished video: same picture, narration in another language."""
+    if language not in config.LANGUAGES:
+        raise HTTPException(status_code=400, detail=f"Unknown language '{language}'.")
+    if not config.llm_ready():
+        raise HTTPException(status_code=400, detail="The translator needs an AI key.")
+    if not (config.GEMINI_API_KEY or config.OPENAI_API_KEY):
+        raise HTTPException(
+            status_code=400,
+            detail="Transcribing the original needs a Gemini or OpenAI key.")
+    provider = (tts_provider or config.TTS_PROVIDER).lower()
+    if not config.tts_provider_ready(provider):
+        raise HTTPException(
+            status_code=400,
+            detail=f"No API key configured for the '{provider}' voice provider.")
+    if not video.ffmpeg_available():
+        raise HTTPException(status_code=500, detail="ffmpeg is not installed in this container.")
+
+    data, _mime, ext = await _read_upload(video_file, VIDEO_TYPES)
+    staged = config.DATA_DIR / "uploads" / f"{store.new_id('src')}{ext}"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_bytes(data)
+
+    job_id = store.create_job({
+        "kind": "dub",
+        "topic": topic.strip() or Path(video_file.filename or "video").stem,
+        "source_video": str(staged),
+        "language": language,
+        "source_language": source_language.strip(),
+        "tts_provider": tts_provider or None,
+        "voice_id": (voice_id or "").strip() or None,
+        "original_volume": max(0.0, min(1.0, original_volume)),
+        "render_speed": render_speed,
+        "video_format": "16:9",
+        "auto_render": True,
+    })
+    _launch(lambda: pipeline.run_dub(job_id))
+    return {"id": job_id, "status": "queued"}
 
 
 @app.post("/api/jobs/{job_id}/repurpose", status_code=201)
