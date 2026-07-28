@@ -42,7 +42,7 @@ def _claude_sync(system: str, user: str, schema: dict | None, max_tokens: int) -
     import anthropic
 
     base: dict[str, Any] = {
-        "model": config.LLM_MODEL,
+        "model": config.model("anthropic_text"),
         "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": user}],
@@ -141,19 +141,19 @@ async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int) 
     timeout = httpx.Timeout(300.0, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await _gemini_call(
-            client, config.GEMINI_TEXT_MODEL, system, user, schema, max_tokens
+            client, config.model("gemini_text"), system, user, schema, max_tokens
         )
 
-        if resp.status_code in (400, 404) and config.GEMINI_TEXT_FALLBACK:
+        if resp.status_code in (400, 404) and config.model("gemini_text_fallback"):
             # Unknown model name, or a schema this model won't accept.
             resp = await _gemini_call(
-                client, config.GEMINI_TEXT_FALLBACK, system, user, schema, max_tokens
+                client, config.model("gemini_text_fallback"), system, user, schema, max_tokens
             )
             if resp.status_code >= 400 and schema:
                 # Last resort: no response schema, ask for JSON in the prompt.
                 resp = await _gemini_call(
                     client,
-                    config.GEMINI_TEXT_FALLBACK,
+                    config.model("gemini_text_fallback"),
                     system + _json_instruction(schema),
                     user,
                     None,

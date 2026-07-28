@@ -12,6 +12,9 @@ const state = {
   assets: [],
   brand: null,
   jobs: [],
+  models: null,
+  voices: [],
+  available: {},
   motions: [],
   transitions: [],
   format: '16:9',
@@ -68,11 +71,13 @@ const STYLE_PRESETS = [
     + 'limited spot colour, drawn not photographed'],
 ];
 
-const VOICE_HINTS = {
-  gemini: "Nom yozing. Erkak: Puck, Fenrir, Orus, Charon, Iapetus. "
-    + "Ayol: Kore, Aoede, Leda, Autonoe. Tembr har birida boshqacha — sinab ko'ring.",
-  elevenlabs: "ElevenLabs Voice Library'dan Voice ID ni nusxalang.",
-  openai: 'Nom yozing: ash, echo, onyx, verse, alloy, nova, shimmer, sage, coral, ballad, fable.',
+const STAGE_LABELS = {
+  gemini_text: 'Gemini — skript', gemini_text_fallback: 'Gemini — zaxira skript',
+  gemini_image: 'Gemini — rasm', gemini_tts: 'Gemini — ovoz',
+  anthropic_text: 'Claude — skript',
+  fal_image: 'fal — rasm (referens bilan)', fal_text2img: 'fal — rasm (referenssiz)',
+  openai_image: 'OpenAI — rasm', openai_tts: 'OpenAI — ovoz',
+  openai_transcribe: 'OpenAI — transkripsiya', elevenlabs_tts: 'ElevenLabs — ovoz',
 };
 
 // ── utils ─────────────────────────────────────────────────────────
@@ -199,7 +204,7 @@ async function loadHealth() {
   };
   fill('#image_provider', h.image_providers, h.defaults.image_provider);
   fill('#tts_provider', h.tts_providers, h.defaults.tts_provider);
-  syncVoiceHint();
+  await loadVoices();
 
   $('#subtitle_style').innerHTML = (h.caption_templates || []).map((t) =>
     `<option value="${esc(t.id)}"${t.id === 'bold' ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
@@ -284,6 +289,106 @@ $('#asset-form').addEventListener('submit', (e) => {
   submitLibraryForm(e.target, '/api/assets', loadAssets);
 });
 
+// ── models ────────────────────────────────────────────────────────
+// Providers ship and retire models on their own schedule, so the menu is
+// whatever the provider returns for this key — and the field stays open text so
+// a model released tomorrow can be typed in today.
+async function loadModels() {
+  state.models = await api('/api/models');
+  drawModels();
+}
+
+function providersInPlay() {
+  const h = state.health || {};
+  const on = new Set();
+  if (h.llm) on.add(h.llm_provider);
+  Object.entries(h.image_providers || {}).forEach(([n, ok]) => ok && on.add(n));
+  Object.entries(h.tts_providers || {}).forEach(([n, ok]) => ok && on.add(n));
+  if (h.transcription) on.add('openai');
+  return on;
+}
+
+function drawModels() {
+  const m = state.models;
+  if (!m) return;
+  const live = providersInPlay();
+  const inUse = new Set(Object.values(m.in_use || {}));
+  const rows = Object.entries(m.stages)
+    .filter(([key, meta]) => live.has(meta.provider) || inUse.has(key));
+
+  $('#models-box').innerHTML = `
+    ${rows.map(([key, meta]) => {
+      const value = m.overrides[key] || '';
+      const fallback = m.defaults[key] || '';
+      return `<label class="f model-row${inUse.has(key) ? ' live' : ''}">
+        <span>${esc(STAGE_LABELS[key] || key)}${inUse.has(key) ? '<b>ishlatilmoqda</b>' : ''}</span>
+        <input data-model="${esc(key)}" list="dl-${esc(meta.provider)}" value="${esc(value)}"
+          placeholder="${esc(fallback)}" spellcheck="false" />
+      </label>`;
+    }).join('')}
+
+    ${[...new Set(rows.map(([, meta]) => meta.provider))].map((p) => {
+      const list = state.available?.[p];
+      return `<datalist id="dl-${esc(p)}">${(list?.models || []).map((x) =>
+        `<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('')}</datalist>`;
+    }).join('')}
+
+    <div class="model-acts">
+      <button class="btn" id="models-refresh">Ro‘yxatni yangilash</button>
+      <button class="btn primary" id="models-save">Saqlash</button>
+      <span class="saver" id="models-saver"></span>
+    </div>
+    <p class="hint" id="models-note">${esc(modelsNote(rows))}</p>`;
+
+  $('#models-refresh').addEventListener('click', async () => {
+    const btn = $('#models-refresh');
+    btn.disabled = true;
+    btn.textContent = 'Yuklanmoqda…';
+    state.available = {};
+    await Promise.all([...new Set(rows.map(([, meta]) => meta.provider))].map(async (p) => {
+      state.available[p] = await api(`/api/models/available?provider=${encodeURIComponent(p)}`)
+        .catch((e) => ({ models: [], error: e.message }));
+    }));
+    drawModels();
+    toast('Ro‘yxat yangilandi');
+  });
+
+  $('#models-save').addEventListener('click', async () => {
+    const btn = $('#models-save');
+    btn.disabled = true;
+    try {
+      state.models = await api('/api/models', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          models: Object.fromEntries($$('[data-model]').map((el) => [el.dataset.model, el.value.trim()])),
+          voices: state.models.voices || {},
+        }),
+      });
+      $('#models-saver').textContent = 'saqlandi';
+      $('#models-saver').className = 'saver ok';
+      await loadHealth();
+      drawModels();
+      toast('Modellar saqlandi');
+    } catch (e) {
+      alert(e.message);
+    } finally { btn.disabled = false; }
+  });
+}
+
+function modelsNote(rows) {
+  const providers = [...new Set(rows.map(([, meta]) => meta.provider))];
+  const errors = providers
+    .map((p) => state.available?.[p]?.error && `${p}: ${state.available[p].error}`)
+    .filter(Boolean);
+  if (errors.length) return errors.join(' · ');
+  const counted = providers
+    .map((p) => state.available?.[p] && `${p}: ${state.available[p].models.length} ta model`)
+    .filter(Boolean);
+  return counted.length ? counted.join(' · ')
+    : 'Provayderdan mavjud modellar ro‘yxatini olish uchun «Ro‘yxatni yangilash».';
+}
+
 // ── brand kit ─────────────────────────────────────────────────────
 async function loadBrand() {
   state.brand = await api('/api/brand');
@@ -332,8 +437,23 @@ function drawBrand() {
         <input data-b="tone" value="${esc(b.tone || '')}" placeholder="bo‘sh — standart" /></label>
     </div>
     <div class="f2">
-      <label class="f"><span>Doimiy ovoz</span>
-        <input data-b="voice_id" value="${esc(b.voice_id || '')}" placeholder="bo‘sh — standart" /></label>
+      <div class="f"><span>Doimiy ovoz</span>
+        <div class="voice-row">
+          <select data-b="voice_id">
+            <option value="">— standart —</option>
+            ${(state.voices || []).map((v) => {
+              const about = [v.hint, v.tone].filter(Boolean).join(' · ');
+              return `<option value="${esc(v.id)}"${v.id === b.voice_id ? ' selected' : ''}>${esc(v.label)}${about ? ` — ${esc(about)}` : ''}</option>`;
+            }).join('')}
+            ${b.voice_id && !(state.voices || []).some((v) => v.id === b.voice_id)
+              ? `<option value="${esc(b.voice_id)}" selected>${esc(b.voice_id)}</option>` : ''}
+          </select>
+          <button type="button" class="hear" id="brand-hear" aria-label="Namunani eshitish">
+            <svg viewBox="0 0 24 24"><path d="M8 5.5l11 6.5-11 6.5z"/></svg>
+          </button>
+        </div>
+        <small>Ro‘yxat «${esc($('#tts_provider')?.value || '—')}» provayderidan.</small>
+      </div>
       <label class="f"><span>Doimiy fon musiqasi</span>
         <select data-b="music_id"><option value="">— yo‘q —</option>
           ${(state.music || []).map((m) =>
@@ -351,6 +471,8 @@ function drawBrand() {
     state.brand.accent = btn.dataset.c;
     drawBrand();
   }));
+  $('#brand-hear')?.addEventListener('click', () => playVoiceSample(
+    $('#tts_provider').value, $('[data-b="voice_id"]').value, $('#brand-hear')));
   $('#brand-save').addEventListener('click', async () => {
     const btn = $('#brand-save');
     btn.disabled = true;
@@ -385,7 +507,8 @@ function applyBrandToComposer() {
       x.setAttribute('aria-pressed', STYLE_PRESETS[Number(x.dataset.p)][1] === b.art_style));
   }
   if (b.tone) $('#tone').value = b.tone;
-  if (b.voice_id) $('#voice_id').value = b.voice_id;
+  if (b.voice_id && $(`#voice_id option[value="${CSS.escape(b.voice_id)}"]`))
+    $('#voice_id').value = b.voice_id;
   if (b.music_id && $(`#music_id option[value="${b.music_id}"]`)) {
     $('#music_id').value = b.music_id;
     syncMusicStart();
@@ -474,10 +597,63 @@ $('#art_style').addEventListener('input', () => {
     b.setAttribute('aria-pressed', STYLE_PRESETS[Number(b.dataset.p)][1] === value));
 });
 
-function syncVoiceHint() {
-  $('#voice-hint').textContent = VOICE_HINTS[$('#tts_provider').value] || '';
+// ── voices ────────────────────────────────────────────────────────
+// A voice id tells you nothing until you hear it, so the picker lists what the
+// provider actually offers and every entry can be auditioned.
+async function loadVoices() {
+  const provider = $('#tts_provider').value;
+  const select = $('#voice_id');
+  const hint = $('#voice-hint');
+  if (!provider) { select.innerHTML = '<option value="">standart ovoz</option>'; return; }
+
+  const wanted = select.value;
+  select.innerHTML = '<option value="">yuklanmoqda…</option>';
+  select.disabled = true;
+  try {
+    const data = await api(`/api/voices?provider=${encodeURIComponent(provider)}`);
+    state.voices = data.voices || [];
+    select.innerHTML = `<option value="">standart — ${esc(data.default || '?')}</option>` +
+      state.voices.map((v) => {
+        const about = [v.hint, v.tone].filter(Boolean).join(' · ');
+        return `<option value="${esc(v.id)}">${esc(v.label)}${about ? ` — ${esc(about)}` : ''}</option>`;
+      }).join('');
+    if (wanted && state.voices.some((v) => v.id === wanted)) select.value = wanted;
+    hint.textContent = data.error
+      ? data.error
+      : state.voices.length
+        ? `${state.voices.length} ta ovoz — ▶ bosib namunasini eshiting.`
+        : 'Bu provayder uchun ovoz ro’yxati yo’q.';
+  } catch (e) {
+    select.innerHTML = '<option value="">standart ovoz</option>';
+    hint.textContent = e.message;
+  } finally {
+    select.disabled = false;
+  }
+  if (state.brand) drawBrand();
 }
-$('#tts_provider').addEventListener('change', syncVoiceHint);
+
+let voiceAudio = null;
+async function playVoiceSample(provider, voiceId, button) {
+  if (!voiceId) { toast('Avval ovozni tanlang'); return; }
+  voiceAudio?.pause();
+  voiceAudio = new Audio(
+    `/api/voices/preview?provider=${encodeURIComponent(provider)}` +
+    `&voice_id=${encodeURIComponent(voiceId)}&language=${encodeURIComponent($('#language').value || 'en')}`);
+  button?.classList.add('busy');
+  try {
+    await voiceAudio.play();
+    voiceAudio.addEventListener('ended', () => button?.classList.remove('busy'), { once: true });
+  } catch {
+    button?.classList.remove('busy');
+    // The endpoint answers with the reason when synthesis fails.
+    toast('Namuna eshittirilmadi — kalitni tekshiring');
+  }
+}
+
+$('#voice-play').addEventListener('click', () =>
+  playVoiceSample($('#tts_provider').value, $('#voice_id').value, $('#voice-play')));
+
+$('#tts_provider').addEventListener('change', loadVoices);
 
 // ── topic / script mode ───────────────────────────────────────────
 $$('#mode-tabs button').forEach((b) => b.addEventListener('click', () => {
@@ -1859,7 +2035,7 @@ function drawReady(done) {
   try {
     await loadHealth();
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
-    await loadBrand();
+    await Promise.all([loadBrand(), loadModels()]);
     applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.

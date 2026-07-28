@@ -75,11 +75,16 @@
             <label class="f" id="tts-field"><span>Ovoz provayderi</span><select id="tts_provider"></select></label>
           </div>
 
-          <label class="f" id="voice-field">
-            <span>Ovoz tanlash</span>
-            <input id="voice_id" placeholder="bo'sh — standart ovoz" />
+          <div class="f" id="voice-field">
+            <span>Ovoz</span>
+            <div class="voice-row">
+              <select id="voice_id"><option value="">standart ovoz</option></select>
+              <button type="button" class="hear" id="voice-play" aria-label="Namunani eshitish">
+                <svg viewBox="0 0 24 24"><path d="M8 5.5l11 6.5-11 6.5z"/></svg>
+              </button>
+            </div>
             <small id="voice-hint"></small>
-          </label>
+          </div>
 
           <div class="f2">
             <label class="f"><span>Fon musiqasi</span>
@@ -228,6 +233,12 @@
       <button>Qo'shish</button>
     </form>
     <div class="lib-list" id="music-list"></div>
+
+    <h3>Modellar</h3>
+    <p class="hint">Har bosqich qaysi modelni chaqirishini shu yerdan almashtirasiz —
+      ro'yxat kalitingiz uchun provayderdan olinadi. Bo'sh qoldirsangiz env'dagi
+      standart qiymat ishlaydi.</p>
+    <div class="models-box" id="models-box"></div>
 
     <h3>Holat</h3>
     <div class="lib-list" id="health-list"></div>

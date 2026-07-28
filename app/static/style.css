@@ -802,6 +802,44 @@ input[type="range"]::-moz-range-thumb {
 .modal-card .note { font-size: .74rem; color: var(--faint); }
 .modal-acts { display: flex; justify-content: flex-end; gap: 8px; }
 
+/* ── voice picker ──────────────────────────────────────────────── */
+.voice-row { display: flex; gap: 7px; align-items: stretch; }
+.voice-row select { flex: 1; min-width: 0; }
+.hear {
+  flex: 0 0 auto; width: 40px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft); border: 1px solid rgba(255, 92, 71, .35);
+  color: var(--accent);
+  display: grid; place-items: center;
+  transition: filter .18s;
+}
+.hear:hover { filter: brightness(1.25); }
+.hear svg { width: 15px; height: 15px; fill: currentColor; }
+/* Nothing to show but "it is coming": the sample has to be fetched or spoken. */
+.hear.busy { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+
+/* ── model settings ────────────────────────────────────────────── */
+.models-box {
+  display: grid; gap: 11px;
+  padding: 16px; margin-bottom: 8px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+.model-row > span { display: flex; align-items: center; gap: 8px; }
+.model-row b {
+  padding: 2px 7px; border-radius: 99px;
+  background: rgba(61, 220, 145, .14); color: var(--ok);
+  font-size: .62rem; font-weight: 700;
+}
+.model-row input {
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.model-row.live input { border-color: rgba(61, 220, 145, .35); }
+.model-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.model-acts .saver { text-align: left; }
+#models-note { margin: 0; }
+
 /* ── brand kit ─────────────────────────────────────────────────── */
 .brand-box {
   display: grid; gap: 12px;
