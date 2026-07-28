@@ -7,7 +7,11 @@
     publisher  -> title, description, tags, thumbnail prompt, music mood
 """
 
-from .director import direct_script, segment_existing_narration
+from .director import (
+    direct_script,
+    segment_existing_narration,
+    segment_written_script,
+)
 from .imagesmith import build_image_prompts
 from .publisher import build_publish_pack
 from .subtitler import build_captions
@@ -15,6 +19,7 @@ from .subtitler import build_captions
 __all__ = [
     "direct_script",
     "segment_existing_narration",
+    "segment_written_script",
     "build_image_prompts",
     "build_captions",
     "build_publish_pack",

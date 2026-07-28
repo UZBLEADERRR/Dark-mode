@@ -254,5 +254,74 @@ Cut this into scenes now."""
     return {"title": (data.get("title") or topic).strip(), "scenes": scenes}
 
 
+async def segment_written_script(
+    *,
+    topic: str,
+    script: str,
+    language: str,
+    video_format: str,
+    heroes: list[dict],
+) -> dict:
+    """Storyboard a script the user wrote, using their words verbatim."""
+    words = len([w for w in script.split() if w])
+    # ~2.4 words a second is a normal narration pace; it only sets scene count.
+    estimated = max(10.0, words / 2.4)
+    scene_count = max(2, min(config.MAX_SCENES, round(estimated / config.SECONDS_PER_SCENE)))
+    fmt = config.FORMATS.get(video_format, config.FORMATS["16:9"])
+    lang_name = config.LANGUAGES.get(language, language)
+
+    if heroes:
+        cast = "\n".join(
+            f"- id: {h['id']} | name: {h['name']}"
+            + (f" | {h['description']}" if h.get("description") else "")
+            for h in heroes
+        )
+    else:
+        cast = "(no recurring characters)"
+
+    user = f"""CONTEXT
+{topic or "(none given — the script speaks for itself)"}
+
+SCRIPT LANGUAGE
+{lang_name}
+
+ASPECT RATIO
+{fmt['aspect']} ({fmt['label']})
+
+CAST
+{cast}
+
+SCRIPT (verbatim — every word must survive, in this order)
+{script}
+
+Cut this into roughly {scene_count} scenes. Write each `visual` in English even
+though the narration is in {lang_name}."""
+
+    data = await call_json(SEGMENT_SYSTEM, user, SEGMENT_SCHEMA)
+
+    known_ids = {h["id"] for h in heroes}
+    scenes = []
+    for i, raw in enumerate(data.get("scenes", [])):
+        narration = (raw.get("narration") or "").strip()
+        if not narration:
+            continue
+        motion = raw.get("motion") if raw.get("motion") in MOTIONS else MOTIONS[i % len(MOTIONS)]
+        scenes.append(
+            {
+                "index": len(scenes),
+                "narration": narration,
+                "visual": (raw.get("visual") or narration)[:600],
+                "motion": motion,
+                "hero_ids": [h for h in (raw.get("hero_ids") or []) if h in known_ids],
+                "on_screen_text": (raw.get("on_screen_text") or "").strip()[:60],
+            }
+        )
+
+    if not scenes:
+        raise ValueError("The Director skill could not segment this script.")
+
+    return {"title": (data.get("title") or topic or "Video").strip(), "scenes": scenes}
+
+
 def estimate_scene_count(target_seconds: int) -> int:
     return max(3, min(config.MAX_SCENES, math.ceil(target_seconds / config.SECONDS_PER_SCENE)))

@@ -17,6 +17,9 @@ from . import kenburns
 
 SCENE_GAP = 0.25  # breath of silence appended to each narration segment
 
+# The rotation used when a scene has no transition of its own. `fade` repeats
+# on purpose: a video where every cut is a different flourish looks restless, so
+# the plainer one carries most of them.
 TRANSITIONS = (
     "fade",
     "smoothleft",
@@ -26,6 +29,27 @@ TRANSITIONS = (
     "smoothright",
     "fade",
     "dissolve",
+)
+
+# What the scene editor offers — distinct, and each one verified to exist in the
+# ffmpeg xfade filter.
+TRANSITION_CHOICES = (
+    "fade",
+    "fadeblack",
+    "fadewhite",
+    "dissolve",
+    "smoothleft",
+    "smoothright",
+    "smoothup",
+    "smoothdown",
+    "slideleft",
+    "slideright",
+    "wipeleft",
+    "wiperight",
+    "circleopen",
+    "circleclose",
+    "radial",
+    "pixelize",
 )
 
 
@@ -135,9 +159,17 @@ async def concat_narration(
 
 
 def _video_graph(
-    clip_count: int, durations: list[float], transition: float, subtitle_file: str | None
+    clip_count: int,
+    durations: list[float],
+    transition: float,
+    subtitle_file: str | None,
+    effects: list[str | None] | None = None,
 ) -> tuple[str, str]:
-    """Chain the clips with cross-fades; return (graph, final video label)."""
+    """Chain the clips with cross-fades; return (graph, final video label).
+
+    `effects[i]` names the transition *into* clip i. Anything unset falls back to
+    the rotating default, so an untouched video still varies its cuts.
+    """
     # A label in the returned pair is what `-map` receives, so a filter output is
     # bracketed and a bare input stream is not — ffmpeg rejects `-map "[0:v]"`.
     if clip_count == 1:
@@ -149,11 +181,17 @@ def _video_graph(
     current = "[0:v]"
     offset = 0.0
     for i in range(1, clip_count):
+        # Validate against the full choice list, not the short rotation — the
+        # rotation holds only the handful used as defaults, so checking against
+        # it would silently discard every other transition the user picked.
+        chosen = effects[i] if effects and i < len(effects) else None
+        if chosen not in TRANSITION_CHOICES:
+            chosen = TRANSITIONS[i % len(TRANSITIONS)]
         # Clip i-1 runs `transition` seconds past its narration; the fade eats it.
         offset += durations[i - 1] - transition
         label = f"[vx{i}]"
         parts.append(
-            f"{current}[{i}:v]xfade=transition={TRANSITIONS[i % len(TRANSITIONS)]}"
+            f"{current}[{i}:v]xfade=transition={chosen}"
             f":duration={transition}:offset={offset:.3f}{label}"
         )
         current = label
@@ -215,6 +253,8 @@ async def assemble(
     workdir: Path,
     subtitle_file: Path | None = None,
     music: Path | None = None,
+    music_start: float = 0.0,
+    effects: list[str | None] | None = None,
 ) -> Path:
     """Cross-fade the clips, burn the captions, mix the audio, write the MP4."""
     if not clips:
@@ -231,11 +271,17 @@ async def assemble(
 
         music_index: int | None = None
         if with_music and music is not None:
+            # Seeking the input is how the chosen part of the track is picked;
+            # the loop filter downstream then repeats from that point, not from
+            # the top of the file.
+            if music_start > 0:
+                inputs += ["-ss", f"{music_start:.3f}"]
             inputs += ["-i", music.name]
             music_index = narration_index + 1
 
         video_graph, video_label = _video_graph(
-            len(clips), clip_durations, transition, subtitle_file.name if subtitle_file else None
+            len(clips), clip_durations, transition,
+            subtitle_file.name if subtitle_file else None, effects,
         )
         audio_graph, audio_label = _audio_graph(
             narration_index, music_index, total_duration, duck

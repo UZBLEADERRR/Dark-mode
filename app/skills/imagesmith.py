@@ -18,8 +18,10 @@ same shoot. That consistency matters more than any single striking frame.
 
 Rules:
 - Write one prompt per scene, in English, 25-60 words.
-- Structure each prompt as: subject and action, then setting, then framing and lens,
-  then lighting, then the shared style suffix.
+- Structure each prompt as: subject and action, then setting, then framing, then
+  lighting, then the shared style suffix. Reach for camera and lens language only
+  when the requested art direction is photographic — describing a flat 2D
+  illustration in terms of focal lengths drags the generator back toward realism.
 - Vary the framing across scenes (wide establishing, medium, close-up, over-the-shoulder,
   low angle, top-down) so the finished video does not feel static.
 - When a scene lists hero reference images, describe those characters by their given
