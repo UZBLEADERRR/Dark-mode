@@ -13,13 +13,14 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import config, pipeline, store
+from . import config, pgstore, pipeline, store
 from .models import (
     BrandKit,
     CreateJobRequest,
     HeroPatch,
     JobPatch,
     ModelSettings,
+    MusicSwap,
     RegenerateRequest,
     RepurposeRequest,
     SceneInsert,
@@ -168,6 +169,16 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
     }
 
 
+def _hero_store() -> dict[str, Any]:
+    if not pgstore.enabled():
+        return {"backend": "sqlite", "ok": True,
+                "note": "Bu konteynerda saqlanadi — deploy qilinganda o'chadi."}
+    ok, detail = pgstore.health()
+    return {"backend": "postgres", "ok": ok,
+            "note": "Postgres — deploydan keyin ham saqlanadi." if ok
+                    else f"Postgres ulanmadi: {detail}"}
+
+
 def _get_job_or_404(job_id: str) -> dict[str, Any]:
     job = store.get_job(job_id)
     if job is None:
@@ -206,6 +217,10 @@ async def health() -> dict[str, Any]:
         "llm": config.llm_ready(),
         "llm_provider": config.llm_provider(),
         "storage": storage.backend(),
+        # Heroes are the one thing a container restart must not lose, so where
+        # they live — and whether that place is answering — is worth reporting.
+        "hero_store": _hero_store(),
+        "tts_rate_limit": config.TTS_RATE_LIMIT,
         "image_providers": {n: config.image_provider_ready(n)
                             for n in ("gemini", "fal", "openai")},
         "tts_providers": {n: config.tts_provider_ready(n)
@@ -741,6 +756,30 @@ async def render_job(job_id: str) -> dict[str, Any]:
     _editable_job(job_id)
     store.update_job(job_id, status="rendering", step="render", progress=74)
     _launch(lambda: pipeline.run_render(job_id), job_id)
+    return {"id": job_id, "status": "rendering"}
+
+
+@app.post("/api/jobs/{job_id}/music", status_code=202)
+async def swap_music(job_id: str, body: MusicSwap) -> dict[str, Any]:
+    """Add, change or remove the music under a finished video.
+
+    Separate from the render endpoint because it is a different size of job:
+    only the audio is rebuilt and the picture is copied through, so a track can
+    be tried, judged and swapped again in seconds.
+    """
+    job = _get_job_or_404(job_id)
+    if job["status"] in _BUSY:
+        raise HTTPException(status_code=409, detail="This job is still working.")
+    if job["status"] != "done":
+        raise HTTPException(
+            status_code=400,
+            detail="Render the video first — music is mixed into a finished file.")
+    if body.music_id and store.get_music_audio(body.music_id) is None:
+        raise HTTPException(status_code=404, detail="That track is not in the library.")
+
+    store.update_job(job_id, status="rendering", step="music", progress=10)
+    _launch(lambda: pipeline.restyle_music(job_id, body.music_id or None, body.music_start),
+            job_id)
     return {"id": job_id, "status": "rendering"}
 
 

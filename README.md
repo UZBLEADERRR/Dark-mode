@@ -391,3 +391,14 @@ app/
   uni qaytadan urinib ko'radi. Rasm chiqmasa gradient qo'yiladi.
 - Jarayon 45 soniyadan ortiq jim qolsa progress kartasida "To'xtatish" tugmasi
   chiqadi. To'xtatilgan job tayyor sahnalari bilan tahrirlash bo'limida qoladi.
+- Ovoz so'rovlari daqiqasiga `TTS_RATE_LIMIT` tadan oshmaydi (standart 10).
+  429 kelsa xato deb hisoblanmaydi — kutiladi va davom etadi, va bu kutish
+  `TTS_DEADLINE` hisobiga kirmaydi.
+- Tayyor videoga musiqa keyin ham qo'shsa bo'ladi: "Tayyor" bo'limida
+  "Musiqa qo'shish". Faqat tovush qayta mikslanadi, rasm nusxalanadi
+  (`-c:v copy`) — shuning uchun bir necha soniya oladi va trekni xohlagancha
+  almashtirish mumkin.
+- `DATABASE_URL` berilsa hero kutubxonasi Postgres'da saqlanadi (Railway'da
+  Postgres qo'shsangiz o'zi qo'yiladi). Faqat hero — chunki deploy konteyner
+  diskini o'chiradi va hero yagona qayta yaratib bo'lmaydigan fayl. Birinchi
+  ishga tushishda SQLite'dagi hero'lar avtomatik ko'chiriladi.

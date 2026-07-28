@@ -1,8 +1,13 @@
-"""SQLite persistence for heroes, music and render jobs.
+"""Persistence for heroes, music and render jobs.
 
 Deliberately synchronous and tiny: every call opens a short-lived connection,
 which keeps it safe to touch from both the request handlers and the background
 worker without sharing connection state across threads.
+
+SQLite by default. When `DATABASE_URL` is set the hero library — and only the
+hero library — moves to Postgres, because a hero is an uploaded photo that
+cannot be regenerated and a container filesystem does not survive a deploy.
+Every caller goes through the same functions either way.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-from . import config
+from . import config, pgstore
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS heroes (
@@ -74,7 +79,12 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Milliseconds, not seconds: several heroes uploaded in the same second
+    # would otherwise share a timestamp, and "newest first" became whatever
+    # order the database felt like. Rows written at the old precision still
+    # sort correctly against these — '+' sorts before '.', so a bare second
+    # reads as .000.
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 @contextmanager
@@ -94,6 +104,32 @@ def init() -> None:
     with _conn() as conn:
         conn.executescript(_SCHEMA)
         _migrate(conn)
+    _adopt_local_heroes()
+
+
+def _adopt_local_heroes() -> None:
+    """Copy any SQLite heroes into Postgres the first time it is configured.
+
+    Someone who has been uploading heroes to a container and then attaches a
+    database should find their library intact, not empty. Inserts ignore rows
+    that are already there, so this is safe to run on every boot, and a database
+    that is unreachable right now leaves the local copies untouched.
+    """
+    if not pgstore.enabled():
+        return
+    try:
+        existing = pgstore.known_ids()
+        with _conn() as conn:
+            rows = conn.execute(
+                "SELECT id, name, description, mime, ext, image, created_at FROM heroes"
+            ).fetchall()
+        for row in rows:
+            if row["id"] in existing:
+                continue
+            pgstore.add_hero(row["id"], row["name"], row["description"], row["image"],
+                             row["mime"], row["ext"], row["created_at"])
+    except Exception:  # noqa: BLE001 - a hero library is not worth failing startup for
+        pass
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -120,6 +156,10 @@ _HERO_COLS = "id, name, description, mime, ext, created_at"
 
 def add_hero(name: str, description: str, image: bytes, mime: str, ext: str) -> dict[str, Any]:
     hero_id = new_id("hero")
+    if pgstore.enabled():
+        pgstore.add_hero(hero_id, name, description, image, mime, ext, _now())
+        return {"id": hero_id, "name": name, "description": description,
+                "mime": mime, "ext": ext}
     with _conn() as conn:
         conn.execute(
             "INSERT INTO heroes (id, name, description, mime, ext, image, created_at)"
@@ -130,6 +170,8 @@ def add_hero(name: str, description: str, image: bytes, mime: str, ext: str) -> 
 
 
 def list_heroes() -> list[dict[str, Any]]:
+    if pgstore.enabled():
+        return pgstore.list_heroes()
     with _conn() as conn:
         rows = conn.execute(
             f"SELECT {_HERO_COLS} FROM heroes ORDER BY created_at DESC"
@@ -140,6 +182,8 @@ def list_heroes() -> list[dict[str, Any]]:
 def get_heroes(hero_ids: list[str]) -> list[dict[str, Any]]:
     if not hero_ids:
         return []
+    if pgstore.enabled():
+        return pgstore.get_heroes(hero_ids)
     placeholders = ",".join("?" for _ in hero_ids)
     with _conn() as conn:
         rows = conn.execute(
@@ -150,6 +194,8 @@ def get_heroes(hero_ids: list[str]) -> list[dict[str, Any]]:
 
 
 def get_hero_image(hero_id: str) -> tuple[bytes, str, str] | None:
+    if pgstore.enabled():
+        return pgstore.get_hero_image(hero_id)
     with _conn() as conn:
         row = conn.execute(
             "SELECT image, mime, ext FROM heroes WHERE id = ?", (hero_id,)
@@ -158,6 +204,8 @@ def get_hero_image(hero_id: str) -> tuple[bytes, str, str] | None:
 
 
 def update_hero(hero_id: str, *, name: str | None = None, description: str | None = None) -> bool:
+    if pgstore.enabled():
+        return pgstore.update_hero(hero_id, name=name, description=description)
     fields, values = [], []
     if name is not None:
         fields.append("name = ?")
@@ -174,6 +222,8 @@ def update_hero(hero_id: str, *, name: str | None = None, description: str | Non
 
 
 def delete_hero(hero_id: str) -> bool:
+    if pgstore.enabled():
+        return pgstore.delete_hero(hero_id)
     with _conn() as conn:
         return conn.execute("DELETE FROM heroes WHERE id = ?", (hero_id,)).rowcount > 0
 

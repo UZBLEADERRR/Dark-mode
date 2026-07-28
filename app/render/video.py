@@ -458,6 +458,86 @@ def _audio_graph(
     return ";".join(parts), "[aout]"
 
 
+async def remix_audio(
+    *,
+    video_path: Path,
+    narration: Path,
+    out_path: Path,
+    workdir: Path,
+    total_duration: float,
+    music: Path | None = None,
+    music_start: float = 0.0,
+    sfx: list[dict] | None = None,
+) -> Path:
+    """Rebuild a finished video's soundtrack without touching its pictures.
+
+    The music is mixed against the narration the render kept, never against the
+    finished file's own audio — mixing onto that would stack a second bed on top
+    of the first, and each pass would layer another. Because only the audio is
+    rebuilt, the video stream is copied through: seconds instead of minutes, and
+    the picture is bit-for-bit what was approved.
+    """
+    cues = [c for c in (sfx or []) if c.get("path")]
+
+    async def attempt(with_music: bool, duck: bool, with_sfx: bool = True) -> Path:
+        # The source video and the narration are addressed absolutely: they are
+        # not always siblings, and only the output is written into `workdir`.
+        inputs = ["-i", str(video_path.resolve()), "-i", str(narration.resolve())]
+        narration_index = 1
+        next_index = 2
+
+        music_index: int | None = None
+        if with_music and music is not None:
+            if music_start > 0:
+                inputs += ["-ss", f"{music_start:.3f}"]
+            inputs += ["-i", str(music.resolve())]
+            music_index = next_index
+            next_index += 1
+
+        staged: list[dict] = []
+        if with_sfx:
+            for cue in cues:
+                inputs += ["-i", str(Path(cue["path"]).resolve())]
+                staged.append({**cue, "index": next_index})
+                next_index += 1
+
+        graph, audio_label = _audio_graph(
+            narration_index, music_index, total_duration, duck, staged)
+
+        args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *inputs]
+        if graph:
+            args += ["-filter_complex", graph]
+        args += [
+            "-map", "0:v:0",
+            "-map", audio_label,
+            "-t", f"{total_duration:.3f}",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
+            "-movflags", "+faststart",
+            out_path.name,
+        ]
+        await _run(args, cwd=workdir)
+        return out_path
+
+    if music is not None:
+        try:
+            return await attempt(with_music=True, duck=True)
+        except RenderError:
+            # sidechaincompress is the least portable piece — retry flat, then dry.
+            try:
+                return await attempt(with_music=True, duck=False)
+            except RenderError:
+                pass
+    try:
+        return await attempt(with_music=False, duck=False)
+    except RenderError:
+        if not cues:
+            raise
+        return await attempt(with_music=False, duck=False, with_sfx=False)
+
+
 async def assemble(
     *,
     clips: list[Path],

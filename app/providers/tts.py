@@ -10,16 +10,42 @@ import asyncio
 import base64
 import re
 import struct
+import time
 from pathlib import Path
 from typing import Callable
 
 import httpx
 
 from .. import config
+from . import ratelimit
 
 
 class TTSError(RuntimeError):
     pass
+
+
+class RateLimited(TTSError):
+    """The provider refused because we are over its per-minute allowance.
+
+    Kept apart from every other failure because it is not one: the request was
+    understood and will succeed on its own once the window rolls over. Waiting
+    is the correct response, so this never counts against the stall deadline.
+    """
+
+    def __init__(self, message: str, retry_after: float = 20.0) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+# One ceiling for the whole process. Scenes are voiced concurrently, so the
+# limit has to be shared or three workers would each get ten a minute.
+_limiter = ratelimit.RateLimiter(config.TTS_RATE_LIMIT)
+
+
+def limiter() -> ratelimit.RateLimiter:
+    """The shared limiter, resynced to config so a settings change takes hold."""
+    _limiter.reconfigure(config.TTS_RATE_LIMIT)
+    return _limiter
 
 
 LANG_HINTS = {
@@ -44,6 +70,22 @@ def _wav_from_pcm(pcm: bytes, sample_rate: int = 24000, channels: int = 1) -> by
     header += b"fmt " + struct.pack("<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, bits)
     header += b"data" + struct.pack("<I", len(pcm))
     return header + pcm
+
+
+def _raise_for_status(resp: httpx.Response, label: str) -> None:
+    """Turn a failed response into the right kind of error.
+
+    A 429 — and a 503, which providers use for the same "come back shortly" —
+    becomes `RateLimited` so the caller waits instead of burning an attempt.
+    """
+    if resp.status_code < 400:
+        return
+    if resp.status_code in (429, 503):
+        raise RateLimited(
+            f"{label} is rate limiting us ({resp.status_code}).",
+            ratelimit.retry_after(resp.headers, 20.0),
+        )
+    raise TTSError(f"{label} error {resp.status_code}: {resp.text[:300]}")
 
 
 def _rate_from_mime(mime: str) -> int:
@@ -96,8 +138,7 @@ async def _elevenlabs(
             "voice_settings": {"stability": 0.45, "similarity_boost": 0.8, "style": 0.15},
         },
     )
-    if resp.status_code >= 400:
-        raise TTSError(f"ElevenLabs error {resp.status_code}: {resp.text[:300]}")
+    _raise_for_status(resp, "ElevenLabs")
 
     payload = resp.json()
     audio_b64 = payload.get("audio_base64")
@@ -137,8 +178,7 @@ async def _openai(
             "response_format": "mp3",
         },
     )
-    if resp.status_code >= 400:
-        raise TTSError(f"OpenAI TTS error {resp.status_code}: {resp.text[:300]}")
+    _raise_for_status(resp, "OpenAI TTS")
 
     out_path = out_path.with_suffix(".mp3")
     out_path.write_bytes(resp.content)
@@ -178,11 +218,12 @@ async def _gemini(
     fallback = config.model("gemini_tts_fallback")
     # The default voice model is a preview build, which a given key may simply
     # not be granted. Dropping to the settled one beats failing the whole video.
+    # A 429 is deliberately not in this list: the model is fine, the window is
+    # full, and switching models would only spend the other model's allowance.
     if resp.status_code in (400, 403, 404) and fallback \
             and fallback != config.model("gemini_tts"):
         resp = await call(fallback)
-    if resp.status_code >= 400:
-        raise TTSError(f"Gemini TTS error {resp.status_code}: {resp.text[:300]}")
+    _raise_for_status(resp, "Gemini TTS")
 
     for candidate in resp.json().get("candidates", []):
         for part in candidate.get("content", {}).get("parts", []):
@@ -206,18 +247,26 @@ async def synthesize(
     voice_id: str | None = None,
     attempts: int = 3,
     on_retry: Callable[[int, Exception], None] | None = None,
+    on_wait: Callable[[float, str], None] | None = None,
 ) -> tuple[Path, list[dict]]:
-    """Speak one line. Retries a stalled provider, but not for ever.
+    """Speak one line: paced to the provider's allowance, bounded against a stall.
 
-    `TTS_DEADLINE` bounds the whole attempt sequence, because the failure that
-    actually hurts is not an error — it is a provider that accepts the request
-    and never answers. Without a ceiling, three retries behind a generous
-    per-call timeout hold the line, and every line queued behind it, for many
-    minutes with nothing to show for the wait.
+    Two kinds of waiting happen here and they are deliberately kept apart.
+
+    Being throttled is not a failure. The request was understood and will
+    succeed once the window rolls over, so the limiter holds the call and a 429
+    is slept off — outside the deadline, because a clock that punishes patience
+    would turn a working key into a failed video.
+
+    A provider that accepts the request and never answers is the failure worth
+    catching, and `TTS_DEADLINE` bounds it. Without that ceiling, three retries
+    behind a generous per-call timeout hold this line, and every line queued
+    behind it, for many minutes with nothing to show for the wait.
     """
     provider = (provider or config.TTS_PROVIDER).lower()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     timeout = httpx.Timeout(config.TTS_TIMEOUT, connect=20.0)
+    gate = limiter()
     last_error: Exception | None = None
 
     async def run() -> tuple[Path, list[dict]]:
@@ -232,7 +281,7 @@ async def synthesize(
                     if provider == "gemini":
                         return await _gemini(client, text, out_path, voice_id)
                     raise TTSError(f"Unknown TTS provider '{provider}'.")
-                except asyncio.CancelledError:
+                except (asyncio.CancelledError, RateLimited):
                     raise
                 except Exception as exc:  # noqa: BLE001 - retried below
                     last_error = exc
@@ -242,13 +291,33 @@ async def synthesize(
                         await asyncio.sleep(2 * (attempt + 1))
         raise TTSError(f"Voice generation failed after {attempts} attempts: {last_error}")
 
-    try:
-        return await asyncio.wait_for(run(), timeout=config.TTS_DEADLINE)
-    except asyncio.TimeoutError as exc:
-        raise TTSError(
-            f"The voice provider did not answer within {config.TTS_DEADLINE:.0f}s"
-            + (f" (last error: {last_error})" if last_error else "")
-        ) from exc
+    queued = 0.0
+    while True:
+        started = time.monotonic()
+        await gate.acquire(
+            on_wait=(lambda d: on_wait(d, "queued behind the rate limit")) if on_wait else None)
+        queued += time.monotonic() - started
+
+        try:
+            return await asyncio.wait_for(run(), timeout=config.TTS_DEADLINE)
+        except RateLimited as exc:
+            # Every worker backs off, not just this one — the allowance is shared,
+            # so letting the others carry on would just collect more refusals.
+            gate.penalise(exc.retry_after)
+            queued += exc.retry_after
+            if queued > config.TTS_RATE_PATIENCE:
+                raise TTSError(
+                    f"Still rate limited after {queued / 60:.0f} minutes of waiting. "
+                    "Lower TTS_RATE_LIMIT or use a key with a bigger allowance."
+                ) from exc
+            if on_wait:
+                on_wait(exc.retry_after, "rate limited by the provider")
+            await asyncio.sleep(exc.retry_after)
+        except asyncio.TimeoutError as exc:
+            raise TTSError(
+                f"The voice provider did not answer within {config.TTS_DEADLINE:.0f}s"
+                + (f" (last error: {last_error})" if last_error else "")
+            ) from exc
 
 
 def available_providers() -> list[str]:

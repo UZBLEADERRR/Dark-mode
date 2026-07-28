@@ -15,6 +15,7 @@ render stage always works from what is actually on disk.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
 import traceback
@@ -58,6 +59,20 @@ def _note(job_id: str, message: str) -> None:
 def _retry_note(job_id: str, label: str) -> Callable[[int, Exception], None]:
     def note(attempt: int, exc: Exception) -> None:
         _note(job_id, f"{label} — attempt {attempt} failed, retrying ({_short(exc)})")
+
+    return note
+
+
+def _wait_note(job_id: str, label: str) -> Callable[[float, str], None]:
+    """Report a deliberate wait, so pacing never looks like a hang.
+
+    Only waits worth mentioning are logged. At ten calls a minute the limiter
+    holds each line for about six seconds, and narrating that would bury the
+    progress it is meant to sit beside.
+    """
+    def note(seconds: float, reason: str) -> None:
+        if seconds >= 10:
+            _note(job_id, f"{label} — {reason}, waiting {seconds:.0f}s")
 
     return note
 
@@ -387,6 +402,7 @@ async def _voice_scenes(
                 provider=provider,
                 voice_id=voice_id,
                 on_retry=_retry_note(job_id, f"Scene {scene['index'] + 1} voice-over"),
+                on_wait=_wait_note(job_id, f"Scene {scene['index'] + 1} voice-over"),
             )
             raw_duration = await video.probe_duration(path)
             words = await align.words_for(
@@ -796,6 +812,88 @@ async def run_render(job_id: str) -> None:
 
     except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
         _fail(job_id, exc, warnings)
+
+
+async def restyle_music(job_id: str, music_id: str | None, music_start: float) -> None:
+    """Put a different track under a finished video — or take the music away.
+
+    Only the soundtrack is rebuilt. The render already saved the narration
+    separately, so the bed is mixed against that rather than against the
+    finished file's own audio; the picture is copied through untouched, which
+    makes this seconds of work instead of a whole render, and means a track can
+    be auditioned as many times as it takes without degrading the video.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    request = job["request"]
+    result = job.get("result") or {}
+    warnings: list[str] = list(result.get("warnings") or [])
+
+    try:
+        workdir = workdir_for(job_id)
+        current = _finished_video(workdir)
+        if current is None:
+            raise PipelineError("This job has no rendered video to add music to.")
+        narration_path = next(iter(workdir.glob("narration.*")), None)
+        if narration_path is None:
+            raise PipelineError(
+                "The narration for this video is no longer on disk — render it again first.")
+
+        scenes = _load_scenes(job)
+        total = float(result.get("duration") or 0.0) or await video.probe_duration(current)
+
+        _progress(job_id, "music", 40,
+                  "Removing the music" if not music_id else "Mixing in the new track",
+                  status="rendering")
+
+        music_path = _materialize_music(workdir, music_id)
+        if music_id and music_path is None:
+            raise PipelineError("That track is no longer in the library.")
+
+        # ffmpeg cannot read and write the same file, so the mix lands beside the
+        # original and only replaces it once it has been written in full.
+        staging = workdir / "remix.mp4"
+        await video.remix_audio(
+            video_path=current, narration=narration_path, out_path=staging,
+            workdir=workdir, total_duration=total, music=music_path,
+            music_start=float(music_start or 0.0),
+            sfx=_materialize_sfx(workdir, scenes),
+        )
+        os.replace(staging, current)
+
+        # Remember the choice: a later re-render should keep the music, not
+        # silently go back to whatever the video was created with.
+        request["music_id"] = music_id or None
+        request["music_start"] = float(music_start or 0.0)
+        store.replace_request(job_id, request)
+
+        _progress(job_id, "music", 85, "Publishing the new mix", status="rendering")
+        video_url, upload_warning = await storage.publish(current, f"{job_id}/{current.name}")
+        if upload_warning:
+            warnings.append(upload_warning)
+
+        # The file kept its name, so the browser would happily show the old mix
+        # from cache. The counter is what makes the player fetch it again.
+        version = int(result.get("audio_version", 0)) + 1
+        store.update_job(
+            job_id, status="done", step="done", progress=100, error="",
+            log="Music removed" if not music_id else "New music mixed in",
+            result={
+                "video_url": f"{video_url}{'&' if '?' in video_url else '?'}v={version}",
+                "audio_version": version,
+                "warnings": warnings,
+            },
+        )
+
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
+        _fail(job_id, exc, warnings)
+
+
+def _finished_video(workdir: Path) -> Path | None:
+    videos = [v for v in workdir.glob("*.mp4")
+              if not v.name.startswith("clip_") and v.name != "remix.mp4"]
+    return max(videos, key=lambda p: p.stat().st_mtime) if videos else None
 
 
 # ── per-scene regeneration ────────────────────────────────────────────────────
@@ -1273,6 +1371,7 @@ async def run_dub(job_id: str) -> None:
                     text=text, out_path=voice_dir / f"line_{index:04d}",
                     provider=provider, voice_id=request.get("voice_id"),
                     on_retry=_retry_note(job_id, f"Line {index + 1}"),
+                    on_wait=_wait_note(job_id, f"Line {index + 1}"),
                 )
             except Exception as exc:  # noqa: BLE001 - a lost line is not a lost video
                 warnings.append(f"Line {index + 1} could not be voiced: {exc}")

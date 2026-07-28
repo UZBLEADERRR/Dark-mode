@@ -399,10 +399,17 @@ async function loadHealth() {
     ...Object.entries(h.image_providers).map(([n, v]) => [`rasm — ${n}`, v]),
     ...Object.entries(h.tts_providers).map(([n, v]) => [`ovoz — ${n}`, v]),
     [`saqlash — ${h.storage}`, true],
+    // Worth its own row: heroes are the only uploads that cannot be recreated,
+    // so whether they outlive a deploy is something you want to know before it
+    // happens rather than after.
+    [`hero bazasi — ${h.hero_store?.backend || 'sqlite'}`, h.hero_store?.ok !== false],
+    [`ovoz limiti — ${h.tts_rate_limit || 0}/daqiqa`, true],
   ];
   $('#health-list').innerHTML = checks.map(([label, ok]) =>
     `<div class="row"><span>${esc(label)}</span><span class="tag ${ok ? 'done' : 'failed'}">${ok ? 'bor' : 'yo‘q'}</span></div>`
-  ).join('') + Object.entries(h.models || {}).map(([stage, model]) =>
+  ).join('')
+    + (h.hero_store?.note ? `<p class="note">${esc(h.hero_store.note)}</p>` : '')
+    + Object.entries(h.models || {}).map(([stage, model]) =>
     `<div class="row"><span>${esc({ text: 'skript modeli', image: 'rasm modeli', tts: 'ovoz modeli' }[stage] || stage)}</span>
       <span class="model">${esc(model)}</span></div>`).join('');
 
@@ -2401,6 +2408,8 @@ function drawReady(done) {
         <div class="acts" style="margin-top:0">
           <a class="btn primary" href="${esc(j.download_url || j.video_url || '')}" download>Videoni yuklab olish</a>
           ${j.subtitle_url ? `<a class="btn" href="${esc(j.subtitle_url)}" download>.srt</a>` : ''}
+          <button class="btn" data-music="${esc(j.id)}" data-track="${esc(j.music_id || '')}"
+            data-at="${esc(String(j.music_start || 0))}">${j.music_id ? 'Musiqani almashtirish' : 'Musiqa qo‘shish'}</button>
           <button class="btn" data-thumbs="${esc(j.id)}">Muqova yaratish</button>
           <button class="btn" data-repurpose="${esc(j.id)}" data-fmt="${esc(j.video_format)}">Boshqa formatga</button>
           ${j.kind === 'dub' ? '' :
@@ -2436,6 +2445,49 @@ function drawReady(done) {
 
   $$('#ready-list [data-copy]').forEach((b) =>
     b.addEventListener('click', () => copyText(b.dataset.copy, b)));
+
+  // Only the audio is rebuilt, so a track can be tried and changed again in
+  // seconds. That is what makes this worth having on a finished video at all —
+  // choosing music is a thing you do by ear, not once and for ever.
+  $$('#ready-list [data-music]').forEach((b) => b.addEventListener('click', async () => {
+    const beds = (state.music || []).filter((m) => (m.kind || 'music') !== 'sfx');
+    const answer = await ask({
+      title: 'Orqa fon musiqasi',
+      ok: 'Qo‘shish',
+      html: `<label class="f"><span>Trek</span>
+          <select name="music_id">
+            <option value="">— musiqasiz —</option>
+            ${beds.map((m) => `<option value="${esc(m.id)}"${
+              m.id === b.dataset.track ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}
+          </select></label>
+        <label class="f"><span>Trekning qayeridan boshlansin (soniya)</span>
+          <input type="number" name="music_start" min="0" step="1" value="${esc(b.dataset.at || '0')}" /></label>
+        <small class="note">Ovoz ostida musiqa avtomatik pasayadi. Video qayta render
+          qilinmaydi — faqat tovush yangilanadi, shuning uchun bir necha soniya oladi.
+          ${beds.length ? '' : '<br />Kutubxonada hali trek yo‘q — avval yuklang.'}</small>`,
+    });
+    if (!answer) return;
+    const label = b.textContent;
+    b.disabled = true;
+    b.textContent = 'Mikslanmoqda…';
+    try {
+      await api(`/api/jobs/${b.dataset.music}/music`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          music_id: answer.music_id || '',
+          music_start: Number(answer.music_start) || 0,
+        }),
+      });
+      go('edit');
+      watch(b.dataset.music, { reveal: true });
+      toast(answer.music_id ? 'Musiqa mikslanmoqda' : 'Musiqa olib tashlanmoqda');
+    } catch (e) {
+      alert(e.message);
+      b.disabled = false;
+      b.textContent = label;
+    }
+  }));
 
   $$('#ready-list [data-thumbs]').forEach((b) => b.addEventListener('click', async () => {
     b.disabled = true;
