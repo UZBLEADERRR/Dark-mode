@@ -543,11 +543,44 @@ input[type="range"]::-moz-range-thumb {
   font-variant-numeric: tabular-nums;
 }
 
+.tool.play { background: var(--accent-soft); border-color: rgba(255, 92, 71, .35); }
+.tool.play svg { fill: currentColor; stroke: none; }
+
+/* A thin bar under the frame: how far into the scene the preview has played. */
+.scrub {
+  height: 3px; margin-top: 8px; border-radius: 99px;
+  background: var(--raised); overflow: hidden;
+}
+.scrub > i {
+  display: block; height: 100%; width: 0;
+  background: var(--accent); border-radius: 99px;
+}
+.ov-layer.playing .ov { border-color: transparent !important; pointer-events: none; }
+.ov-layer.playing .grab { display: none; }
+
 /* filmstrip */
+.strip-row { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
 .filmstrip {
   display: flex; gap: 8px; overflow-x: auto;
   padding: 2px; scrollbar-width: thin;
+  flex: 1; min-width: 0;
+  touch-action: pan-x;
 }
+.filmstrip.sorting { cursor: grabbing; }
+.frame.dragging { opacity: .35; }
+.frame.drop { border-color: var(--text); }
+.frame .cue {
+  position: absolute; left: 5px; top: 5px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--warn); box-shadow: 0 0 0 2px rgba(0, 0, 0, .55);
+}
+.frame-add {
+  flex: 0 0 auto; width: 44px;
+  border: 1px dashed var(--line-2); border-radius: 9px;
+  color: var(--muted); font-size: 1.2rem; line-height: 1;
+  transition: color .18s, border-color .18s;
+}
+.frame-add:hover { color: var(--text); border-color: var(--text); }
 .filmstrip::-webkit-scrollbar { height: 5px; }
 .filmstrip::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 9px; }
 .frame {
@@ -734,6 +767,61 @@ input[type="range"]::-moz-range-thumb {
 
 .hint { font-size: .78rem; color: var(--faint); margin-bottom: 11px; }
 
+/* thumbnails */
+.thumbs {
+  display: grid; gap: 10px; margin-top: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.thumbs figure { margin: 0; display: grid; gap: 7px; }
+.thumbs img {
+  width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+  border-radius: 10px; display: block; background: #000;
+}
+.thumbs .btn { text-align: center; padding: 7px 10px; font-size: .78rem; }
+
+/* ── modal ─────────────────────────────────────────────────────── */
+.modal {
+  position: fixed; inset: 0; z-index: 90;
+  display: grid; place-items: center;
+  padding: 20px;
+  background: rgba(4, 5, 8, .72);
+  backdrop-filter: blur(6px);
+  animation: drop .18s var(--ease);
+}
+.modal-card {
+  width: min(460px, 100%);
+  max-height: 86vh; overflow-y: auto;
+  display: grid; gap: 12px;
+  padding: 20px;
+  background: var(--surface); border: 1px solid var(--line-2);
+  border-radius: var(--r);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .6);
+}
+.modal-card h3 { font-size: 1rem; }
+.modal-card #modal-body { display: grid; gap: 12px; }
+.modal-card .note { font-size: .74rem; color: var(--faint); }
+.modal-acts { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ── brand kit ─────────────────────────────────────────────────── */
+.brand-box {
+  display: grid; gap: 12px;
+  padding: 16px; margin-bottom: 8px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+.brand-head { display: flex; align-items: flex-end; gap: 12px; }
+.brand-logo {
+  flex: 0 0 auto; width: 62px; height: 62px;
+  display: grid; place-items: center;
+  border-radius: 12px; background: var(--raised);
+  border: 1px dashed var(--line-2);
+  color: var(--faint); font-size: .64rem; text-align: center;
+  overflow: hidden;
+}
+.brand-logo img { width: 100%; height: 100%; object-fit: contain; }
+.brand-box .btn.primary { justify-self: start; }
+.brand-box .saver { text-align: left; }
+
 /* ── toast ─────────────────────────────────────────────────────── */
 .toast {
   position: fixed; z-index: 80;
@@ -748,12 +836,13 @@ input[type="range"]::-moz-range-thumb {
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
 
 .mini { display: grid; gap: 8px; margin-bottom: 14px; }
-.mini input[type="text"], .mini input:not([type]) {
+.mini input[type="text"], .mini input:not([type]), .mini select {
   padding: 10px 12px; background: var(--raised);
   border: 1px solid transparent; border-radius: var(--r-sm);
   outline: none; font-size: .85rem;
 }
-.mini input:focus { border-color: var(--line-2); }
+.mini select { appearance: none; cursor: pointer; }
+.mini input:focus, .mini select:focus { border-color: var(--line-2); }
 .mini button {
   padding: 10px; border-radius: var(--r-sm);
   background: var(--raised); color: var(--text);

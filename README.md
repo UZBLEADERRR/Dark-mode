@@ -52,8 +52,9 @@ tanlanmaydi va job yaratilganda aniq xabar beriladi.
 
 ## Ma'lumotlar qayerda
 
-- **Herolar, musiqa va qatlam rasmlari** — SQLite bazasida, fayllari ham blob
-  sifatida ichida. Alohida papka kerak emas: bitta `app.db` — butun kutubxona.
+- **Herolar, musiqa, tovush effektlari, qatlam rasmlari va brend** — SQLite
+  bazasida, fayllari ham blob sifatida ichida. Alohida papka kerak emas: bitta
+  `app.db` — butun kutubxona.
 - **Renderlar** — `DATA_DIR/projects/<job>/` ichida. Video tayyor bo'lgach
   yuklab olasiz. Supabase yoqilgan bo'lsa nusxasi bucket'ga ham chiqadi.
 
@@ -96,8 +97,42 @@ chetdan masofa, joylashuvi (yuqori/o'rta/past), BOSH HARFLAR, kirish
 animatsiyasi. **Kadrdagi namuna real vaqtda o'zgaradi** — render kutish shart
 emas: namuna aynan renderer ishlatadigan shrift o'lchamidan hisoblanadi.
 
+**Eshitish.** Sahnaning o'z ovozini o'ynatadi va kadr shu soat bo'yicha yuradi:
+subtitr so'zma-so'z yonadi, qatlamlar o'z vaqtida chiqib-yo'qoladi. Qaysi so'zga
+qaysi yozuv tushishini render kutmasdan ko'rasiz.
+
+**Sahna jarrohligi.** Lentadagi kadrni **sudrab tartibini o'zgartirasiz**,
+keraksizini o'chirasiz, yangisini qo'shasiz — matnini yozasiz, qolganini AI
+qiladi (prompt, ovoz, rasm). Har bir sahnaning fayllari o'ziniki bo'lgan
+o'zgarmas nom bilan saqlanadi, shuning uchun tartib o'zgarganda rasmlar
+aralashib ketmaydi.
+
+**Tovush effektlari.** Sahnaga qisqa tovush (whoosh, ding) qo'yiladi — balandligi
+va kechikishi sozlanadi. Ovoz va musiqa bilan bir mikserda birlashadi.
+
 O'zgarishlar **o'zi saqlanadi** (yozganingizdan ~0.8 soniya keyin), tepada
 "saqlandi" deb turadi.
+
+## Brend
+
+Kutubxonada bir marta sozlaysiz: logotip (har sahnaga qo'yiladi), brend rangi,
+doimiy vizual uslub, ohang, ovoz va fon musiqasi. Har yangi video shundan
+boshlanadi — lekin bu qulf emas, formada nima yozsangiz o'sha g'olib.
+
+**Hook.** "Hook matnini birinchi 3 soniyaga qo'yish" belgilansa, Director
+yozgan hook jumlasi kadrga brend rangidagi fonda chiqadi. Shorts va TikTok
+uchun eng muhim uch soniya.
+
+## Muqova va boshqa formatlar
+
+**Muqova.** Tayyor video ostidagi «Muqova yaratish» uchta variant chizadi — yaqin
+plan, umumiy plan va hissiy cho'qqi. Ichida yozuv bo'lmaydi (sarlavhani o'zingiz
+qo'yasiz, generator uni baribir xato yozadi).
+
+**Boshqa formatga.** Bitta skriptdan 16:9, 9:16, 1:1 va 4:5 chiqadi. Ovoz,
+vaqtlar, subtitr va qatlamlar o'zgarmaydi — ular formatga bog'liq emas. Rasmlar
+esa bog'liq: eskilarini ishlatsangiz o'rtasidan kesiladi (tez), qayta
+yaratsangiz yangi kadr uchun chiziladi (sifatli).
 
 ---
 
@@ -196,9 +231,16 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs/with-audio` | Tayyor ovoz bilan |
 | `GET /api/jobs/{id}` | Holat, progress, sahnalar, jurnal |
 | `PATCH /api/jobs/{id}` | Subtitr uslubi, musiqa, subtitrni yoqish/o'chirish |
-| `PATCH /api/jobs/{id}/scenes/{i}` | Sahnani va uning qatlamlarini tahrirlash |
+| `PATCH /api/jobs/{id}/scenes/{i}` | Sahnani, qatlamlarini va tovush effektini tahrirlash |
+| `POST /api/jobs/{id}/scenes` | Yangi sahna qo'shish (prompt + ovoz + rasm) |
+| `DELETE /api/jobs/{id}/scenes/{i}` | Sahnani o'chirish |
+| `POST /api/jobs/{id}/scenes/order` | Tartibni o'zgartirish |
 | `POST /api/jobs/{id}/scenes/{i}/regenerate` | Faqat o'sha sahnani qayta yaratish |
+| `POST /api/jobs/{id}/thumbnails` | Uchta muqova varianti |
+| `POST /api/jobs/{id}/repurpose` | Boshqa formatga nusxa olish |
+| `GET/PUT /api/brand` | Brend to'plami |
 | `GET/POST/DELETE /api/assets` | Qatlam rasmlari (stiker, logotip) |
+| `GET/POST /api/music?kind=sfx` | Fon musiqasi va tovush effektlari |
 | `POST /api/jobs/{id}/render` | Render qilish / qayta render |
 | `GET /api/jobs/{id}/download` | MP4 yuklab olish |
 | `GET /api/health` | Qaysi kalitlar bor, formatlar, harakatlar |

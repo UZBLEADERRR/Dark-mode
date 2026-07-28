@@ -231,41 +231,72 @@ def _video_graph(
 
 
 def _audio_graph(
-    narration_index: int, music_index: int | None, total: float, duck: bool
+    narration_index: int,
+    music_index: int | None,
+    total: float,
+    duck: bool,
+    sfx: list[dict] | None = None,
 ) -> tuple[str, str]:
-    if music_index is None:
+    """Mix narration, an optional music bed and any one-shot stings.
+
+    `sfx[i]` needs `index` (its ffmpeg input), `at` (seconds into the video) and
+    `volume`. Each is delayed to its cue with `adelay` and mixed in; the voice is
+    always the first input to `amix`, so `duration=first` keeps the output the
+    length of the narration no matter how long a sting runs.
+    """
+    sfx = sfx or []
+    if music_index is None and not sfx:
         # No mixing to do: map the narration input stream straight through.
         return "", f"{narration_index}:a"
 
-    fade_start = max(0.0, total - 2.5)
-    voice = (
-        f"[{narration_index}:a]aresample=48000,"
-        "aformat=sample_fmts=fltp:channel_layouts=stereo"
-    )
-    bed = (
-        f"[{music_index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-        f"aloop=loop=-1:size=2147483647,atrim=0:{total:.3f},"
-        f"volume={config.MUSIC_VOLUME},"
-        f"afade=t=in:st=0:d=1.5,afade=t=out:st={fade_start:.3f}:d=2.5[bed]"
-    )
+    stereo = "aformat=sample_fmts=fltp:channel_layouts=stereo"
+    voice = f"[{narration_index}:a]aresample=48000,{stereo}"
+    parts: list[str] = []
+    mix_labels: list[str] = []
 
-    if duck:
+    if music_index is None:
+        parts.append(f"{voice}[narr]")
+    elif duck:
         # A second copy of the voice drives the compressor's sidechain, so the
         # music dips under the narration instead of fighting it.
-        parts = [
-            f"{voice},asplit=2[narr][key]",
-            bed,
-            "[bed][key]sidechaincompress=threshold=0.05:ratio=12:attack=15:release=350[bedduck]",
-            "[narr][bedduck]amix=inputs=2:duration=first:dropout_transition=0:normalize=0"
-            ",alimiter=limit=0.95[aout]",
-        ]
+        parts.append(f"{voice},asplit=2[narr][key]")
     else:
-        parts = [
-            f"{voice}[narr]",
-            bed,
-            "[narr][bed]amix=inputs=2:duration=first:dropout_transition=0:normalize=0"
-            ",alimiter=limit=0.95[aout]",
-        ]
+        parts.append(f"{voice}[narr]")
+    mix_labels.append("[narr]")
+
+    if music_index is not None:
+        fade_start = max(0.0, total - 2.5)
+        parts.append(
+            f"[{music_index}:a]aresample=48000,{stereo},"
+            f"aloop=loop=-1:size=2147483647,atrim=0:{total:.3f},"
+            f"volume={config.MUSIC_VOLUME},"
+            f"afade=t=in:st=0:d=1.5,afade=t=out:st={fade_start:.3f}:d=2.5[bed]"
+        )
+        if duck:
+            parts.append(
+                "[bed][key]sidechaincompress=threshold=0.05:ratio=12:attack=15:release=350[bedduck]"
+            )
+            mix_labels.append("[bedduck]")
+        else:
+            mix_labels.append("[bed]")
+
+    for i, cue in enumerate(sfx):
+        delay = max(0, int(round(float(cue.get("at", 0.0)) * 1000)))
+        volume = max(0.0, min(4.0, float(cue.get("volume", 1.0))))
+        parts.append(
+            f"[{cue['index']}:a]aresample=48000,{stereo},"
+            f"volume={volume:.3f},adelay={delay}|{delay},"
+            f"atrim=0:{total:.3f}[sfx{i}]"
+        )
+        mix_labels.append(f"[sfx{i}]")
+
+    if len(mix_labels) == 1:
+        parts.append("[narr]alimiter=limit=0.95[aout]")
+    else:
+        parts.append(
+            f"{''.join(mix_labels)}amix=inputs={len(mix_labels)}:duration=first"
+            ":dropout_transition=0:normalize=0,alimiter=limit=0.95[aout]"
+        )
 
     return ";".join(parts), "[aout]"
 
@@ -282,19 +313,26 @@ async def assemble(
     music: Path | None = None,
     music_start: float = 0.0,
     effects: list[str | None] | None = None,
+    sfx: list[dict] | None = None,
 ) -> Path:
-    """Cross-fade the clips, burn the captions, mix the audio, write the MP4."""
+    """Cross-fade the clips, burn the captions, mix the audio, write the MP4.
+
+    `sfx[i]` is `{"path": Path, "at": seconds, "volume": float}` — a one-shot
+    sting cued at an absolute point on the timeline.
+    """
     if not clips:
         raise RenderError("There are no scene clips to assemble.")
 
     transition = min(config.TRANSITION_SECONDS, max(0.2, min(clip_durations) / 2))
+    cues = [c for c in (sfx or []) if c.get("path")]
 
-    async def attempt(with_music: bool, duck: bool) -> Path:
+    async def attempt(with_music: bool, duck: bool, with_sfx: bool = True) -> Path:
         inputs: list[str] = []
         for clip in clips:
             inputs += ["-i", clip.name]
         inputs += ["-i", narration.name]
         narration_index = len(clips)
+        next_index = narration_index + 1
 
         music_index: int | None = None
         if with_music and music is not None:
@@ -304,14 +342,22 @@ async def assemble(
             if music_start > 0:
                 inputs += ["-ss", f"{music_start:.3f}"]
             inputs += ["-i", music.name]
-            music_index = narration_index + 1
+            music_index = next_index
+            next_index += 1
+
+        staged: list[dict] = []
+        if with_sfx:
+            for cue in cues:
+                inputs += ["-i", Path(cue["path"]).name]
+                staged.append({**cue, "index": next_index})
+                next_index += 1
 
         video_graph, video_label = _video_graph(
             len(clips), clip_durations, transition,
             subtitle_file.name if subtitle_file else None, effects,
         )
         audio_graph, audio_label = _audio_graph(
-            narration_index, music_index, total_duration, duck
+            narration_index, music_index, total_duration, duck, staged
         )
 
         graph = ";".join(part for part in (video_graph, audio_graph) if part)
@@ -346,4 +392,10 @@ async def assemble(
                 return await attempt(with_music=True, duck=False)
             except RenderError:
                 pass
-    return await attempt(with_music=False, duck=False)
+    try:
+        return await attempt(with_music=False, duck=False)
+    except RenderError:
+        if not cues:
+            raise
+        # Losing the stings is a far smaller failure than losing the video.
+        return await attempt(with_music=False, duck=False, with_sfx=False)

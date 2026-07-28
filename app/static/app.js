@@ -8,7 +8,9 @@ const state = {
   health: null,
   heroes: [],
   music: [],
+  sfx: [],
   assets: [],
+  brand: null,
   jobs: [],
   motions: [],
   transitions: [],
@@ -123,6 +125,36 @@ async function copyText(text, button) {
   }
   toast('Nusxalandi');
 }
+
+// ── modal ─────────────────────────────────────────────────────────
+// One small dialog serves every "type this and confirm" moment, so adding a
+// scene and repurposing a video do not each grow their own panel.
+let modalResolve = null;
+
+function ask({ title, html, ok = 'Qo‘shish' }) {
+  $('#modal-title').textContent = title;
+  $('#modal-body').innerHTML = html;
+  $('#modal-ok').textContent = ok;
+  $('#modal').classList.remove('hidden');
+  const first = $('#modal-body textarea, #modal-body input, #modal-body select');
+  first?.focus();
+  return new Promise((resolve) => { modalResolve = resolve; });
+}
+
+function closeModal(value) {
+  $('#modal').classList.add('hidden');
+  modalResolve?.(value);
+  modalResolve = null;
+}
+
+$('#modal [data-m="cancel"]').addEventListener('click', () => closeModal(null));
+$('#modal [data-m="ok"]').addEventListener('click', () => closeModal(
+  Object.fromEntries($$('#modal-body [name]').map((el) =>
+    [el.name, el.type === 'checkbox' ? el.checked : el.value]))));
+$('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(null); });
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#modal').classList.contains('hidden')) closeModal(null);
+});
 
 // ── navigation ────────────────────────────────────────────────────
 function go(view) {
@@ -239,6 +271,10 @@ async function loadAssets() {
     await api(`/api/assets/${b.dataset.delAsset}`, { method: 'DELETE' });
     loadAssets();
   }));
+  // The brand kit picks its logo from this same list, so it has to be redrawn
+  // whenever the list changes — otherwise a just-uploaded logo is unpickable.
+  if (state.brand) drawBrand();
+  if (ED.job && ED.tab === 'layers') drawLayersPanel();
 }
 
 $('#asset-form').addEventListener('submit', (e) => {
@@ -246,13 +282,126 @@ $('#asset-form').addEventListener('submit', (e) => {
   submitLibraryForm(e.target, '/api/assets', loadAssets);
 });
 
-// ── music ─────────────────────────────────────────────────────────
+// ── brand kit ─────────────────────────────────────────────────────
+async function loadBrand() {
+  state.brand = await api('/api/brand');
+  drawBrand();
+  // The switch is only meaningful once a logo exists to stamp.
+  $('#brand-logo-sw').classList.toggle('hidden', !state.brand.logo_asset_id);
+}
+
+function drawBrand() {
+  const b = state.brand || {};
+  const logo = (state.assets || []).find((a) => a.id === b.logo_asset_id);
+  $('#brand-box').innerHTML = `
+    <div class="brand-head">
+      <div class="brand-logo">${logo
+        ? `<img src="${esc(logo.url)}" alt="${esc(logo.name)}" />`
+        : '<span>logo yo‘q</span>'}</div>
+      <div class="f" style="flex:1">
+        <span>Logotip — «Qatlam rasmlari» dan tanlanadi</span>
+        <select data-b="logo_asset_id">
+          <option value="">— yo‘q —</option>
+          ${(state.assets || []).map((a) =>
+            `<option value="${esc(a.id)}"${a.id === b.logo_asset_id ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    ${b.logo_asset_id ? `<div class="f2">
+      ${brandSlider('logo_size', 'Logotip kattaligi', 0.03, 0.35, 0.01, b.logo_size)}
+      ${brandSlider('logo_opacity', 'Shaffofligi', 0.1, 1, 0.05, b.logo_opacity)}
+    </div>
+    <div class="f2">
+      ${brandSlider('logo_x', 'Gorizontal', 0, 1, 0.01, b.logo_x)}
+      ${brandSlider('logo_y', 'Vertikal', 0, 1, 0.01, b.logo_y)}
+    </div>` : ''}
+
+    <div class="f"><span>Brend rangi — hook va yozuvlar shu rangda chiqadi</span>
+      <div class="sw-row" data-brand-swatch="accent">
+        ${SWATCHES.map((c) => `<button type="button" style="background:${c}" data-c="${c}"
+          class="${c.toLowerCase() === String(b.accent).toLowerCase() ? 'on' : ''}" aria-label="${c}"></button>`).join('')}
+        <input type="color" data-b="accent" value="${esc(b.accent || '#FF3B30')}" />
+      </div></div>
+
+    <div class="f2">
+      <label class="f"><span>Doimiy vizual uslub</span>
+        <input data-b="art_style" value="${esc(b.art_style || '')}" placeholder="bo‘sh — har safar tanlayman" /></label>
+      <label class="f"><span>Doimiy ohang</span>
+        <input data-b="tone" value="${esc(b.tone || '')}" placeholder="bo‘sh — standart" /></label>
+    </div>
+    <div class="f2">
+      <label class="f"><span>Doimiy ovoz</span>
+        <input data-b="voice_id" value="${esc(b.voice_id || '')}" placeholder="bo‘sh — standart" /></label>
+      <label class="f"><span>Doimiy fon musiqasi</span>
+        <select data-b="music_id"><option value="">— yo‘q —</option>
+          ${(state.music || []).map((m) =>
+            `<option value="${esc(m.id)}"${m.id === b.music_id ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}
+        </select></label>
+    </div>
+    <button class="btn primary" id="brand-save">Brendni saqlash</button>
+    <span class="saver" id="brand-saver"></span>`;
+
+  $$('[data-b]').forEach((el) => el.addEventListener('input', () => {
+    state.brand[el.dataset.b] = el.type === 'range' ? Number(el.value) : el.value;
+    if (['logo_asset_id', 'accent'].includes(el.dataset.b)) drawBrand();
+  }));
+  $$('[data-brand-swatch] button').forEach((btn) => btn.addEventListener('click', () => {
+    state.brand.accent = btn.dataset.c;
+    drawBrand();
+  }));
+  $('#brand-save').addEventListener('click', async () => {
+    const btn = $('#brand-save');
+    btn.disabled = true;
+    try {
+      state.brand = await api('/api/brand', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state.brand),
+      });
+      $('#brand-saver').textContent = 'saqlandi';
+      $('#brand-saver').className = 'saver ok';
+      $('#brand-logo-sw').classList.toggle('hidden', !state.brand.logo_asset_id);
+      applyBrandToComposer();
+      toast('Brend saqlandi');
+    } catch (e) {
+      alert(e.message);
+    } finally { btn.disabled = false; }
+  });
+}
+
+const brandSlider = (key, label, min, max, step, value) =>
+  `<label class="f rng"><span>${esc(label)}<b>${Number(value ?? 0).toFixed(2)}</b></span>
+    <input type="range" data-b="${key}" min="${min}" max="${max}" step="${step}" value="${value ?? min}" /></label>`;
+
+// The brand is a starting point for the composer, never a lock — anything the
+// user then types wins for that video.
+function applyBrandToComposer() {
+  const b = state.brand || {};
+  if (b.art_style) {
+    $('#art_style').value = b.art_style;
+    $$('#style-presets button').forEach((x) =>
+      x.setAttribute('aria-pressed', STYLE_PRESETS[Number(x.dataset.p)][1] === b.art_style));
+  }
+  if (b.tone) $('#tone').value = b.tone;
+  if (b.voice_id) $('#voice_id').value = b.voice_id;
+  if (b.music_id && $(`#music_id option[value="${b.music_id}"]`)) {
+    $('#music_id').value = b.music_id;
+    syncMusicStart();
+  }
+  if (b.caption_style?.template) $('#subtitle_style').value = b.caption_style.template;
+}
+
+// ── music & sound effects ─────────────────────────────────────────
 async function loadMusic() {
-  state.music = await api('/api/music');
+  const all = await api('/api/music');
+  state.music = all.filter((m) => m.kind !== 'sfx');
+  state.sfx = all.filter((m) => m.kind === 'sfx');
+
   $('#music_id').innerHTML = '<option value="">— yo‘q —</option>' +
     state.music.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
-  $('#music-list').innerHTML = state.music.length
-    ? state.music.map((m) => `<div class="row"><span>${esc(m.name)}</span>
+  $('#music-list').innerHTML = all.length
+    ? all.map((m) => `<div class="row">
+        <span>${esc(m.name)} <small style="display:inline;margin-left:6px">${m.kind === 'sfx' ? 'effekt' : 'musiqa'}</small></span>
         <button class="x" data-del-music="${esc(m.id)}" aria-label="O‘chirish">×</button></div>`).join('')
     : '<p class="empty">Hali musiqa yo‘q.</p>';
   $$('[data-del-music]').forEach((b) => b.addEventListener('click', async () => {
@@ -260,6 +409,8 @@ async function loadMusic() {
     loadMusic();
   }));
   syncMusicStart();
+  if (state.brand) drawBrand();
+  if (ED.job && ED.tab === 'scene') drawScenePanel();
 }
 
 // The trim offset is meaningless with no track chosen, so it only appears once
@@ -394,6 +545,8 @@ $('#submit-btn').addEventListener('click', async () => {
     tone: $('#tone').value,
     subtitle_style: $('#subtitle_style').value,
     burn_subtitles: $('#burn_subtitles').checked,
+    auto_hook: $('#auto_hook').checked,
+    brand_logo: $('#brand_logo').checked,
     auto_render: !$('#review_first').checked,
   };
 
@@ -493,6 +646,13 @@ function drawStage(job) {
         ${job.subtitle_url ? `<a class="btn" href="${esc(job.subtitle_url)}" download>Subtitr .srt</a>` : ''}
         <button class="btn ghost" data-go="ready">Matnlarni ko‘rish</button>
       </div>`);
+  }
+
+  if (job.status === 'done' && job.thumbnails?.length) {
+    p.push(`<div class="thumbs">${job.thumbnails.map((url, i) => `
+      <figure><img src="${esc(url)}" alt="Muqova ${i + 1}" />
+        <a class="btn" href="${esc(url)}" download="thumbnail-${i + 1}.png">Yuklab olish</a>
+      </figure>`).join('')}</div>`);
   }
 
   if (job.logs?.length) {
@@ -612,6 +772,9 @@ async function flush() {
           on_screen_text: s.on_screen_text || '',
           hero_ids: s.hero_ids || [],
           overlays: s.overlays || [],
+          sfx_id: s.sfx_id || '',
+          sfx_volume: s.sfx_volume ?? 1,
+          sfx_offset: s.sfx_offset ?? 0,
         }),
       });
     }
@@ -667,6 +830,7 @@ function buildStudio(job) {
   if (!sameJob) { ED.i = 0; ED.sel = null; ED.tab = 'scene'; }
   ED.i = Math.max(0, Math.min(ED.i, ED.scenes.length - 1));
   if (!selected()) ED.sel = null;
+  stopPreview();
   drawAll();
 }
 
@@ -682,17 +846,198 @@ function drawFilmstrip() {
     const stale = s.needs_image || s.needs_voice;
     const count = (s.overlays || []).length;
     return `<button class="frame${i === ED.i ? ' on' : ''}${stale ? ' stale' : ''}" data-scene="${i}">
-      ${s.image_url ? `<img src="${esc(s.image_url)}" alt="" loading="lazy" />` : '<i class="blank"></i>'}
+      ${s.image_url ? `<img src="${esc(s.image_url)}" alt="" loading="lazy" draggable="false" />` : '<i class="blank"></i>'}
       <b>${i + 1}</b>
       ${count ? `<em>${count}</em>` : ''}
+      ${s.sfx_id ? '<u class="cue" title="tovush effekti"></u>' : ''}
     </button>`;
   }).join('');
 
-  $$('#filmstrip [data-scene]').forEach((b) => b.addEventListener('click', () => {
-    ED.i = Number(b.dataset.scene);
-    ED.sel = null;
+  $$('#filmstrip [data-scene]').forEach((b) =>
+    b.addEventListener('pointerdown', (e) => startFrameDrag(e, Number(b.dataset.scene))));
+}
+
+/** Click to select, drag past a threshold to move the scene in the running order. */
+function startFrameDrag(event, index) {
+  const strip = $('#filmstrip');
+  const frames = $$('.frame', strip);
+  const origin = event.clientX;
+  let moved = false;
+  let target = index;
+
+  const move = (e) => {
+    if (!moved && Math.abs(e.clientX - origin) < 8) return;
+    if (!moved) {
+      moved = true;
+      frames[index].classList.add('dragging');
+      strip.classList.add('sorting');
+    }
+    // Land on whichever frame the pointer is over; its own placeholder counts,
+    // so dragging back to the start position is a no-op rather than a swap.
+    const over = frames.findIndex((f) => {
+      const r = f.getBoundingClientRect();
+      return e.clientX >= r.left && e.clientX <= r.right;
+    });
+    if (over >= 0 && over !== target) {
+      target = over;
+      frames.forEach((f, i) => f.classList.toggle('drop', i === target && target !== index));
+    }
+  };
+
+  const up = async () => {
+    removeEventListener('pointermove', move);
+    removeEventListener('pointerup', up);
+    strip.classList.remove('sorting');
+    frames.forEach((f) => f.classList.remove('dragging', 'drop'));
+
+    if (!moved || target === index) {
+      ED.i = index;
+      ED.sel = null;
+      stopPreview();
+      drawAll();
+      return;
+    }
+
+    const order = ED.scenes.map((_, i) => i);
+    order.splice(target, 0, ...order.splice(index, 1));
+    // Show the new order at once; the server confirms a beat later.
+    ED.scenes = order.map((i) => ED.scenes[i]);
+    ED.scenes.forEach((s, i) => { s.index = i; });
+    ED.i = target;
     drawAll();
+    try {
+      await flush();
+      const scenes = await api(`/api/jobs/${ED.job.id}/scenes/order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order }),
+      });
+      mergeScenes(scenes);
+      toast('Tartib o‘zgartirildi');
+    } catch (e) {
+      editorError(e.message);
+    }
+  };
+
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up);
+}
+
+/** Take the server's scene list, keeping the local editing state coherent. */
+function mergeScenes(scenes) {
+  ED.scenes = scenes.map((s) => ({
+    ...s,
+    motion_strength: s.motion_strength ?? 1,
+    overlays: (s.overlays || []).map((o) => ({ ...o })),
   }));
+  ED.i = Math.max(0, Math.min(ED.i, ED.scenes.length - 1));
+  if (!selected()) ED.sel = null;
+  state.drawn = null;
+  drawAll();
+}
+
+$('#add-scene').addEventListener('click', async () => {
+  if (!ED.job) return;
+  const answer = await ask({
+    title: 'Yangi sahna',
+    ok: 'Qo‘shish',
+    html: `<label class="f"><span>Matn — shu sahnada nima aytiladi</span>
+      <textarea name="narration" rows="4" placeholder="Bir necha jumla yozing…"></textarea></label>
+      <label class="f"><span>Qayerga</span>
+        <select name="after">
+          <option value="-1">Eng boshiga</option>
+          ${ED.scenes.map((s, i) =>
+            `<option value="${i}"${i === ED.i ? ' selected' : ''}>${i + 1}-sahnadan keyin</option>`).join('')}
+        </select></label>
+      <small class="note">AI unga rasm prompti yozadi, ovoz beradi va rasm yaratadi.</small>`,
+  });
+  if (!answer?.narration?.trim()) return;
+  try {
+    await flush();
+    await api(`/api/jobs/${ED.job.id}/scenes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ after: Number(answer.after), narration: answer.narration.trim() }),
+    });
+    state.drawn = null;
+    watch(ED.job.id);
+  } catch (e) {
+    editorError(e.message);
+  }
+});
+
+// ── scene preview ─────────────────────────────────────────────────
+// Playing the scene's own voice-over and driving the canvas from its clock is
+// the only way to check that a layer lands on the word it is meant to land on.
+const PREVIEW = { audio: null, raf: 0, index: -1 };
+
+function stopPreview() {
+  PREVIEW.audio?.pause();
+  cancelAnimationFrame(PREVIEW.raf);
+  PREVIEW.raf = 0;
+  PREVIEW.index = -1;
+  $('#play-icon').innerHTML = '<path d="M8 5.5l11 6.5-11 6.5z"/>';
+  $('#play-btn span').textContent = 'Eshitish';
+  $('#scrub-fill').style.width = '0%';
+  if (ED.job) { drawLayers(); drawCaptionSample(); }
+}
+
+function togglePreview() {
+  const s = scene();
+  if (!s?.audio_url) { toast('Bu sahnada hali ovoz yo‘q'); return; }
+  if (PREVIEW.raf && PREVIEW.index === ED.i) { stopPreview(); return; }
+
+  stopPreview();
+  PREVIEW.audio = PREVIEW.audio || new Audio();
+  PREVIEW.audio.src = s.audio_url;
+  PREVIEW.audio.currentTime = 0;
+  PREVIEW.index = ED.i;
+  $('#play-icon').innerHTML = '<path d="M8 5h3v14H8zM13 5h3v14h-3z"/>';
+  $('#play-btn span').textContent = 'To‘xtatish';
+
+  PREVIEW.audio.play().then(() => {
+    const step = () => {
+      if (PREVIEW.index !== ED.i) { stopPreview(); return; }
+      const t = PREVIEW.audio.currentTime;
+      const span = Math.max(0.1, s.duration || PREVIEW.audio.duration || 1);
+      $('#scrub-fill').style.width = `${Math.min(100, (t / span) * 100)}%`;
+      drawLayers(t);
+      drawCaptionSample(t);
+      if (PREVIEW.audio.ended) { stopPreview(); return; }
+      PREVIEW.raf = requestAnimationFrame(step);
+    };
+    PREVIEW.raf = requestAnimationFrame(step);
+  }).catch(() => {
+    stopPreview();
+    toast('Brauzer ovozni to‘sdi — kadrga bosing');
+  });
+}
+
+$('#play-btn').addEventListener('click', togglePreview);
+
+/** How a layer looks `t` seconds into the scene, per its own animation. */
+function layerAt(l, t, duration) {
+  if (t === null) return { show: true, opacity: l.opacity ?? 1, dx: 0, dy: 0, scale: 1 };
+  const start = l.start || 0;
+  const end = l.end || duration;
+  if (t < start || t > end) return { show: false };
+
+  const into = t - start;
+  const left = end - t;
+  const ramp = Math.min(0.35, (end - start) / 3);
+  const fade = Math.min(1, into / ramp) * Math.min(1, left / ramp);
+  const p = Math.min(1, into / 0.42);
+  const eased = p * p * (3 - 2 * p);
+
+  const out = { show: true, opacity: (l.opacity ?? 1) * fade, dx: 0, dy: 0, scale: 1 };
+  if (l.anim === 'none') { out.opacity = l.opacity ?? 1; return out; }
+  if (l.anim === 'pop') out.scale = 0.72 + 0.28 * eased;
+  else if (l.anim === 'rise') out.dy = (1 - eased) * 5;
+  else if (l.anim === 'slide_left') out.dx = (1 - eased) * 8;
+  else if (l.anim === 'slide_right') out.dx = -(1 - eased) * 8;
+  else if (l.anim === 'float') out.dy = 1.4 * Math.sin((2 * Math.PI * into) / 3.2);
+  else if (l.anim === 'drift') out.dx = (into / Math.max(0.5, end - start)) * 5;
+  return out;
 }
 
 // ── canvas ────────────────────────────────────────────────────────
@@ -727,17 +1072,22 @@ function hexToRgba(hex, alpha) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${Number(alpha ?? 1)})`;
 }
 
-function drawLayers() {
+function drawLayers(time = null) {
   const host = $('#ov-layer');
   const s = scene();
   if (!s) { host.innerHTML = ''; return; }
   const h = $('#canvas').clientHeight || 1;
   const w = $('#canvas').clientWidth || 1;
+  const playing = time !== null;
+  host.classList.toggle('playing', playing);
 
   host.innerHTML = (s.overlays || []).map((l) => {
+    const a = layerAt(l, time, s.duration || 0);
+    if (!a.show) return '';
     const pos = `left:${(l.x * 100).toFixed(2)}%;top:${(l.y * 100).toFixed(2)}%;` +
-      `transform:translate(-50%,-50%) rotate(${l.rotate || 0}deg);opacity:${l.opacity ?? 1};`;
-    const on = l.id === ED.sel ? ' on' : '';
+      `transform:translate(calc(-50% + ${a.dx}%),calc(-50% + ${a.dy}%)) ` +
+      `rotate(${l.rotate || 0}deg) scale(${a.scale.toFixed(3)});opacity:${a.opacity.toFixed(3)};`;
+    const on = !playing && l.id === ED.sel ? ' on' : '';
     if (l.type === 'image') {
       return `<div class="ov img${on}" data-id="${esc(l.id)}" style="${pos}width:${(l.size * 100).toFixed(2)}%">
         <img src="/api/assets/${esc(l.asset_id)}/image" alt="" draggable="false" />
@@ -754,6 +1104,8 @@ function drawLayers() {
       <i class="grab" data-grip="${esc(l.id)}"></i></div>`;
   }).join('');
 
+  // While the scene is playing the layers are a picture, not a control surface.
+  if (playing) return;
   $$('#ov-layer .ov').forEach((el) => {
     el.addEventListener('pointerdown', (e) => startDrag(e, el.dataset.id, 'move'));
     const grip = $('.grab', el);
@@ -810,7 +1162,27 @@ const round = (l) => {
 // The caption preview mirrors what libass will draw: same budget, same
 // multiplier, same margins — scaled down by however wide the canvas happens
 // to be on this screen.
-function drawCaptionSample() {
+/** Break a scene's timed words into caption lines the way the renderer does. */
+function captionLines(s, budget) {
+  const words = s.words || [];
+  if (!words.length) return [];
+  const lines = [];
+  let current = [];
+  const flush = () => { if (current.length) { lines.push(current); current = []; } };
+  for (const word of words) {
+    const joined = [...current.map((w) => w.text), word.text].join(' ');
+    if (current.length && (joined.length > budget.max_chars || current.length >= budget.max_words)) flush();
+    current.push(word);
+  }
+  flush();
+  return lines.map((ws) => ({
+    start: Number(ws[0].start) || 0,
+    end: Number(ws[ws.length - 1].end) || 0,
+    words: ws,
+  }));
+}
+
+function drawCaptionSample(time = null) {
   const el = $('#cap-sample');
   const span = $('span', el);
   const s = scene();
@@ -823,12 +1195,23 @@ function drawCaptionSample() {
   const ch = $('#canvas').clientHeight || 1;
   const scale = cw / f.width;
   const px = (f.caption?.font_size || 96) * (st.size ?? 1) * scale;
+  const budget = f.caption || { max_chars: 42, max_words: 7 };
 
-  const words = String(s.narration || 'Namuna matn').split(/\s+/);
+  // Playing: the line that is actually being spoken, word by word. Idle: as much
+  // of the narration as one line can hold, so the look can be judged at rest.
+  let parts = null;
   let sample = '';
-  for (const word of words) {
-    if ((sample + ' ' + word).trim().length > (f.caption?.max_chars || 42)) break;
-    sample = (sample + ' ' + word).trim();
+  if (time !== null) {
+    const lines = captionLines(s, budget);
+    const line = lines.find((l) => time >= l.start - 0.15 && time <= l.end + 0.25);
+    if (!line) { el.classList.add('hidden'); return; }
+    parts = line.words.map((w) => ({ text: w.text, spoken: time >= Number(w.start) }));
+  } else {
+    const words = String(s.narration || 'Namuna matn').split(/\s+/);
+    for (const word of words) {
+      if ((sample + ' ' + word).trim().length > (budget.max_chars || 42)) break;
+      sample = (sample + ' ' + word).trim();
+    }
   }
 
   const landscape = f.width >= f.height;
@@ -854,7 +1237,17 @@ function drawCaptionSample() {
       ? `text-shadow:0 ${((st.shadow ?? 1.6) * scale * 2).toFixed(1)}px ${((st.shadow ?? 1.6) * scale * 3).toFixed(1)}px rgba(0,0,0,.75)`
       : '',
   ].filter(Boolean).join(';');
-  span.textContent = sample || 'Namuna matn';
+
+  if (!parts) {
+    span.textContent = sample || 'Namuna matn';
+    return;
+  }
+  // A karaoke style lights each word as it is spoken; every other style just
+  // shows the whole line, so the words are all painted the same.
+  span.innerHTML = parts.map((w) => {
+    const colour = !st.karaoke ? st.colour : (w.spoken ? st.highlight : st.colour);
+    return `<i style="font-style:inherit;color:${esc(colour)}">${esc(w.text)}</i>`;
+  }).join(' ');
 }
 
 new ResizeObserver(() => { if (ED.job) { drawLayers(); drawCaptionSample(); } })
@@ -951,15 +1344,42 @@ function drawScenePanel() {
           <input type="checkbox" value="${esc(h.id)}"${(s.hero_ids || []).includes(h.id) ? ' checked' : ''} />
           <img src="${esc(h.url)}" alt="${esc(h.name)}" /></label>`).join('')}</div></div>` : ''}
 
+    <label class="f"><span>Tovush effekti — sahna boshida bir marta yangraydi</span>
+      <select data-k="sfx_id"><option value="">— yo‘q —</option>
+        ${(state.sfx || []).map((x) =>
+          `<option value="${esc(x.id)}"${x.id === s.sfx_id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}
+      </select>
+      ${state.sfx?.length ? '' : '<small>Kutubxonaga «Tovush effekti» sifatida audio yuklang.</small>'}</label>
+    ${s.sfx_id ? `<div class="f2">
+      ${slider('sfx_volume', 'Balandligi', 0.1, 3, 0.1, s.sfx_volume ?? 1, '×')}
+      ${slider('sfx_offset', 'Kechikish', 0, Math.max(0.5, s.duration - 0.2), 0.1, s.sfx_offset ?? 0, 's')}
+    </div>` : ''}
+
     <div class="sc-acts">
       <button class="btn" data-a="image">Rasmni qayta yaratish</button>
       ${ED.job.uses_uploaded_audio ? '' : '<button class="btn" data-a="voice">Ovozni qayta yozish</button>'}
       <label class="btn" data-a="upload">O‘z rasmim<input type="file" accept="image/*" hidden /></label>
+      ${ED.scenes.length > 1 ? '<button class="btn ghost" data-a="drop-scene">Sahnani o‘chirish</button>' : ''}
     </div>`;
 
   wire(host, s, (key) => {
-    if (key === 'motion_strength') drawScenePanel();
+    if (['motion_strength', 'sfx_id', 'sfx_volume', 'sfx_offset'].includes(key)) drawScenePanel();
+    if (key === 'sfx_id') drawFilmstrip();
     touch();
+  });
+
+  $('[data-a="drop-scene"]', host)?.addEventListener('click', async () => {
+    if (!confirm(`${s.index + 1}-sahnani o‘chirasizmi?`)) return;
+    try {
+      clearTimeout(ED.timer);
+      ED.dirty.delete(s.index);
+      await flush();
+      stopPreview();
+      mergeScenes(await api(`/api/jobs/${ED.job.id}/scenes/${s.index}`, { method: 'DELETE' }));
+      toast('Sahna o‘chirildi');
+    } catch (e) {
+      editorError(e.message);
+    }
   });
 
   $$('#scene-heroes input', host).forEach((input) => input.addEventListener('change', () => {
@@ -1349,7 +1769,16 @@ function drawReady(done) {
         <div class="acts" style="margin-top:0">
           <a class="btn primary" href="${esc(j.download_url || j.video_url || '')}" download>Videoni yuklab olish</a>
           ${j.subtitle_url ? `<a class="btn" href="${esc(j.subtitle_url)}" download>.srt</a>` : ''}
+          <button class="btn" data-thumbs="${esc(j.id)}">Muqova yaratish</button>
+          <button class="btn" data-repurpose="${esc(j.id)}" data-fmt="${esc(j.video_format)}">Boshqa formatga</button>
         </div>
+
+        ${j.thumbnails?.length ? `<div class="thumbs">
+          ${j.thumbnails.map((url, i) => `
+            <figure><img src="${esc(url)}" alt="Muqova ${i + 1}" loading="lazy" />
+              <a class="btn" href="${esc(url)}" download="thumbnail-${i + 1}.png">Yuklab olish</a>
+            </figure>`).join('')}
+        </div>` : ''}
         ${packs.length ? packs.map(([name, colour, rows]) => `
           <div class="plat">
             <div class="plat-head">
@@ -1373,6 +1802,54 @@ function drawReady(done) {
 
   $$('#ready-list [data-copy]').forEach((b) =>
     b.addEventListener('click', () => copyText(b.dataset.copy, b)));
+
+  $$('#ready-list [data-thumbs]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    b.textContent = 'Yaratilmoqda…';
+    try {
+      await api(`/api/jobs/${b.dataset.thumbs}/thumbnails`, { method: 'POST' });
+      go('create');
+      watch(b.dataset.thumbs, { reveal: true });
+      toast('Uchta muqova tayyorlanmoqda');
+    } catch (e) {
+      alert(e.message);
+      b.disabled = false;
+      b.textContent = 'Muqova yaratish';
+    }
+  }));
+
+  $$('#ready-list [data-repurpose]').forEach((b) => b.addEventListener('click', async () => {
+    const formats = (state.health?.formats || []).filter((f) => f.id !== b.dataset.fmt);
+    const answer = await ask({
+      title: 'Boshqa formatga',
+      ok: 'Nusxa olish',
+      html: `<label class="f"><span>Yangi format</span>
+          <select name="video_format">${formats.map((f) =>
+            `<option value="${esc(f.id)}">${esc(f.label)}</option>`).join('')}</select></label>
+        <label class="sw"><input type="checkbox" name="regenerate_images" checked /><i></i>
+          <span>Rasmlarni yangi format uchun qayta yaratish</span></label>
+        <small class="note">Ovoz, vaqtlar, subtitr va qatlamlar o‘zgarmaydi. Belgini
+          olib tashlasangiz eski rasmlar o‘rtasidan kesib ishlatiladi — tez, lekin
+          chetdagi narsalar kadrdan chiqib ketishi mumkin.</small>`,
+    });
+    if (!answer) return;
+    try {
+      const clone = await api(`/api/jobs/${b.dataset.repurpose}/repurpose`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_format: answer.video_format,
+          regenerate_images: !!answer.regenerate_images,
+        }),
+      });
+      await loadJobs();
+      go('create');
+      watch(clone.id, { reveal: true });
+      toast('Nusxa tayyor — endi render qiling');
+    } catch (e) {
+      alert(e.message);
+    }
+  }));
 }
 
 // ── boot ──────────────────────────────────────────────────────────
@@ -1380,6 +1857,8 @@ function drawReady(done) {
   try {
     await loadHealth();
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
+    await loadBrand();
+    applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.
     const resume = state.jobs.find((j) => BUSY.includes(j.status));

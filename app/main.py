@@ -15,10 +15,14 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, pipeline, store
 from .models import (
+    BrandKit,
     CreateJobRequest,
     HeroPatch,
     JobPatch,
     RegenerateRequest,
+    RepurposeRequest,
+    SceneInsert,
+    SceneOrder,
     ScenePatch,
 )
 from .providers import storage, tts
@@ -134,6 +138,7 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "title": result.get("title"),
         "scene_count": result.get("scene_count") or len(scenes),
         "metadata": result.get("metadata"),
+        "thumbnails": result.get("thumbnails") or [],
         "scenes": [pipeline.public_scene(job["id"], s) for s in scenes] if with_scenes else None,
         "warnings": result.get("warnings") or [],
         "logs": job.get("logs", [])[-40:],
@@ -269,15 +274,20 @@ async def remove_hero(hero_id: str) -> dict[str, bool]:
 # ── music ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/music")
-async def list_music() -> list[dict[str, Any]]:
-    return [{"id": m["id"], "name": m["name"]} for m in store.list_music()]
+async def list_music(kind: str | None = None) -> list[dict[str, Any]]:
+    tracks = store.list_music(kind if kind in {"music", "sfx"} else None)
+    return [{"id": m["id"], "name": m["name"], "kind": m.get("kind", "music")}
+            for m in tracks]
 
 
 @app.post("/api/music", status_code=201)
-async def create_music(name: str = Form(...), audio: UploadFile = File(...)) -> dict[str, Any]:
+async def create_music(
+    name: str = Form(...), audio: UploadFile = File(...), kind: str = Form("music")
+) -> dict[str, Any]:
     data, mime, ext = await _read_upload(audio, AUDIO_TYPES)
-    track = store.add_music(name.strip() or f"track{ext}", data, mime, ext)
-    return {"id": track["id"], "name": track["name"]}
+    kind = kind if kind in {"music", "sfx"} else "music"
+    track = store.add_music(name.strip() or f"track{ext}", data, mime, ext, kind)
+    return {"id": track["id"], "name": track["name"], "kind": track["kind"]}
 
 
 @app.delete("/api/music/{music_id}")
@@ -323,6 +333,24 @@ async def remove_asset(asset_id: str) -> dict[str, bool]:
     if not store.delete_asset(asset_id):
         raise HTTPException(status_code=404, detail="Layer image not found.")
     return {"deleted": True}
+
+
+# ── brand kit ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/brand")
+async def get_brand() -> dict[str, Any]:
+    return pipeline.brand()
+
+
+@app.put("/api/brand")
+async def put_brand(kit: BrandKit) -> dict[str, Any]:
+    payload = kit.model_dump()
+    if payload.get("caption_style"):
+        payload["caption_style"] = subs.resolve_style(payload["caption_style"])
+    if payload.get("logo_asset_id") and store.get_asset(payload["logo_asset_id"]) is None:
+        raise HTTPException(status_code=400, detail="That logo image no longer exists.")
+    store.set_setting(pipeline.BRAND_KEY, payload)
+    return pipeline.brand()
 
 
 # ── jobs ──────────────────────────────────────────────────────────────────────
@@ -532,6 +560,16 @@ async def edit_scene(job_id: str, index: int, patch: ScenePatch) -> dict[str, An
     if patch.on_screen_text is not None:
         scene["on_screen_text"] = patch.on_screen_text.strip()
 
+    if patch.sfx_id is not None:
+        chosen = patch.sfx_id.strip()
+        if chosen and store.get_music_audio(chosen) is None:
+            raise HTTPException(status_code=400, detail="That sound effect no longer exists.")
+        scene["sfx_id"] = chosen or None
+    if patch.sfx_volume is not None:
+        scene["sfx_volume"] = round(float(patch.sfx_volume), 2)
+    if patch.sfx_offset is not None:
+        scene["sfx_offset"] = round(float(patch.sfx_offset), 2)
+
     if patch.hero_ids is not None:
         known = {h["id"] for h in store.get_heroes(patch.hero_ids)}
         new_ids = [h for h in patch.hero_ids if h in known]
@@ -542,6 +580,39 @@ async def edit_scene(job_id: str, index: int, patch: ScenePatch) -> dict[str, An
     store.update_job(job_id, result={"scenes": scenes},
                      log=f"Scene {index + 1} edited")
     return pipeline.public_scene(job_id, scene)
+
+
+@app.post("/api/jobs/{job_id}/scenes", status_code=202)
+async def insert_scene(job_id: str, body: SceneInsert) -> dict[str, Any]:
+    """Add a scene, then write its prompt, record it and draw it."""
+    _editable_job(job_id)
+    store.update_job(job_id, status="running", step="add-scene", progress=10)
+    _launch(lambda: pipeline.add_scene(job_id, body.after, body.narration))
+    return {"id": job_id, "status": "running"}
+
+
+@app.delete("/api/jobs/{job_id}/scenes/{index}")
+async def remove_scene(job_id: str, index: int) -> list[dict[str, Any]]:
+    _editable_job(job_id)
+    try:
+        scenes = pipeline.delete_scene(job_id, index)
+    except pipeline.PipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if scenes is None:
+        raise HTTPException(status_code=404, detail=f"Scene {index} does not exist.")
+    return [pipeline.public_scene(job_id, s) for s in scenes]
+
+
+@app.post("/api/jobs/{job_id}/scenes/order")
+async def order_scenes(job_id: str, body: SceneOrder) -> list[dict[str, Any]]:
+    _editable_job(job_id)
+    try:
+        scenes = pipeline.reorder_scenes(job_id, body.order)
+    except pipeline.PipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if scenes is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return [pipeline.public_scene(job_id, s) for s in scenes]
 
 
 @app.post("/api/jobs/{job_id}/scenes/{index}/regenerate", status_code=202)
@@ -579,6 +650,34 @@ async def render_job(job_id: str) -> dict[str, Any]:
     store.update_job(job_id, status="rendering", step="render", progress=74)
     _launch(lambda: pipeline.run_render(job_id))
     return {"id": job_id, "status": "rendering"}
+
+
+@app.post("/api/jobs/{job_id}/thumbnails", status_code=202)
+async def make_thumbnails(job_id: str) -> dict[str, Any]:
+    """Three cover options, drawn from the thumbnail prompt the publisher wrote."""
+    job = _get_job_or_404(job_id)
+    if job["status"] in _BUSY:
+        raise HTTPException(status_code=409, detail="This job is still working.")
+    provider = (job["request"].get("image_provider") or config.IMAGE_PROVIDER).lower()
+    if not config.image_provider_ready(provider):
+        raise HTTPException(status_code=400,
+                            detail=f"No API key configured for the '{provider}' image provider.")
+    store.update_job(job_id, status="running", step="thumbnails", progress=10)
+    _launch(lambda: pipeline.make_thumbnails(job_id))
+    return {"id": job_id, "status": "running"}
+
+
+@app.post("/api/jobs/{job_id}/repurpose", status_code=201)
+async def repurpose_job(job_id: str, body: RepurposeRequest) -> dict[str, Any]:
+    """Clone this video into another aspect ratio, reusing the voice and timings."""
+    _editable_job(job_id)
+    try:
+        clone_id = pipeline.repurpose(job_id, body.video_format, body.regenerate_images)
+    except pipeline.PipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if clone_id is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return {"id": clone_id, "status": "review"}
 
 
 # ── files ─────────────────────────────────────────────────────────────────────

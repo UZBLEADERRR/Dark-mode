@@ -70,6 +70,41 @@ class OverlayIn(BaseModel):
     font: str = Field(default="", max_length=80)
 
 
+class BrandKit(BaseModel):
+    """Settings applied to every new video, so the look is set once."""
+
+    accent: str = "#FF3B30"
+    logo_asset_id: str = ""
+    logo_x: float = Field(default=0.9, ge=0, le=1)
+    logo_y: float = Field(default=0.1, ge=0, le=1)
+    logo_size: float = Field(default=0.11, ge=0.02, le=0.5)
+    logo_opacity: float = Field(default=0.9, ge=0.1, le=1)
+    art_style: str = Field(default="", max_length=600)
+    tone: str = Field(default="", max_length=200)
+    voice_id: str = Field(default="", max_length=120)
+    tts_provider: str = Field(default="", max_length=40)
+    music_id: str = ""
+    caption_style: CaptionStyle | None = None
+
+
+class SceneInsert(BaseModel):
+    """Add a scene after `after`. -1 puts it at the very front."""
+
+    after: int = Field(default=-1, ge=-1)
+    narration: str = Field(min_length=2, max_length=4000)
+
+
+class SceneOrder(BaseModel):
+    order: list[int] = Field(min_length=1)
+
+
+class RepurposeRequest(BaseModel):
+    video_format: str
+    # Reused stills are centre-cropped into the new frame; regenerating draws
+    # them for it instead, at the cost of another round of image generation.
+    regenerate_images: bool = True
+
+
 class JobPatch(BaseModel):
     """Settings that belong to the whole video rather than one scene."""
 
@@ -99,6 +134,10 @@ class CreateJobRequest(BaseModel):
     subtitle_style: str = "bold"
     caption_style: CaptionStyle | None = None
     burn_subtitles: bool = True
+    # Put the Director's hook line on the frame for the first three seconds.
+    auto_hook: bool = False
+    # Stamp the brand logo on every scene, when one is configured.
+    brand_logo: bool = True
     # False stops after the draft so scenes can be reviewed and edited first.
     auto_render: bool = True
 
@@ -118,6 +157,10 @@ class ScenePatch(BaseModel):
     on_screen_text: str | None = Field(default=None, max_length=60)
     hero_ids: list[str] | None = None
     overlays: list[OverlayIn] | None = None
+    # A one-shot sting cued inside this scene. "" removes it.
+    sfx_id: str | None = None
+    sfx_volume: float | None = Field(default=None, ge=0, le=4)
+    sfx_offset: float | None = Field(default=None, ge=0, le=600)
 
 
 class RegenerateRequest(BaseModel):

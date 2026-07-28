@@ -96,7 +96,7 @@ def replace_scene_image(job_id: str, index: int, data: bytes) -> dict | None:
     if scene is None:
         return None
 
-    target = workdir_for(job_id) / "images" / f"scene_{index:03d}.png"
+    target = workdir_for(job_id) / "images" / f"scene_{scene['sid']}.png"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
     # Normalise the same way generated stills are, so ffmpeg never meets a CMYK
@@ -150,6 +150,140 @@ def _materialize_music(workdir: Path, music_id: str | None) -> Path | None:
     return target
 
 
+def _materialize_sfx(workdir: Path, scenes: list[dict]) -> list[dict]:
+    """Cue every scene's sting at its place on the finished timeline."""
+    folder = workdir / "sfx"
+    cache: dict[str, Path | None] = {}
+    cues: list[dict] = []
+
+    for scene in scenes:
+        sfx_id = scene.get("sfx_id")
+        if not sfx_id:
+            continue
+        if sfx_id not in cache:
+            blob = store.get_music_audio(sfx_id)
+            if blob is None:
+                cache[sfx_id] = None
+            else:
+                data, _mime, ext = blob
+                folder.mkdir(parents=True, exist_ok=True)
+                target = folder / f"{sfx_id}{ext or '.mp3'}"
+                if not target.exists() or target.stat().st_size != len(data):
+                    target.write_bytes(data)
+                cache[sfx_id] = target
+        path = cache[sfx_id]
+        if path is None:
+            continue
+        duration = float(scene.get("audio_duration") or 0.0)
+        offset = max(0.0, min(float(scene.get("sfx_offset") or 0.0), max(0.0, duration - 0.1)))
+        cues.append({
+            "path": path,
+            "at": float(scene.get("start", 0.0)) + offset,
+            "volume": float(scene.get("sfx_volume") or 1.0),
+        })
+    return cues
+
+
+BRAND_KEY = "brand"
+
+DEFAULT_BRAND: dict = {
+    "accent": "#FF3B30",
+    "logo_asset_id": "",
+    "logo_x": 0.9,
+    "logo_y": 0.1,
+    "logo_size": 0.11,
+    "logo_opacity": 0.9,
+    "art_style": "",
+    "tone": "",
+    "voice_id": "",
+    "tts_provider": "",
+    "music_id": "",
+    "caption_style": None,
+}
+
+
+def brand() -> dict:
+    stored = store.get_setting(BRAND_KEY) or {}
+    return {**DEFAULT_BRAND, **(stored if isinstance(stored, dict) else {})}
+
+
+def _apply_brand(scenes: list[dict], request: dict, hook: str) -> None:
+    """Stamp the logo on every scene and the hook on the first one.
+
+    Both are ordinary overlay layers, so once they are there they behave like
+    anything the user added by hand — draggable, restyleable, deletable.
+    """
+    kit = brand()
+
+    if request.get("brand_logo", True) and kit.get("logo_asset_id") \
+            and store.get_asset(kit["logo_asset_id"]) is not None:
+        logo = ov.normalize({
+            "id": "brandlogo", "type": "image", "asset_id": kit["logo_asset_id"],
+            "x": kit.get("logo_x", 0.9), "y": kit.get("logo_y", 0.1),
+            "size": kit.get("logo_size", 0.11), "opacity": kit.get("logo_opacity", 0.9),
+            "anim": "none", "start": 0, "end": 0,
+        }, 0)
+        if logo is not None:
+            for scene in scenes:
+                scene["overlays"] = [logo, *(scene.get("overlays") or [])]
+
+    # The first three seconds decide whether a short is watched at all, so the
+    # line the Director wrote as the hook goes on the frame, not just in the
+    # voice-over.
+    if request.get("auto_hook") and hook.strip() and scenes:
+        text = hook.strip()
+        if len(text) > 60:
+            text = text[:57].rsplit(" ", 1)[0] + "…"
+        layer = ov.normalize({
+            "id": "brandhook", "type": "text", "text": text.upper(),
+            "x": 0.5, "y": 0.17, "size": 0.068, "colour": "#FFFFFF",
+            "box": True, "box_colour": kit.get("accent") or "#FF3B30",
+            "box_opacity": 0.94, "anim": "pop", "start": 0, "end": 3.0,
+        }, 0)
+        if layer is not None:
+            scenes[0]["overlays"] = [*(scenes[0].get("overlays") or []), layer]
+
+
+def _ensure_sids(scenes: list[dict]) -> list[dict]:
+    """Give every scene a file-name key that does not move when it does.
+
+    Assets used to be named from the scene's position, which was fine until
+    scenes could be reordered — then scene 3's regenerated image would land on
+    top of scene 1's file. A scene keeps its `sid` for life instead. Jobs made
+    before this existed get the sid their existing files already imply.
+    """
+    used: set[str] = set()
+    for i, scene in enumerate(scenes):
+        sid = str(scene.get("sid") or "")
+        if not sid or sid in used:
+            sid = f"{i:03d}" if f"{i:03d}" not in used else store.new_id("sc")[3:]
+            scene["sid"] = sid
+        used.add(sid)
+        # One place where the shape is completed, so nothing downstream has to
+        # guess whether a scene from an older job has a layer list.
+        scene.setdefault("overlays", [])
+    return scenes
+
+
+def _reindex(scenes: list[dict]) -> list[dict]:
+    for i, scene in enumerate(scenes):
+        scene["index"] = i
+    _recompute_starts(scenes)
+    return scenes
+
+
+def _file_url(path: str | None, version: object = None) -> str | None:
+    """A project file's public URL, derived from where the file actually is."""
+    if not path:
+        return None
+    try:
+        relative = Path(path).resolve().relative_to(config.PROJECTS_DIR.resolve())
+    except (ValueError, OSError):
+        return None
+    url = f"/api/files/{relative.as_posix()}"
+    return f"{url}?v={version}" if version is not None else url
+
+
 def _recompute_starts(scenes: list[dict]) -> float:
     cursor = 0.0
     for scene in scenes:
@@ -163,14 +297,14 @@ def _save_scenes(job_id: str, scenes: list[dict], **extra: Any) -> None:
 
 
 def _load_scenes(job: dict) -> list[dict]:
-    return job.get("result", {}).get("scenes") or []
+    return _ensure_sids(job.get("result", {}).get("scenes") or [])
 
 
 def public_scene(job_id: str, scene: dict) -> dict:
-    """The shape the browser sees — editable fields plus a preview image."""
-    index = scene["index"]
+    """The shape the browser sees — editable fields plus preview media."""
     return {
-        "index": index,
+        "index": scene["index"],
+        "sid": scene.get("sid", ""),
         "narration": scene.get("narration", ""),
         "image_prompt": scene.get("image_prompt", ""),
         "motion": scene.get("motion", "zoom_in"),
@@ -179,13 +313,16 @@ def public_scene(job_id: str, scene: dict) -> dict:
         "on_screen_text": scene.get("on_screen_text", ""),
         "hero_ids": scene.get("hero_ids", []),
         "overlays": scene.get("overlays") or [],
+        "sfx_id": scene.get("sfx_id") or "",
+        "sfx_volume": round(float(scene.get("sfx_volume") or 1.0), 2),
+        "sfx_offset": round(float(scene.get("sfx_offset") or 0.0), 2),
         "start": round(float(scene.get("start", 0.0)), 2),
         "duration": round(float(scene.get("audio_duration", 0.0)), 2),
-        "image_url": (
-            f"/api/files/{job_id}/images/scene_{index:03d}.png?v={scene.get('image_version', 0)}"
-            if scene.get("image_path")
-            else None
-        ),
+        "image_url": _file_url(scene.get("image_path"), scene.get("image_version", 0)),
+        # The editor plays this to preview the scene with its captions and
+        # layers running in step, which is why the word timings ride along.
+        "audio_url": _file_url(scene.get("audio_path")),
+        "words": scene.get("words") or [],
         "needs_image": bool(scene.get("needs_image")),
         "needs_voice": bool(scene.get("needs_voice")),
     }
@@ -215,7 +352,7 @@ async def _voice_scenes(
         nonlocal done
         path, provider_words = await tts.synthesize(
             text=scene["narration"],
-            out_path=audio_dir / f"scene_{scene['index']:03d}",
+            out_path=audio_dir / f"scene_{scene['sid']}",
             provider=provider,
             voice_id=voice_id,
         )
@@ -270,7 +407,7 @@ async def _render_images(
             aspect=aspect,
             size=size,
             provider=provider,
-            out_path=image_dir / f"scene_{scene['index']:03d}.png",
+            out_path=image_dir / f"scene_{scene['sid']}.png",
         )
         scene["image_path"] = str(path)
         scene["needs_image"] = False
@@ -397,6 +534,7 @@ async def run_draft(job_id: str) -> None:
             scenes = script["scenes"]
             _progress(job_id, "script", 20, f"{len(scenes)} scenes ready")
 
+        _ensure_sids(scenes)
         store.update_job(job_id, result={"title": script.get("title"),
                                          "scene_count": len(scenes)})
 
@@ -407,7 +545,8 @@ async def run_draft(job_id: str) -> None:
             video_format=request.get("video_format", "16:9"), heroes=heroes,
             title=script.get("title", request["topic"]),
         )
-        scenes = prompt_pack["scenes"]
+        scenes = _ensure_sids(prompt_pack["scenes"])
+        _apply_brand(scenes, request, script.get("hook", ""))
 
         # --- voice ------------------------------------------------------------
         if not uploaded_audio:
@@ -573,6 +712,7 @@ async def run_render(job_id: str) -> None:
             music=music_path,
             music_start=float(request.get("music_start") or 0.0),
             effects=[s.get("transition") or None for s in scenes],
+            sfx=_materialize_sfx(workdir, scenes),
         )
 
         # --- publish -----------------------------------------------------------
@@ -654,6 +794,262 @@ async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_vo
 
     except Exception as exc:  # noqa: BLE001
         _fail(job_id, exc, warnings)
+
+
+# ── shuffling the running order ───────────────────────────────────────────────
+
+def reorder_scenes(job_id: str, order: list[int]) -> list[dict] | None:
+    """Put the scenes in `order` (a permutation of the current indices)."""
+    job = store.get_job(job_id)
+    if job is None:
+        return None
+    scenes = _load_scenes(job)
+    if sorted(order) != list(range(len(scenes))):
+        raise PipelineError("The new order must list every scene exactly once.")
+
+    reordered = _reindex([scenes[i] for i in order])
+    _save_scenes(job_id, reordered)
+    store.update_job(job_id, log="Scenes reordered")
+    return reordered
+
+
+def delete_scene(job_id: str, index: int) -> list[dict] | None:
+    job = store.get_job(job_id)
+    if job is None:
+        return None
+    scenes = _load_scenes(job)
+    if not any(s["index"] == index for s in scenes):
+        return None
+    if len(scenes) <= 1:
+        raise PipelineError("A video needs at least one scene.")
+
+    remaining = _reindex([s for s in scenes if s["index"] != index])
+    _save_scenes(job_id, remaining, scene_count=len(remaining))
+    store.update_job(job_id, log=f"Scene {index + 1} deleted")
+    return remaining
+
+
+async def add_scene(job_id: str, after: int, narration: str) -> None:
+    """Insert a scene after `after` and build its prompt, voice and image."""
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    request = job["request"]
+    warnings: list[str] = list(job.get("result", {}).get("warnings") or [])
+
+    try:
+        scenes = _load_scenes(job)
+        workdir = workdir_for(job_id)
+        fmt = config.FORMATS.get(request.get("video_format", "16:9"), config.FORMATS["16:9"])
+
+        position = max(0, min(int(after) + 1, len(scenes)))
+        neighbour = scenes[min(position, len(scenes) - 1)] if scenes else {}
+        fresh = {
+            "sid": store.new_id("sc")[3:],
+            "index": position,
+            "narration": narration.strip(),
+            # The Imagesmith rewrites `visual` into a prompt. A scene added by
+            # hand has no shot description of its own, so its narration is the
+            # honest starting point — the same thing the Director would have
+            # written about.
+            "visual": narration.strip(),
+            "image_prompt": "",
+            "negative_prompt": neighbour.get("negative_prompt", ""),
+            "hero_ids": list(neighbour.get("hero_ids") or []),
+            "motion": "zoom_in",
+            "motion_strength": 1.0,
+            "on_screen_text": "",
+            "overlays": [],
+            "audio_duration": 0.0,
+            "needs_image": True,
+            "needs_voice": True,
+        }
+        scenes = _reindex([*scenes[:position], fresh, *scenes[position:]])
+        _save_scenes(job_id, scenes, scene_count=len(scenes))
+
+        # The image prompt has to answer to the same style bible as its
+        # neighbours, or the new shot will not look like it belongs.
+        _progress(job_id, "prompts", 25, "Designing the new scene")
+        pack = await skills.build_image_prompts(
+            scenes=[fresh],
+            art_style=job.get("result", {}).get("style_bible")
+            or request.get("art_style", "cinematic photorealistic"),
+            video_format=request.get("video_format", "16:9"),
+            heroes=store.get_heroes(fresh["hero_ids"]),
+            title=job.get("result", {}).get("title") or request.get("topic", ""),
+        )
+        built = pack["scenes"][0]
+        fresh["image_prompt"] = built.get("image_prompt") or narration.strip()
+        fresh["negative_prompt"] = built.get("negative_prompt", "")
+
+        if not request.get("narration_audio"):
+            _progress(job_id, "voice", 45, "Recording the new scene")
+            await _voice_scenes(
+                scenes=scenes, targets=[fresh], workdir=workdir,
+                provider=(request.get("tts_provider") or config.TTS_PROVIDER).lower(),
+                voice_id=request.get("voice_id"),
+                language=request.get("language", "en"), job_id=job_id,
+                base_progress=45, span=15,
+            )
+
+        _progress(job_id, "images", 65, "Generating the new scene image")
+        heroes = store.get_heroes(fresh["hero_ids"])
+        warnings += await _render_images(
+            scenes=scenes, targets=[fresh], workdir=workdir,
+            hero_paths=_materialize_heroes(workdir, [h["id"] for h in heroes]),
+            provider=(request.get("image_provider") or config.IMAGE_PROVIDER).lower(),
+            aspect=fmt["aspect"], size=(fmt["width"], fmt["height"]), job_id=job_id,
+            base_progress=65, span=15,
+        )
+
+        _reindex(scenes)
+        store.update_job(
+            job_id, status="review", step="review", progress=72,
+            log=f"Scene added at position {position + 1}",
+            result={"scenes": scenes, "scene_count": len(scenes), "warnings": warnings},
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        _fail(job_id, exc, warnings)
+
+
+# ── thumbnails ────────────────────────────────────────────────────────────────
+
+THUMBNAIL_ANGLES = (
+    "extreme close-up on the single most striking detail, dramatic rim light, "
+    "huge negative space on the right for a headline",
+    "wide establishing shot, one clear subject dead centre, high contrast, "
+    "saturated colour grade",
+    "the emotional peak of the story, tight on faces, shallow depth of field, "
+    "strong single light source",
+)
+
+
+async def make_thumbnails(job_id: str) -> None:
+    """Three cover options for the same video, from three different angles."""
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    request = job["request"]
+    result = job.get("result", {})
+    warnings: list[str] = list(result.get("warnings") or [])
+    previous_status = job["status"]
+
+    try:
+        base = (result.get("metadata") or {}).get("thumbnail_prompt") \
+            or result.get("title") or request.get("topic", "")
+        if not base:
+            raise PipelineError("There is nothing to make a thumbnail from yet.")
+
+        provider = (request.get("image_provider") or config.IMAGE_PROVIDER).lower()
+        fmt = config.FORMATS.get(request.get("video_format", "16:9"), config.FORMATS["16:9"])
+        style = result.get("style_bible") or request.get("art_style", "")
+        workdir = workdir_for(job_id)
+        heroes = store.get_heroes(request.get("hero_ids") or [])
+        hero_paths = _materialize_heroes(workdir, [h["id"] for h in heroes])
+        refs = list(hero_paths.values())
+
+        _progress(job_id, "thumbnails", 30, "Designing three cover options",
+                  status="running")
+
+        async def one(i: int, angle: str) -> str | None:
+            path, warning = await images.generate_image(
+                prompt=f"{base}. {angle}. {style}".strip(),
+                # A thumbnail with the title baked in fights the one the user
+                # will add themselves, and generators spell it wrong anyway.
+                negative_prompt="text, letters, words, watermark, logo, caption",
+                reference_paths=refs,
+                aspect=fmt["aspect"],
+                size=(fmt["width"], fmt["height"]),
+                provider=provider,
+                out_path=workdir / "thumbs" / f"thumb_{i}.png",
+            )
+            if warning:
+                warnings.append(f"Thumbnail {i + 1}: {warning}")
+            return _file_url(str(path), int(result.get("thumbnail_version", 0)) + 1)
+
+        urls = await _gather_limited(
+            [one(i, angle) for i, angle in enumerate(THUMBNAIL_ANGLES)],
+            config.IMAGE_CONCURRENCY,
+        )
+
+        store.update_job(
+            job_id,
+            status=previous_status if previous_status in {"done", "review"} else "done",
+            step=previous_status, progress=100 if previous_status == "done" else 72,
+            log="Thumbnails ready",
+            result={
+                "thumbnails": [u for u in urls if u],
+                "thumbnail_version": int(result.get("thumbnail_version", 0)) + 1,
+                "warnings": warnings,
+            },
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        _fail(job_id, exc, warnings)
+
+
+# ── one script, several shapes ────────────────────────────────────────────────
+
+def repurpose(job_id: str, video_format: str, regenerate_images: bool) -> str | None:
+    """Clone a finished video into another aspect ratio, reusing its assets.
+
+    Voice, timings, captions and layers are shape-independent, so they carry
+    over untouched. The stills do not: reused, they are centre-cropped into the
+    new frame, which is right for a 16:9 that has room to lose at the sides and
+    wrong for one whose subject sits near an edge. Hence the choice.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return None
+    if video_format not in config.FORMATS:
+        raise PipelineError(f"Unknown video format '{video_format}'.")
+
+    scenes = _load_scenes(job)
+    if not scenes:
+        raise PipelineError("This job has no scenes to reuse.")
+
+    request = {
+        **job["request"],
+        "video_format": video_format,
+        "auto_render": False,
+        # The script is already written and voiced; a clone must never re-run it.
+        "script": None,
+        "auto_hook": False,
+    }
+    clone_id = store.create_job(request)
+    source, target = workdir_for(job_id), workdir_for(clone_id)
+
+    for folder in ("audio", "images", "overlays", "heroes", "sfx"):
+        if (source / folder).is_dir():
+            shutil.copytree(source / folder, target / folder, dirs_exist_ok=True)
+    for narration in source.glob("narration.*"):
+        shutil.copyfile(narration, target / narration.name)
+
+    clone: list[dict] = []
+    for scene in scenes:
+        copy = dict(scene)
+        for key in ("audio_path", "image_path"):
+            if scene.get(key):
+                copy[key] = str(target / Path(scene[key]).relative_to(source))
+        copy["overlays"] = [dict(o) for o in (scene.get("overlays") or [])]
+        copy["needs_image"] = bool(regenerate_images)
+        copy["needs_voice"] = False
+        clone.append(copy)
+
+    store.update_job(
+        clone_id, status="review", step="review", progress=72,
+        log=f"Cloned from {job_id} as {video_format}"
+            + (" — images will be regenerated" if regenerate_images else ""),
+        result={
+            "scenes": _reindex(clone),
+            "title": job.get("result", {}).get("title"),
+            "scene_count": len(clone),
+            "style_bible": job.get("result", {}).get("style_bible"),
+            "warnings": [],
+        },
+    )
+    return clone_id
 
 
 def _fail(job_id: str, exc: Exception, warnings: list[str]) -> None:
