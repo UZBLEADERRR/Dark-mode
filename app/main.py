@@ -178,6 +178,7 @@ async def health() -> dict[str, Any]:
             "fps": config.FPS,
         },
         "motions": list(kenburns.MOTIONS),
+        "transitions": list(video.TRANSITION_CHOICES),
         "formats": [{"id": k, **v} for k, v in config.FORMATS.items()],
         "languages": [{"id": k, "label": v} for k, v in config.LANGUAGES.items()],
     }
@@ -404,6 +405,13 @@ async def edit_scene(job_id: str, index: int, patch: ScenePatch) -> dict[str, An
                                 detail=f"Unknown camera move '{patch.motion}'.")
         scene["motion"] = patch.motion
 
+    if patch.transition is not None:
+        chosen = patch.transition.strip()
+        if chosen and chosen not in video.TRANSITION_CHOICES:
+            raise HTTPException(status_code=400, detail=f"Unknown transition '{chosen}'.")
+        # Empty means "let the renderer pick", which is the default behaviour.
+        scene["transition"] = chosen or None
+
     if patch.on_screen_text is not None:
         scene["on_screen_text"] = patch.on_screen_text.strip()
 
@@ -432,6 +440,19 @@ async def regenerate_scene(job_id: str, index: int, body: RegenerateRequest) -> 
     _launch(lambda: pipeline.regenerate_scene(
         job_id, index, redo_image=body.image, redo_voice=redo_voice))
     return {"id": job_id, "status": "running"}
+
+
+@app.post("/api/jobs/{job_id}/scenes/{index}/image")
+async def upload_scene_image(
+    job_id: str, index: int, image: UploadFile = File(...)
+) -> dict[str, Any]:
+    """Use your own still for a scene instead of a generated one."""
+    _editable_job(job_id)
+    data, _mime, _ext = await _read_upload(image, IMAGE_TYPES)
+    scene = pipeline.replace_scene_image(job_id, index, data)
+    if scene is None:
+        raise HTTPException(status_code=404, detail=f"Scene {index} does not exist.")
+    return pipeline.public_scene(job_id, scene)
 
 
 @app.post("/api/jobs/{job_id}/render", status_code=202)

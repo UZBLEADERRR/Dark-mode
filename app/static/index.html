@@ -12,141 +12,147 @@
 
 <header class="bar">
   <div class="mark"><span class="dot-logo"></span> Studio</div>
-  <nav class="bar-nav">
-    <button class="icon-btn" data-open="jobs" aria-label="Loyihalar">
-      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
-      <span class="badge hidden" id="jobs-badge"></span>
-    </button>
-    <button class="icon-btn" data-open="library" aria-label="Kutubxona">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 19.5c.6-3.4 3.3-5.2 6.5-5.2s5.9 1.8 6.5 5.2"/></svg>
-      <span class="health-dot" id="health-dot"></span>
-    </button>
-  </nav>
+  <div class="bar-right">
+    <span class="health-pill" id="health-pill" title=""></span>
+  </div>
 </header>
 
 <main>
-  <!-- ── composer ─────────────────────────────────────────────── -->
-  <section class="composer" id="composer">
-    <h1>Nima haqida video?</h1>
 
-    <div class="prompt">
-      <textarea id="topic" rows="2" maxlength="500"
-        placeholder="Ipak yo'li bo'ylab sayohat qilgan uch savdogarning haqiqiy tarixi…"></textarea>
-    </div>
+  <!-- ══ Yaratish ═══════════════════════════════════════════════════ -->
+  <section class="view on" id="view-create">
+    <div class="composer">
+      <h1>Nima haqida video?</h1>
 
-    <div class="rail">
-      <div class="seg" id="format-seg" role="group" aria-label="Format"></div>
-
-      <div class="rail-row" id="duration-row">
-        <input type="range" id="duration" min="30" max="900" step="15" value="180" aria-label="Uzunlik" />
-        <b id="duration-label">3 daq</b>
+      <div class="mode" id="mode-tabs">
+        <button type="button" data-mode="topic" aria-pressed="true">Mavzu</button>
+        <button type="button" data-mode="script">Senariy</button>
       </div>
 
-      <select id="language" class="pill-select" aria-label="Til"></select>
-    </div>
+      <div class="prompt">
+        <textarea id="topic" rows="2" maxlength="500"
+          placeholder="Ipak yo'li bo'ylab sayohat qilgan uch savdogarning haqiqiy tarixi…"></textarea>
+      </div>
 
-    <div class="cast">
-      <div class="cast-strip" id="hero-picker"></div>
-      <button class="cast-add" data-open="library" aria-label="Hero qo'shish">+</button>
-    </div>
+      <div class="prompt hidden" id="script-box">
+        <textarea id="script" rows="8" maxlength="40000"
+          placeholder="Videoning to'liq matnini shu yerga yozing. AI matningizni so'zma-so'z saqlaydi — faqat sahnalarga bo'lib, har biriga rasm yaratadi."></textarea>
+      </div>
 
-    <details class="more">
-      <summary><span>Sozlamalar</span></summary>
-      <div class="more-body">
+      <div class="rail">
+        <div class="seg" id="format-seg" role="group" aria-label="Format"></div>
+        <div class="rail-row" id="duration-row">
+          <input type="range" id="duration" min="30" max="900" step="15" value="180" aria-label="Uzunlik" />
+          <b id="duration-label">3 daq</b>
+        </div>
+        <select id="language" class="pill-select" aria-label="Til"></select>
+      </div>
 
-        <label class="f">
-          <span>Vizual uslub</span>
-          <input id="art_style" value="cinematic photorealistic, dramatic lighting, 35mm film" />
-        </label>
+      <div class="cast">
+        <div class="cast-strip" id="hero-picker"></div>
+        <button class="cast-add" data-go="library" aria-label="Hero qo'shish">+</button>
+      </div>
 
-        <div class="f2">
-          <label class="f"><span>Ohang</span><input id="tone" value="cinematic documentary" /></label>
-          <label class="f"><span>Subtitr</span>
-            <select id="subtitle_style">
-              <option value="bold">Qalin</option>
-              <option value="karaoke">Karaoke</option>
-              <option value="clean">Toza</option>
-            </select>
+      <details class="more">
+        <summary><span>Sozlamalar</span></summary>
+        <div class="more-body">
+
+          <div class="f">
+            <span>Vizual uslub</span>
+            <div class="chips" id="style-presets"></div>
+            <input id="art_style" value="cinematic photorealistic, dramatic lighting, 35mm film" />
+          </div>
+
+          <div class="f2">
+            <label class="f"><span>Ohang</span><input id="tone" value="cinematic documentary" /></label>
+            <label class="f"><span>Subtitr</span>
+              <select id="subtitle_style">
+                <option value="bold">Qalin</option>
+                <option value="karaoke">Karaoke</option>
+                <option value="clean">Toza</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="f2">
+            <label class="f"><span>Rasm</span><select id="image_provider"></select></label>
+            <label class="f" id="tts-field"><span>Ovoz provayderi</span><select id="tts_provider"></select></label>
+          </div>
+
+          <label class="f" id="voice-field">
+            <span>Ovoz tanlash</span>
+            <input id="voice_id" placeholder="bo'sh — standart ovoz" />
+            <small id="voice-hint"></small>
           </label>
+
+          <div class="f2">
+            <label class="f"><span>Fon musiqasi</span>
+              <select id="music_id"><option value="">— yo'q —</option></select>
+            </label>
+            <label class="f hidden" id="music-start-field"><span>Qaysi soniyadan</span>
+              <input type="number" id="music_start" min="0" step="1" value="0" />
+              <small>Trekning kerakli joyidan boshlanadi.</small>
+            </label>
+          </div>
+
+          <div class="switches">
+            <label class="sw"><input type="checkbox" id="review_first" checked /><i></i>
+              <span>Render'dan oldin ko'rib chiqaman</span></label>
+            <label class="sw"><input type="checkbox" id="burn_subtitles" checked /><i></i>
+              <span>Subtitrni videoga yoqish</span></label>
+            <label class="sw"><input type="checkbox" id="use_upload" /><i></i>
+              <span>Ovozni o'zim yuklayman</span></label>
+          </div>
+
+          <label class="f hidden" id="audio-field">
+            <span>Audio fayl</span>
+            <input type="file" id="audio_file" accept="audio/*" />
+          </label>
+
         </div>
+      </details>
 
-        <div class="f2">
-          <label class="f"><span>Rasm</span><select id="image_provider"></select></label>
-          <label class="f" id="tts-field"><span>Ovoz</span><select id="tts_provider"></select></label>
-        </div>
-
-        <label class="f"><span>Fon musiqasi</span>
-          <select id="music_id"><option value="">— yo'q —</option></select>
-        </label>
-
-        <div class="switches">
-          <label class="sw"><input type="checkbox" id="review_first" checked /><i></i>
-            <span>Render'dan oldin ko'rib chiqaman</span></label>
-          <label class="sw"><input type="checkbox" id="burn_subtitles" checked /><i></i>
-            <span>Subtitrni videoga yoqish</span></label>
-          <label class="sw"><input type="checkbox" id="use_upload" /><i></i>
-            <span>Ovozni o'zim yuklayman</span></label>
-        </div>
-
-        <label class="f hidden" id="audio-field">
-          <span>Audio fayl</span>
-          <input type="file" id="audio_file" accept="audio/*" />
-        </label>
-
-      </div>
-    </details>
-
-    <button class="go" id="submit-btn">Video yaratish</button>
-    <p class="msg err hidden" id="create-error"></p>
-  </section>
-
-  <!-- ── progress / result ────────────────────────────────────── -->
-  <section class="stage hidden" id="stage"></section>
-
-  <!-- ── scene editor ─────────────────────────────────────────── -->
-  <section class="editor hidden" id="editor">
-    <div class="editor-bar">
-      <div>
-        <h2 id="editor-title">Sahnalar</h2>
-        <p id="editor-note"></p>
-      </div>
-      <button class="go slim" id="render-btn">Render qilish</button>
+      <button class="go" id="submit-btn">Video yaratish</button>
+      <p class="msg err hidden" id="create-error"></p>
     </div>
-    <div class="scenes" id="editor-scenes"></div>
+
+    <section class="stage hidden" id="stage"></section>
+
+    <section class="editor hidden" id="editor">
+      <div class="editor-bar">
+        <div>
+          <h2 id="editor-title">Sahnalar</h2>
+          <p id="editor-note"></p>
+        </div>
+        <button class="go slim" id="render-btn">Render qilish</button>
+      </div>
+      <div class="scenes" id="editor-scenes"></div>
+    </section>
   </section>
-</main>
 
-<!-- ── sheets ─────────────────────────────────────────────────── -->
-<div class="scrim" id="scrim"></div>
+  <!-- ══ Loyihalar ══════════════════════════════════════════════════ -->
+  <section class="view" id="view-jobs">
+    <h1 class="view-title">Loyihalar</h1>
+    <div class="lib-list" id="jobs-list"></div>
+  </section>
 
-<aside class="sheet" id="sheet-jobs" aria-hidden="true">
-  <div class="sheet-head">
-    <h2>Loyihalar</h2>
-    <button class="icon-btn close" data-close aria-label="Yopish">
-      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-    </button>
-  </div>
-  <div class="sheet-body" id="jobs-list"></div>
-</aside>
+  <!-- ══ Tayyor ═════════════════════════════════════════════════════ -->
+  <section class="view" id="view-ready">
+    <h1 class="view-title">Tayyor videolar</h1>
+    <p class="view-note">Video va matnlar tayyor — nusxalab joylashtiring.</p>
+    <div class="ready" id="ready-list"></div>
+  </section>
 
-<aside class="sheet" id="sheet-library" aria-hidden="true">
-  <div class="sheet-head">
-    <h2>Kutubxona</h2>
-    <button class="icon-btn close" data-close aria-label="Yopish">
-      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-    </button>
-  </div>
-  <div class="sheet-body">
+  <!-- ══ Kutubxona ══════════════════════════════════════════════════ -->
+  <section class="view" id="view-library">
+    <h1 class="view-title">Kutubxona</h1>
 
     <h3>Herolar</h3>
     <p class="hint">Personaj rasmi — AI uni sahnalarda o'sha qiyofada chizadi.</p>
     <form id="hero-form" class="mini">
       <input name="name" placeholder="Ism" required />
       <input name="description" placeholder="Tavsif — 30 yosh, ko'k chopon" />
-      <label class="file">
-        <input type="file" name="image" accept="image/*" required />
-        <span>Rasm tanlash</span>
-      </label>
+      <label class="file"><input type="file" name="image" accept="image/*" required /><span>Rasm tanlash</span></label>
       <button>Qo'shish</button>
     </form>
     <div class="lib-grid" id="hero-list"></div>
@@ -155,19 +161,35 @@
     <p class="hint">Ovoz ostida avtomatik pasayadi.</p>
     <form id="music-form" class="mini">
       <input name="name" placeholder="Trek nomi" required />
-      <label class="file">
-        <input type="file" name="audio" accept="audio/*" required />
-        <span>Audio tanlash</span>
-      </label>
+      <label class="file"><input type="file" name="audio" accept="audio/*" required /><span>Audio tanlash</span></label>
       <button>Qo'shish</button>
     </form>
     <div class="lib-list" id="music-list"></div>
 
     <h3>Holat</h3>
     <div class="lib-list" id="health-list"></div>
+  </section>
 
-  </div>
-</aside>
+</main>
+
+<nav class="tabbar" id="tabbar">
+  <button data-go="create" aria-pressed="true">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Yaratish</span>
+  </button>
+  <button data-go="jobs">
+    <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Loyihalar</span>
+    <i class="badge hidden" id="jobs-badge"></i>
+  </button>
+  <button data-go="ready">
+    <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5l5 2.5-5 2.5z"/></svg><span>Tayyor</span>
+    <i class="badge hidden" id="ready-badge"></i>
+  </button>
+  <button data-go="library">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 19.5c.6-3.4 3.3-5.2 6.5-5.2s5.9 1.8 6.5 5.2"/></svg><span>Kutubxona</span>
+  </button>
+</nav>
+
+<div class="toast" id="toast"></div>
 
 <script src="/static/app.js"></script>
 </body>

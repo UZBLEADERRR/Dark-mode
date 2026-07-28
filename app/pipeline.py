@@ -83,6 +83,34 @@ def _materialize_heroes(workdir: Path, hero_ids: list[str]) -> dict[str, Path]:
     return paths
 
 
+def replace_scene_image(job_id: str, index: int, data: bytes) -> dict | None:
+    """Drop a user-supplied still into a scene, in place of the generated one."""
+    from PIL import Image
+
+    job = store.get_job(job_id)
+    if job is None:
+        return None
+    scenes = _load_scenes(job)
+    scene = next((s for s in scenes if s["index"] == index), None)
+    if scene is None:
+        return None
+
+    target = workdir_for(job_id) / "images" / f"scene_{index:03d}.png"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    # Normalise the same way generated stills are, so ffmpeg never meets a CMYK
+    # or alpha-channel surprise halfway through a render.
+    with Image.open(target) as img:
+        img.convert("RGB").save(target, format="PNG")
+
+    scene["image_path"] = str(target)
+    scene["needs_image"] = False
+    scene["image_version"] = int(scene.get("image_version", 0)) + 1
+    store.update_job(job_id, result={"scenes": scenes},
+                     log=f"Scene {index + 1}: image replaced by upload")
+    return scene
+
+
 def _materialize_music(workdir: Path, music_id: str | None) -> Path | None:
     if not music_id:
         return None
@@ -119,6 +147,7 @@ def public_scene(job_id: str, scene: dict) -> dict:
         "narration": scene.get("narration", ""),
         "image_prompt": scene.get("image_prompt", ""),
         "motion": scene.get("motion", "zoom_in"),
+        "transition": scene.get("transition") or "",
         "on_screen_text": scene.get("on_screen_text", ""),
         "hero_ids": scene.get("hero_ids", []),
         "start": round(float(scene.get("start", 0.0)), 2),
@@ -319,14 +348,25 @@ async def run_draft(job_id: str) -> None:
         else:
             if not config.tts_provider_ready(tts_provider):
                 raise PipelineError(f"The '{tts_provider}' voice provider has no API key configured.")
-            _progress(job_id, "script", 8, "Writing the script")
-            script = await skills.direct_script(
-                topic=request["topic"], target_seconds=int(request.get("target_seconds", 180)),
-                language=language, tone=request.get("tone", "cinematic documentary"),
-                video_format=request.get("video_format", "16:9"), heroes=heroes,
-            )
+
+            written = (request.get("script") or "").strip()
+            if written:
+                # The user supplied the words. The Director only decides where
+                # the cuts fall and what each shot shows.
+                _progress(job_id, "script", 8, "Storyboarding your script")
+                script = await skills.segment_written_script(
+                    topic=request.get("topic", ""), script=written, language=language,
+                    video_format=request.get("video_format", "16:9"), heroes=heroes,
+                )
+            else:
+                _progress(job_id, "script", 8, "Writing the script")
+                script = await skills.direct_script(
+                    topic=request["topic"], target_seconds=int(request.get("target_seconds", 180)),
+                    language=language, tone=request.get("tone", "cinematic documentary"),
+                    video_format=request.get("video_format", "16:9"), heroes=heroes,
+                )
             scenes = script["scenes"]
-            _progress(job_id, "script", 20, f"{len(scenes)} scenes written")
+            _progress(job_id, "script", 20, f"{len(scenes)} scenes ready")
 
         store.update_job(job_id, result={"title": script.get("title"),
                                          "scene_count": len(scenes)})
@@ -479,6 +519,8 @@ async def run_render(job_id: str) -> None:
             total_duration=total_audio, out_path=out_path, workdir=workdir,
             subtitle_file=ass_path if request.get("burn_subtitles", True) else None,
             music=music_path,
+            music_start=float(request.get("music_start") or 0.0),
+            effects=[s.get("transition") or None for s in scenes],
         )
 
         # --- publish -----------------------------------------------------------

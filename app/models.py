@@ -19,6 +19,9 @@ class HeroOut(BaseModel):
 
 class CreateJobRequest(BaseModel):
     topic: str = Field(min_length=2, max_length=500)
+    # When set, this is used as the narration verbatim and the Director only
+    # decides where the scene cuts fall.
+    script: str | None = Field(default=None, max_length=40000)
     video_format: str = "16:9"
     target_seconds: int = Field(default=180, ge=20, le=1800)
     language: str = "en"
@@ -29,6 +32,7 @@ class CreateJobRequest(BaseModel):
     image_provider: str | None = None
     voice_id: str | None = None
     music_id: str | None = None
+    music_start: float = Field(default=0.0, ge=0, le=36000)
     subtitle_style: Literal["bold", "clean", "karaoke"] = "bold"
     burn_subtitles: bool = True
     # False stops after the draft so scenes can be reviewed and edited first.
@@ -44,6 +48,8 @@ class ScenePatch(BaseModel):
     narration: str | None = Field(default=None, max_length=4000)
     image_prompt: str | None = Field(default=None, max_length=4000)
     motion: str | None = None
+    # Cross-fade played when cutting *into* this scene. "" restores the default.
+    transition: str | None = None
     on_screen_text: str | None = Field(default=None, max_length=60)
     hero_ids: list[str] | None = None
 
