@@ -66,7 +66,7 @@ async def _gemini(
             }
         )
 
-    url = f"{config.GEMINI_BASE}/models/{config.GEMINI_IMAGE_MODEL}:generateContent"
+    url = f"{config.GEMINI_BASE}/models/{config.model('gemini_image')}:generateContent"
     headers = {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
 
     async def _post(with_image_config: bool) -> httpx.Response:
@@ -102,7 +102,7 @@ async def _fal(
 
     headers = {"Authorization": f"Key {config.FAL_KEY}", "Content-Type": "application/json"}
     if refs:
-        model = config.FAL_IMAGE_MODEL
+        model = config.model("fal_image")
         body = {
             "prompt": prompt,
             "image_urls": [_data_uri(r) for r in refs],
@@ -110,7 +110,7 @@ async def _fal(
             "num_images": 1,
         }
     else:
-        model = config.FAL_TEXT2IMG_MODEL
+        model = config.model("fal_text2img")
         body = {
             "prompt": prompt,
             "image_size": {"width": size[0], "height": size[1]},
@@ -149,7 +149,7 @@ async def _openai(
             ("image[]", (ref.name, ref.read_bytes(), _mime_for(ref)))
             for ref in refs[:4]
         ]
-        data = {"model": config.OPENAI_IMAGE_MODEL, "prompt": prompt, "size": size, "n": "1"}
+        data = {"model": config.model("openai_image"), "prompt": prompt, "size": size, "n": "1"}
         resp = await client.post(
             f"{config.OPENAI_BASE}/images/edits", headers=headers, data=data, files=files
         )
@@ -157,7 +157,7 @@ async def _openai(
         resp = await client.post(
             f"{config.OPENAI_BASE}/images/generations",
             headers={**headers, "Content-Type": "application/json"},
-            json={"model": config.OPENAI_IMAGE_MODEL, "prompt": prompt, "size": size, "n": 1},
+            json={"model": config.model("openai_image"), "prompt": prompt, "size": size, "n": 1},
         )
 
     if resp.status_code >= 400:

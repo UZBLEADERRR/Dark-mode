@@ -44,7 +44,7 @@ async def transcribe_words(audio_path: Path, language: str | None = None) -> lis
         return []
 
     data = {
-        "model": config.OPENAI_TRANSCRIBE_MODEL,
+        "model": config.model("openai_transcribe"),
         "response_format": "verbose_json",
         "timestamp_granularities[]": "word",
     }
@@ -82,7 +82,7 @@ async def transcribe_full(audio_path: Path, language: str | None = None) -> dict
         return {"text": "", "words": []}
 
     data = {
-        "model": config.OPENAI_TRANSCRIBE_MODEL,
+        "model": config.model("openai_transcribe"),
         "response_format": "verbose_json",
         "timestamp_granularities[]": "word",
     }

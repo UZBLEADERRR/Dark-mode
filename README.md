@@ -50,6 +50,42 @@ Hammasi adapter — `.env` orqali almashtirasiz, kod o'zgarmaydi.
 Qaysi kalit bor-yo'qligi UI tepasidagi yorliqlarda ko'rinadi; kalitsiz provayder
 tanlanmaydi va job yaratilganda aniq xabar beriladi.
 
+## Modellar
+
+Standart modellar: skript `gemini-2.5-pro`, rasm **`gemini-2.5-flash-image`**,
+ovoz `gemini-2.5-flash-preview-tts`.
+
+**Kutubxona → Modellar** da har bosqichni alohida almashtirasiz — deploy qilish
+shart emas, tanlov bazaga yoziladi. «Ro'yxatni yangilash» tugmasi mavjud
+modellarni **provayderdan sizning kalitingiz uchun** so'raydi, ya'ni bugun
+chiqqan model ham darhol ro'yxatda bo'ladi. Ro'yxatda yo'q nomni qo'lda ham
+yozsangiz bo'ladi. Maydonni bo'sh qoldirsangiz env'dagi qiymatga qaytadi.
+
+**Kutubxona → Holat** har doim aynan qaysi model chaqirilayotganini ko'rsatadi.
+
+## Ovoz
+
+Ovozni ro'yxatdan tanlaysiz, har birining yonida tembri yozilgan, **▶ tugmasi
+bilan namunasini eshitasiz** — namuna siz tanlagan tilda o'qiladi va keshlanadi,
+ikkinchi marta bepul.
+
+| Provayder | Ovozlar qayerdan |
+|---|---|
+| Gemini | 30 ta tayyor ovoz (Puck, Kore, Fenrir, Aoede…) |
+| OpenAI | 11 ta ovoz (alloy, onyx, nova…) |
+| ElevenLabs | **kalitingizdagi barcha ovozlar**, `GET /v1/voices` orqali |
+
+ElevenLabs ulasangiz o'z akkountingizdagi va Voice Library'dan qo'shgan barcha
+ovozlaringiz ro'yxatda chiqadi — Voice ID ni qo'lda ko'chirish shart emas.
+Namunasi ham ElevenLabs'ning o'z sample'idan olinadi, ya'ni **kredit
+sarflanmaydi**. API kalitiga `text_to_speech` va `voices_read` ruxsati kerak.
+
+Supabase ulasangiz: `STORAGE_BACKEND=supabase` + `SUPABASE_URL` va
+`SUPABASE_SERVICE_KEY`. Bucket avtomatik yaratiladi, render tugagach video
+bucket'ga yuklanadi va havolasi o'shanga qarab turadi — konteyner o'chsa ham
+video qoladi. Baza (herolar, brend, sozlamalar) baribir `DATA_DIR/app.db` da,
+shuning uchun Railway volume'i baribir kerak.
+
 ## Ma'lumotlar qayerda
 
 - **Herolar, musiqa, tovush effektlari, qatlam rasmlari va brend** — SQLite
@@ -75,6 +111,24 @@ Har bir sahna uchun **15 xil harakat**: zoom in/out, to'rt tomonga surilish,
 zoom+surilish kombinatsiyalari, diagonal, nafas (`pulse`), tebranish (`sway`) va
 harakatsiz. Ustiga **harakat kuchi** (0.3×…1.8×) — bir xil harakatni sezilar-
 sezilmas siljishdan haqiqiy push'gacha sozlaydi.
+
+## Ilova tuzilishi
+
+Yuqorida to'rtta bo'lim: **Yaratish · Tahrirlash · Tayyor · Kutubxona**.
+Pastda esa **dock** — o'sha bo'limning asboblari, barmoq yetadigan joyda.
+
+**Yaratish** ekranida bitta savol, bitta maydon va bitta tugma. Sozlamalar
+pastdagi dock'da: Format, Uzunlik, Uslub, Herolar, Ovoz, Musiqa, Subtitr,
+Boshqa. Har biri pastdan chiqadigan panel ochadi. Maydon ostidagi qatorda esa
+hozirgi tanlovlaringiz turadi — bosib o'sha panelni ochasiz. Hech narsa
+pastga scroll bo'lib ketmaydi.
+
+**Musiqani va heroni to'g'ridan-to'g'ri o'sha panelda qurilmangizdan
+yuklaysiz** — Kutubxonaga borib qaytish shart emas.
+
+**Tahrirlash** bo'limida yuqorida loyihalaringiz lentasi, birini bossangiz
+ostida studio ochiladi. Dock'da: Eshitish, Matn, Rasm, Sahna, Qatlam, Subtitr,
+Render.
 
 ## Studio — tahrirlagich
 
@@ -239,11 +293,15 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs/{id}/thumbnails` | Uchta muqova varianti |
 | `POST /api/jobs/{id}/repurpose` | Boshqa formatga nusxa olish |
 | `GET/PUT /api/brand` | Brend to'plami |
+| `GET/PUT /api/models` | Har bosqich qaysi modelni chaqiradi |
+| `GET /api/models/available?provider=` | Provayderdagi mavjud modellar |
+| `GET /api/voices?provider=` | Ovozlar ro'yxati |
+| `GET /api/voices/preview?provider=&voice_id=&language=` | Ovoz namunasi (keshlanadi) |
 | `GET/POST/DELETE /api/assets` | Qatlam rasmlari (stiker, logotip) |
 | `GET/POST /api/music?kind=sfx` | Fon musiqasi va tovush effektlari |
 | `POST /api/jobs/{id}/render` | Render qilish / qayta render |
 | `GET /api/jobs/{id}/download` | MP4 yuklab olish |
-| `GET /api/health` | Qaysi kalitlar bor, formatlar, harakatlar |
+| `GET /api/health` | Qaysi kalitlar bor, qaysi modellar ishlaydi, formatlar, harakatlar |
 
 ## Loyiha tuzilishi
 

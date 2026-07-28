@@ -122,6 +122,83 @@ LANGUAGES: dict[str, str] = {
 }
 
 
+# --- which model each stage calls --------------------------------------------
+# The environment sets the default; the database can override it while the app
+# is running, so a new model can be adopted from the UI without a redeploy.
+# Nothing reads the constants above directly any more — everything goes through
+# `model()`, or an override would apply in some code paths and not others.
+
+MODEL_STAGES: dict[str, dict] = {
+    "gemini_text":       {"provider": "gemini", "role": "text"},
+    "gemini_text_fallback": {"provider": "gemini", "role": "text"},
+    "gemini_image":      {"provider": "gemini", "role": "image"},
+    "gemini_tts":        {"provider": "gemini", "role": "tts"},
+    "anthropic_text":    {"provider": "anthropic", "role": "text"},
+    "fal_image":         {"provider": "fal", "role": "image"},
+    "fal_text2img":      {"provider": "fal", "role": "image"},
+    "openai_image":      {"provider": "openai", "role": "image"},
+    "openai_tts":        {"provider": "openai", "role": "tts"},
+    "openai_transcribe": {"provider": "openai", "role": "transcribe"},
+    "elevenlabs_tts":    {"provider": "elevenlabs", "role": "tts"},
+}
+
+_MODEL_DEFAULTS: dict[str, str] = {
+    "gemini_text": GEMINI_TEXT_MODEL,
+    "gemini_text_fallback": GEMINI_TEXT_FALLBACK,
+    "gemini_image": GEMINI_IMAGE_MODEL,
+    "gemini_tts": GEMINI_TTS_MODEL,
+    "anthropic_text": LLM_MODEL,
+    "fal_image": FAL_IMAGE_MODEL,
+    "fal_text2img": FAL_TEXT2IMG_MODEL,
+    "openai_image": OPENAI_IMAGE_MODEL,
+    "openai_tts": OPENAI_TTS_MODEL,
+    "openai_transcribe": OPENAI_TRANSCRIBE_MODEL,
+    "elevenlabs_tts": ELEVENLABS_MODEL,
+}
+
+MODEL_OVERRIDES: dict[str, str] = {}
+
+
+def model(key: str) -> str:
+    return (MODEL_OVERRIDES.get(key) or _MODEL_DEFAULTS.get(key, "")).strip()
+
+
+def model_defaults() -> dict[str, str]:
+    return dict(_MODEL_DEFAULTS)
+
+
+def set_model_overrides(values: dict | None) -> dict[str, str]:
+    """Replace the overrides wholesale. An empty value means "use the default"."""
+    MODEL_OVERRIDES.clear()
+    for key, value in (values or {}).items():
+        if key in _MODEL_DEFAULTS and str(value or "").strip():
+            MODEL_OVERRIDES[key] = str(value).strip()[:120]
+    return dict(MODEL_OVERRIDES)
+
+
+# --- default voices ----------------------------------------------------------
+
+_VOICE_DEFAULTS: dict[str, str] = {
+    "gemini": GEMINI_TTS_VOICE,
+    "openai": OPENAI_TTS_VOICE,
+    "elevenlabs": ELEVENLABS_VOICE_ID,
+}
+
+VOICE_OVERRIDES: dict[str, str] = {}
+
+
+def default_voice(provider: str) -> str:
+    return (VOICE_OVERRIDES.get(provider) or _VOICE_DEFAULTS.get(provider, "")).strip()
+
+
+def set_voice_overrides(values: dict | None) -> dict[str, str]:
+    VOICE_OVERRIDES.clear()
+    for key, value in (values or {}).items():
+        if key in _VOICE_DEFAULTS and str(value or "").strip():
+            VOICE_OVERRIDES[key] = str(value).strip()[:120]
+    return dict(VOICE_OVERRIDES)
+
+
 def caption_budget(width: int, height: int) -> dict[str, int | float]:
     """How wide a caption line may be, for this canvas.
 

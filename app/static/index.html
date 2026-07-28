@@ -12,6 +12,16 @@
 
 <header class="bar">
   <div class="mark"><span class="dot-logo"></span> Studio</div>
+
+  <!-- The four places you can be. Sections, not tools — the tools are in the
+       dock at the bottom, where a thumb can reach them. -->
+  <nav class="topnav" id="topnav">
+    <button data-go="create" aria-pressed="true">Yaratish</button>
+    <button data-go="edit">Tahrirlash<i class="badge hidden" id="jobs-badge"></i></button>
+    <button data-go="ready">Tayyor<i class="badge hidden" id="ready-badge"></i></button>
+    <button data-go="library">Kutubxona</button>
+  </nav>
+
   <div class="bar-right">
     <span class="health-pill" id="health-pill" title=""></span>
   </div>
@@ -39,86 +49,20 @@
           placeholder="Videoning to'liq matnini shu yerga yozing. AI matningizni so'zma-so'z saqlaydi — faqat sahnalarga bo'lib, har biriga rasm yaratadi."></textarea>
       </div>
 
-      <div class="rail">
-        <div class="seg" id="format-seg" role="group" aria-label="Format"></div>
-        <div class="rail-row" id="duration-row">
-          <input type="range" id="duration" min="30" max="900" step="15" value="180" aria-label="Uzunlik" />
-          <b id="duration-label">3 daq</b>
-        </div>
-        <select id="language" class="pill-select" aria-label="Til"></select>
-      </div>
-
-      <div class="cast">
-        <div class="cast-strip" id="hero-picker"></div>
-        <button class="cast-add" data-go="library" aria-label="Hero qo'shish">+</button>
-      </div>
-
-      <details class="more">
-        <summary><span>Sozlamalar</span></summary>
-        <div class="more-body">
-
-          <div class="f">
-            <span>Vizual uslub</span>
-            <div class="chips" id="style-presets"></div>
-            <input id="art_style" value="cinematic photorealistic, dramatic lighting, 35mm film" />
-          </div>
-
-          <div class="f2">
-            <label class="f"><span>Ohang</span><input id="tone" value="cinematic documentary" /></label>
-            <label class="f"><span>Subtitr</span>
-              <select id="subtitle_style"><option value="bold">Qalin</option></select>
-            </label>
-          </div>
-
-          <div class="f2">
-            <label class="f"><span>Rasm</span><select id="image_provider"></select></label>
-            <label class="f" id="tts-field"><span>Ovoz provayderi</span><select id="tts_provider"></select></label>
-          </div>
-
-          <label class="f" id="voice-field">
-            <span>Ovoz tanlash</span>
-            <input id="voice_id" placeholder="bo'sh — standart ovoz" />
-            <small id="voice-hint"></small>
-          </label>
-
-          <div class="f2">
-            <label class="f"><span>Fon musiqasi</span>
-              <select id="music_id"><option value="">— yo'q —</option></select>
-            </label>
-            <label class="f hidden" id="music-start-field"><span>Qaysi soniyadan</span>
-              <input type="number" id="music_start" min="0" step="1" value="0" />
-              <small>Trekning kerakli joyidan boshlanadi.</small>
-            </label>
-          </div>
-
-          <div class="switches">
-            <label class="sw"><input type="checkbox" id="review_first" checked /><i></i>
-              <span>Render'dan oldin ko'rib chiqaman</span></label>
-            <label class="sw"><input type="checkbox" id="burn_subtitles" checked /><i></i>
-              <span>Subtitrni videoga yoqish</span></label>
-            <label class="sw"><input type="checkbox" id="auto_hook" /><i></i>
-              <span>Hook matnini birinchi 3 soniyaga qo'yish</span></label>
-            <label class="sw hidden" id="brand-logo-sw"><input type="checkbox" id="brand_logo" checked /><i></i>
-              <span>Brend logotipini har sahnaga qo'yish</span></label>
-            <label class="sw"><input type="checkbox" id="use_upload" /><i></i>
-              <span>Ovozni o'zim yuklayman</span></label>
-          </div>
-
-          <label class="f hidden" id="audio-field">
-            <span>Audio fayl</span>
-            <input type="file" id="audio_file" accept="audio/*" />
-          </label>
-
-        </div>
-      </details>
+      <!-- Everything chosen so far, in one line. Tap any of it to change it. -->
+      <div class="summary" id="summary"></div>
 
       <button class="go" id="submit-btn">Video yaratish</button>
       <p class="msg err hidden" id="create-error"></p>
     </div>
+  </section>
+
+  <!-- ══ Tahrirlash ═════════════════════════════════════════════════ -->
+  <section class="view" id="view-edit">
+    <div class="projects" id="jobs-list"></div>
 
     <section class="stage hidden" id="stage"></section>
 
-    <!-- ══ Studio: sahna + qatlam + subtitr tahrirlagichi ═════════════ -->
     <section class="editor hidden" id="editor">
       <div class="editor-bar">
         <div>
@@ -175,12 +119,6 @@
     </section>
   </section>
 
-  <!-- ══ Loyihalar ══════════════════════════════════════════════════ -->
-  <section class="view" id="view-jobs">
-    <h1 class="view-title">Loyihalar</h1>
-    <div class="lib-list" id="jobs-list"></div>
-  </section>
-
   <!-- ══ Tayyor ═════════════════════════════════════════════════════ -->
   <section class="view" id="view-ready">
     <h1 class="view-title">Tayyor videolar</h1>
@@ -193,7 +131,6 @@
     <h1 class="view-title">Kutubxona</h1>
 
     <h3>Herolar</h3>
-    <p class="hint">Personaj rasmi — AI uni sahnalarda o'sha qiyofada chizadi.</p>
     <form id="hero-form" class="mini">
       <input name="name" placeholder="Ism" required />
       <input name="description" placeholder="Tavsif — 30 yosh, ko'k chopon" />
@@ -203,11 +140,9 @@
     <div class="lib-grid" id="hero-list"></div>
 
     <h3>Brend</h3>
-    <p class="hint">Bir marta sozlaysiz — har yangi video shundan boshlanadi.</p>
     <div class="brand-box" id="brand-box"></div>
 
     <h3>Qatlam rasmlari</h3>
-    <p class="hint">Stiker, logotip, kesilgan rasm — sahna ustiga qo'yiladi. Shaffof PNG eng yaxshisi.</p>
     <form id="asset-form" class="mini">
       <input name="name" placeholder="Nomi" />
       <label class="file"><input type="file" name="image" accept="image/*" required /><span>Rasm tanlash</span></label>
@@ -216,8 +151,6 @@
     <div class="lib-grid" id="asset-list"></div>
 
     <h3>Musiqa va effektlar</h3>
-    <p class="hint">Fon musiqasi ovoz ostida avtomatik pasayadi. Effekt — sahna
-      boshida bir marta yangraydigan qisqa tovush.</p>
     <form id="music-form" class="mini">
       <input name="name" placeholder="Nomi" required />
       <select name="kind">
@@ -229,28 +162,121 @@
     </form>
     <div class="lib-list" id="music-list"></div>
 
+    <h3>Modellar</h3>
+    <div class="models-box" id="models-box"></div>
+
     <h3>Holat</h3>
     <div class="lib-list" id="health-list"></div>
   </section>
 
 </main>
 
-<nav class="tabbar" id="tabbar">
-  <button data-go="create" aria-pressed="true">
-    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Yaratish</span>
-  </button>
-  <button data-go="jobs">
-    <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Loyihalar</span>
-    <i class="badge hidden" id="jobs-badge"></i>
-  </button>
-  <button data-go="ready">
-    <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5l5 2.5-5 2.5z"/></svg><span>Tayyor</span>
-    <i class="badge hidden" id="ready-badge"></i>
-  </button>
-  <button data-go="library">
-    <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 19.5c.6-3.4 3.3-5.2 6.5-5.2s5.9 1.8 6.5 5.2"/></svg><span>Kutubxona</span>
-  </button>
-</nav>
+<!-- The dock: whatever the current section can do, within thumb reach. -->
+<nav class="dock" id="dock"></nav>
+
+<!-- Tool panels live here between uses. Moving the real nodes in and out of the
+     sheet — rather than rebuilding them — keeps every id, listener and value
+     exactly where the rest of the app expects to find it. -->
+<div id="bank" hidden>
+
+  <div data-panel="format">
+    <div class="f"><span>Kadr shakli</span><div class="seg" id="format-seg"></div></div>
+    <label class="f"><span>Til</span><select id="language"></select></label>
+  </div>
+
+  <div data-panel="length">
+    <label class="f rng" id="duration-row"><span>Taxminiy uzunlik<b id="duration-label">3 daq</b></span>
+      <input type="range" id="duration" min="30" max="900" step="15" value="180" />
+    </label>
+    <p class="note">Senariy yozsangiz yoki o'z ovozingizni yuklasangiz, uzunlik
+      matndan kelib chiqadi.</p>
+  </div>
+
+  <div data-panel="style">
+    <div class="f"><span>Tayyor uslublar</span>
+      <div class="chips" id="style-presets"></div>
+      <input id="art_style" value="cinematic photorealistic, dramatic lighting, 35mm film" />
+    </div>
+    <label class="f"><span>Ohang</span><input id="tone" value="cinematic documentary" /></label>
+    <label class="f"><span>Rasm provayderi</span><select id="image_provider"></select></label>
+  </div>
+
+  <div data-panel="cast">
+    <div class="f"><span>Sahnalarda ishtirok etadigan personajlar</span>
+      <div class="cast-strip" id="hero-picker"></div>
+    </div>
+    <form id="hero-quick" class="mini">
+      <input name="name" placeholder="Ism" required />
+      <input name="description" placeholder="Tavsif — 30 yosh, ko'k chopon" />
+      <label class="file"><input type="file" name="image" accept="image/*" required /><span>Qurilmadan rasm tanlash</span></label>
+      <button>Hero qo'shish</button>
+    </form>
+  </div>
+
+  <div data-panel="voice">
+    <label class="f" id="tts-field"><span>Ovoz provayderi</span><select id="tts_provider"></select></label>
+    <div class="f" id="voice-field">
+      <span>Ovoz</span>
+      <div class="voice-row">
+        <select id="voice_id"><option value="">standart ovoz</option></select>
+        <button type="button" class="hear" id="voice-play" aria-label="Namunani eshitish">
+          <svg viewBox="0 0 24 24"><path d="M8 5.5l11 6.5-11 6.5z"/></svg>
+        </button>
+      </div>
+      <small id="voice-hint"></small>
+    </div>
+    <label class="sw"><input type="checkbox" id="use_upload" /><i></i>
+      <span>Ovozni o'zim yuklayman</span></label>
+    <label class="f hidden" id="audio-field">
+      <span>Audio fayl</span>
+      <input type="file" id="audio_file" accept="audio/*" />
+    </label>
+  </div>
+
+  <div data-panel="music">
+    <label class="f"><span>Trek</span>
+      <select id="music_id"><option value="">— yo'q —</option></select>
+    </label>
+    <form id="music-quick" class="mini">
+      <label class="file"><input type="file" name="audio" accept="audio/*" required /><span>Qurilmadan musiqa yuklash</span></label>
+      <button>Yuklash va tanlash</button>
+    </form>
+    <label class="f hidden rng" id="music-start-field">
+      <span>Qaysi soniyadan boshlansin<b id="music-start-label">0s</b></span>
+      <input type="range" id="music_start" min="0" max="300" step="1" value="0" />
+    </label>
+  </div>
+
+  <div data-panel="subtitle">
+    <label class="f"><span>Subtitr ko'rinishi</span>
+      <select id="subtitle_style"><option value="bold">Qalin</option></select>
+    </label>
+    <label class="sw"><input type="checkbox" id="burn_subtitles" checked /><i></i>
+      <span>Subtitrni videoga yoqish</span></label>
+    <label class="sw"><input type="checkbox" id="auto_hook" /><i></i>
+      <span>Hook matnini birinchi 3 soniyaga qo'yish</span></label>
+    <label class="sw hidden" id="brand-logo-sw"><input type="checkbox" id="brand_logo" checked /><i></i>
+      <span>Brend logotipini har sahnaga qo'yish</span></label>
+  </div>
+
+  <div data-panel="more">
+    <label class="sw"><input type="checkbox" id="review_first" checked /><i></i>
+      <span>Render'dan oldin ko'rib chiqaman</span></label>
+    <p class="note">Belgini olib tashlasangiz video bir yo'la tayyor bo'ladi —
+      sahnalarni ko'rib chiqish bosqichi o'tkazib yuboriladi.</p>
+  </div>
+
+</div>
+
+<div class="sheet hidden" id="sheet">
+  <div class="sheet-card" role="dialog" aria-modal="true">
+    <div class="sheet-head">
+      <h3 id="sheet-title"></h3>
+      <button id="sheet-close" aria-label="Yopish">✕</button>
+    </div>
+    <div class="sheet-body" id="sheet-body"></div>
+  </div>
+</div>
 
 <div class="toast" id="toast"></div>
 

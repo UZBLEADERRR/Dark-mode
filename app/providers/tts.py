@@ -83,14 +83,14 @@ async def _elevenlabs(
     if not config.ELEVENLABS_API_KEY:
         raise TTSError("ELEVENLABS_API_KEY is not set.")
 
-    voice = voice_id or config.ELEVENLABS_VOICE_ID
+    voice = voice_id or config.default_voice("elevenlabs")
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice}/with-timestamps"
     resp = await client.post(
         url,
         headers={"xi-api-key": config.ELEVENLABS_API_KEY, "Content-Type": "application/json"},
         json={
             "text": text,
-            "model_id": config.ELEVENLABS_MODEL,
+            "model_id": config.model("elevenlabs_tts"),
             "output_format": "mp3_44100_128",
             "voice_settings": {"stability": 0.45, "similarity_boost": 0.8, "style": 0.15},
         },
@@ -130,8 +130,8 @@ async def _openai(
             "Content-Type": "application/json",
         },
         json={
-            "model": config.OPENAI_TTS_MODEL,
-            "voice": voice_id or config.OPENAI_TTS_VOICE,
+            "model": config.model("openai_tts"),
+            "voice": voice_id or config.default_voice("openai"),
             "input": text,
             "response_format": "mp3",
         },
@@ -152,7 +152,7 @@ async def _gemini(
     if not config.GEMINI_API_KEY:
         raise TTSError("GEMINI_API_KEY is not set.")
 
-    url = f"{config.GEMINI_BASE}/models/{config.GEMINI_TTS_MODEL}:generateContent"
+    url = f"{config.GEMINI_BASE}/models/{config.model('gemini_tts')}:generateContent"
     resp = await client.post(
         url,
         headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
@@ -163,7 +163,7 @@ async def _gemini(
                 "speechConfig": {
                     "voiceConfig": {
                         "prebuiltVoiceConfig": {
-                            "voiceName": voice_id or config.GEMINI_TTS_VOICE
+                            "voiceName": voice_id or config.default_voice("gemini")
                         }
                     }
                 },

@@ -70,6 +70,18 @@ class OverlayIn(BaseModel):
     font: str = Field(default="", max_length=80)
 
 
+class ModelSettings(BaseModel):
+    """Which model each stage calls, and each provider's default voice.
+
+    Both are stored rather than exported to the environment, so a new model can
+    be adopted from the UI without a redeploy. An empty value means "fall back
+    to whatever the environment says".
+    """
+
+    models: dict[str, str] = Field(default_factory=dict)
+    voices: dict[str, str] = Field(default_factory=dict)
+
+
 class BrandKit(BaseModel):
     """Settings applied to every new video, so the look is set once."""
 

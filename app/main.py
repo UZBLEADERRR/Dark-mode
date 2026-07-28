@@ -19,13 +19,14 @@ from .models import (
     CreateJobRequest,
     HeroPatch,
     JobPatch,
+    ModelSettings,
     RegenerateRequest,
     RepurposeRequest,
     SceneInsert,
     SceneOrder,
     ScenePatch,
 )
-from .providers import storage, tts
+from .providers import catalog, storage, tts
 from .render import kenburns, overlays as ov
 from .render import subtitles as subs
 from .render import video
@@ -55,6 +56,10 @@ async def _ensure_bucket_quietly() -> None:
 async def lifespan(app: FastAPI):
     store.init()
     store.reset_stale_jobs()
+    # Model and voice choices made in the UI are stored, not exported to the
+    # environment, so they have to be loaded back before the first request.
+    config.set_model_overrides(store.get_setting(MODELS_KEY) or {})
+    config.set_voice_overrides(store.get_setting(VOICES_KEY) or {})
     # Provisioning the remote bucket is a network call. Never put one between
     # the process starting and the server accepting requests: a wrong storage
     # URL would stall startup and the platform reports that as a failed
@@ -195,6 +200,14 @@ async def health() -> dict[str, Any]:
             "tts_provider": config.TTS_PROVIDER,
             "fps": config.FPS,
         },
+        # Which model each stage will actually call. Every one of these can be
+        # overridden by an environment variable, so the only trustworthy answer
+        # to "what is this deployment running?" is the one it reports itself.
+        "models": {
+            "text": config.model(f"{config.llm_provider()}_text"),
+            "image": config.model(f"{config.IMAGE_PROVIDER}_image"),
+            "tts": config.model(f"{config.TTS_PROVIDER}_tts"),
+        },
         "motions": list(kenburns.MOTIONS),
         "transitions": list(video.TRANSITION_CHOICES),
         "caption_templates": [
@@ -333,6 +346,66 @@ async def remove_asset(asset_id: str) -> dict[str, bool]:
     if not store.delete_asset(asset_id):
         raise HTTPException(status_code=404, detail="Layer image not found.")
     return {"deleted": True}
+
+
+# ── models and voices ─────────────────────────────────────────────────────────
+
+MODELS_KEY = "models"
+VOICES_KEY = "voices"
+
+
+def _models_out() -> dict[str, Any]:
+    return {
+        "defaults": config.model_defaults(),
+        "overrides": dict(config.MODEL_OVERRIDES),
+        "active": {key: config.model(key) for key in config.model_defaults()},
+        "stages": config.MODEL_STAGES,
+        "voices": {p: config.default_voice(p) for p in ("gemini", "openai", "elevenlabs")},
+        "in_use": {
+            "text": f"{config.llm_provider()}_text",
+            "image": f"{config.IMAGE_PROVIDER}_image",
+            "tts": f"{config.TTS_PROVIDER}_tts",
+        },
+    }
+
+
+@app.get("/api/models")
+async def get_models() -> dict[str, Any]:
+    return _models_out()
+
+
+@app.put("/api/models")
+async def put_models(body: ModelSettings) -> dict[str, Any]:
+    overrides = config.set_model_overrides(body.models)
+    voices = config.set_voice_overrides(body.voices)
+    store.set_setting(MODELS_KEY, overrides)
+    store.set_setting(VOICES_KEY, voices)
+    return _models_out()
+
+
+@app.get("/api/models/available")
+async def available_models(provider: str) -> dict[str, Any]:
+    """What this key may actually call — asked of the provider, not guessed."""
+    return await catalog.list_models(provider)
+
+
+@app.get("/api/voices")
+async def list_voices(provider: str | None = None) -> dict[str, Any]:
+    return await catalog.list_voices(provider or config.TTS_PROVIDER)
+
+
+@app.get("/api/voices/preview")
+async def preview_voice(
+    provider: str, voice_id: str, language: str = "en"
+) -> FileResponse:
+    """A short spoken sample, cached so hearing it twice costs nothing."""
+    try:
+        path = await catalog.preview(provider, voice_id, language)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user as-is
+        raise HTTPException(status_code=400, detail=str(exc)[:300]) from exc
+    media = "audio/mpeg" if path.suffix == ".mp3" else "audio/wav"
+    return FileResponse(path, media_type=media,
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 # ── brand kit ─────────────────────────────────────────────────────────────────
