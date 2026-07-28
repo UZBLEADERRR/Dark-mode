@@ -101,6 +101,15 @@ SUBTITLE_FONT = _env("SUBTITLE_FONT", "DejaVu Sans")
 MUSIC_VOLUME = float(_env("MUSIC_VOLUME", "0.10"))
 GEMINI_USE_IMAGE_CONFIG = _flag("GEMINI_USE_IMAGE_CONFIG", True)
 IMAGE_CONCURRENCY = _int("IMAGE_CONCURRENCY", 3)
+
+# How long one provider call may take, and how long all of its retries may take
+# together. The second number is the one that matters: three retries behind a
+# generous per-call timeout used to mean a single stalled scene could hold the
+# whole stage for ten minutes with nothing on screen to say so.
+TTS_TIMEOUT = float(_env("TTS_TIMEOUT", "90"))
+TTS_DEADLINE = float(_env("TTS_DEADLINE", "180"))
+IMAGE_TIMEOUT = float(_env("IMAGE_TIMEOUT", "150"))
+IMAGE_DEADLINE = float(_env("IMAGE_DEADLINE", "330"))
 TTS_CONCURRENCY = _int("TTS_CONCURRENCY", 3)
 MAX_CONCURRENT_JOBS = _int("MAX_CONCURRENT_JOBS", 1)
 

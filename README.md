@@ -385,3 +385,9 @@ app/
 - 10 daqiqalik video ≈ 90 ta sahna. Render vaqti asosan rasm generatsiyasiga
   ketadi — `IMAGE_CONCURRENCY` ni oshirsangiz tezlashadi (provayder
   rate-limitiga qarang).
+- Provayder javob bermay qolsa job muzlab qolmaydi: har bir chaqiruvning
+  `TTS_DEADLINE` / `IMAGE_DEADLINE` chegarasi bor. Ovozi chiqmagan sahna
+  `needs_voice` bo'lib qoladi va qolgan sahnalar saqlanadi — render bosqichi
+  uni qaytadan urinib ko'radi. Rasm chiqmasa gradient qo'yiladi.
+- Jarayon 45 soniyadan ortiq jim qolsa progress kartasida "To'xtatish" tugmasi
+  chiqadi. To'xtatilgan job tayyor sahnalari bilan tahrirlash bo'limida qoladi.

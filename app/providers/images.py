@@ -12,6 +12,7 @@ import base64
 import io
 import random
 from pathlib import Path
+from typing import Callable
 
 import httpx
 from PIL import Image, ImageDraw, ImageFilter
@@ -212,8 +213,15 @@ async def generate_image(
     provider: str | None = None,
     out_path: Path,
     attempts: int = 3,
+    on_retry: Callable[[int, Exception], None] | None = None,
 ) -> tuple[Path, str | None]:
-    """Generate one scene image. Returns the path and a warning if it fell back."""
+    """Generate one scene image. Returns the path and a warning if it fell back.
+
+    `IMAGE_DEADLINE` caps the whole attempt sequence. A provider that accepts the
+    request and then goes quiet is worse than one that errors: without a ceiling,
+    the retries hold this scene — and every scene queued behind it — for minutes.
+    A placeholder now beats a perfect frame that never arrives.
+    """
     provider = (provider or config.IMAGE_PROVIDER).lower()
     full_prompt = prompt
     if negative_prompt and provider in {"gemini", "openai"}:
@@ -221,34 +229,52 @@ async def generate_image(
         full_prompt = f"{prompt}\n\nDo not include: {negative_prompt}."
 
     last_error: Exception | None = None
-    timeout = httpx.Timeout(240.0, connect=30.0)
+    timeout = httpx.Timeout(config.IMAGE_TIMEOUT, connect=30.0)
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        for attempt in range(attempts):
-            try:
-                if provider == "gemini":
-                    payload = await _gemini(client, full_prompt, reference_paths, aspect)
-                elif provider == "fal":
-                    body = prompt
-                    if negative_prompt:
-                        body = f"{prompt}"
-                    payload = await _fal(client, body, reference_paths, aspect, size)
-                elif provider == "openai":
-                    payload = await _openai(client, full_prompt, reference_paths, aspect)
-                else:
-                    raise ImageError(f"Unknown image provider '{provider}'.")
+    async def run() -> Path:
+        nonlocal last_error
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for attempt in range(attempts):
+                try:
+                    if provider == "gemini":
+                        payload = await _gemini(client, full_prompt, reference_paths, aspect)
+                    elif provider == "fal":
+                        body = prompt
+                        if negative_prompt:
+                            body = f"{prompt}"
+                        payload = await _fal(client, body, reference_paths, aspect, size)
+                    elif provider == "openai":
+                        payload = await _openai(client, full_prompt, reference_paths, aspect)
+                    else:
+                        raise ImageError(f"Unknown image provider '{provider}'.")
 
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_bytes(payload)
-                # Normalise to RGB PNG so ffmpeg never trips on CMYK or alpha.
-                with Image.open(out_path) as img:
-                    img.convert("RGB").save(out_path, format="PNG")
-                return out_path, None
-            except Exception as exc:  # noqa: BLE001 - retried, then reported
-                last_error = exc
-                if attempt < attempts - 1:
-                    await asyncio.sleep(2 * (attempt + 1))
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_bytes(payload)
+                    # Normalise to RGB PNG so ffmpeg never trips on CMYK or alpha.
+                    with Image.open(out_path) as img:
+                        img.convert("RGB").save(out_path, format="PNG")
+                    return out_path
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - retried, then reported
+                    last_error = exc
+                    if attempt < attempts - 1:
+                        if on_retry:
+                            on_retry(attempt + 1, exc)
+                        await asyncio.sleep(2 * (attempt + 1))
+        raise ImageError(str(last_error))
+
+    try:
+        return await asyncio.wait_for(run(), timeout=config.IMAGE_DEADLINE), None
+    except asyncio.CancelledError:
+        raise
+    except asyncio.TimeoutError:
+        reason = f"no answer within {config.IMAGE_DEADLINE:.0f}s"
+        if last_error:
+            reason += f" (last error: {last_error})"
+    except Exception as exc:  # noqa: BLE001 - reported as a placeholder below
+        reason = str(exc)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(_placeholder(size, prompt))
-    return out_path, f"Image generation failed, used a placeholder: {last_error}"
+    return out_path, f"Image generation failed, used a placeholder: {reason}"

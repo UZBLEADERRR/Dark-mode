@@ -20,7 +20,7 @@ import shutil
 import traceback
 import unicodedata
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import config, skills, store
 from .providers import align, images, storage, tts
@@ -43,6 +43,28 @@ def _progress(job_id: str, step: str, percent: int, message: str | None = None,
               status: str = "running") -> None:
     store.update_job(job_id, status=status, step=step, progress=percent,
                      log=message or step)
+
+
+def _note(job_id: str, message: str) -> None:
+    """Add a line to the log without touching the step or the percentage.
+
+    Retries used to happen in silence, so a slow provider looked exactly like a
+    frozen app. Every note also refreshes `updated_at`, which is what the
+    progress card watches to decide whether the job has genuinely stalled.
+    """
+    store.update_job(job_id, log=message)
+
+
+def _retry_note(job_id: str, label: str) -> Callable[[int, Exception], None]:
+    def note(attempt: int, exc: Exception) -> None:
+        _note(job_id, f"{label} — attempt {attempt} failed, retrying ({_short(exc)})")
+
+    return note
+
+
+def _short(exc: Exception, limit: int = 120) -> str:
+    text = " ".join(str(exc).split()) or exc.__class__.__name__
+    return text[:limit] + "…" if len(text) > limit else text
 
 
 def _slug(text: str, limit: int = 60) -> str:
@@ -341,30 +363,50 @@ async def _voice_scenes(
     job_id: str,
     base_progress: int = 25,
     span: int = 20,
-) -> None:
-    """Synthesize `targets` (a subset of `scenes`) and refresh every start time."""
+    strict: bool = True,
+) -> list[str]:
+    """Synthesize `targets` (a subset of `scenes`) and refresh every start time.
+
+    With `strict=False` a scene that will not speak is left marked `needs_voice`
+    instead of failing the batch. That is what the draft wants: losing fifty-seven
+    good scenes because the provider went quiet on the fifty-eighth is a far worse
+    outcome than finishing with one gap the render stage can try again.
+    """
     audio_dir = workdir / "audio"
     align_provider = config.resolve_align_provider(provider)
+    warnings: list[str] = []
     done = 0
     lock = asyncio.Lock()
 
     async def one(scene: dict) -> None:
         nonlocal done
-        path, provider_words = await tts.synthesize(
-            text=scene["narration"],
-            out_path=audio_dir / f"scene_{scene['sid']}",
-            provider=provider,
-            voice_id=voice_id,
-        )
-        raw_duration = await video.probe_duration(path)
-        words = await align.words_for(
-            audio_path=path,
-            text=scene["narration"],
-            duration=raw_duration,
-            provider=align_provider,
-            language=language,
-            provider_words=provider_words,
-        )
+        try:
+            path, provider_words = await tts.synthesize(
+                text=scene["narration"],
+                out_path=audio_dir / f"scene_{scene['sid']}",
+                provider=provider,
+                voice_id=voice_id,
+                on_retry=_retry_note(job_id, f"Scene {scene['index'] + 1} voice-over"),
+            )
+            raw_duration = await video.probe_duration(path)
+            words = await align.words_for(
+                audio_path=path,
+                text=scene["narration"],
+                duration=raw_duration,
+                provider=align_provider,
+                language=language,
+                provider_words=provider_words,
+            )
+        except Exception as exc:  # noqa: BLE001 - re-raised below when strict
+            if strict:
+                raise
+            scene["needs_voice"] = True
+            async with lock:
+                done += 1
+                warnings.append(f"Scene {scene['index'] + 1} has no voice-over yet: {_short(exc)}")
+                _note(job_id, f"Scene {scene['index'] + 1} voice-over failed — carrying on")
+            return
+
         scene["audio_path"] = str(path)
         scene["audio_duration"] = raw_duration + video.SCENE_GAP
         scene["words"] = words
@@ -377,6 +419,7 @@ async def _voice_scenes(
     if targets:
         await _gather_limited([one(scene) for scene in targets], config.TTS_CONCURRENCY)
     _recompute_starts(scenes)
+    return warnings
 
 
 async def _render_images(
@@ -408,6 +451,7 @@ async def _render_images(
             size=size,
             provider=provider,
             out_path=image_dir / f"scene_{scene['sid']}.png",
+            on_retry=_retry_note(job_id, f"Scene {scene['index'] + 1} image"),
         )
         scene["image_path"] = str(path)
         scene["needs_image"] = False
@@ -551,9 +595,10 @@ async def run_draft(job_id: str) -> None:
         # --- voice ------------------------------------------------------------
         if not uploaded_audio:
             _progress(job_id, "voice", 26, "Recording the voice-over")
-            await _voice_scenes(
+            warnings += await _voice_scenes(
                 scenes=scenes, targets=scenes, workdir=workdir, provider=tts_provider,
                 voice_id=request.get("voice_id"), language=language, job_id=job_id,
+                strict=False,
             )
 
         # --- images -----------------------------------------------------------
@@ -971,6 +1016,7 @@ async def make_thumbnails(job_id: str) -> None:
                 size=(fmt["width"], fmt["height"]),
                 provider=provider,
                 out_path=workdir / "thumbs" / f"thumb_{i}.png",
+                on_retry=_retry_note(job_id, f"Thumbnail {i + 1}"),
             )
             if warning:
                 warnings.append(f"Thumbnail {i + 1}: {warning}")
@@ -1226,6 +1272,7 @@ async def run_dub(job_id: str) -> None:
                 spoken, _words = await tts.synthesize(
                     text=text, out_path=voice_dir / f"line_{index:04d}",
                     provider=provider, voice_id=request.get("voice_id"),
+                    on_retry=_retry_note(job_id, f"Line {index + 1}"),
                 )
             except Exception as exc:  # noqa: BLE001 - a lost line is not a lost video
                 warnings.append(f"Line {index + 1} could not be voiced: {exc}")

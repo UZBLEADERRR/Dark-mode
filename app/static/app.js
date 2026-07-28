@@ -27,7 +27,14 @@ const state = {
   poll: null,
   drawn: null,      // stamp of the editor currently on screen
   reveal: false,
+  mark: null,       // last `updated_at` we saw, and when we saw it —
+  markAt: 0,        // measured here so a server clock offset cannot skew it
 };
+
+// A job that has said nothing for this long is waiting on a provider, not
+// working. The first number puts a timer on screen; the second offers the exit.
+const IDLE_WARN = 20;
+const IDLE_STOP = 45;
 
 const MOTIONS = {
   zoom_in: 'Zoom in', zoom_out: 'Zoom out',
@@ -1147,6 +1154,29 @@ async function tick() {
   }
 }
 
+async function stopJob(id, button) {
+  button.disabled = true;
+  button.textContent = 'To‘xtatilmoqda…';
+  try {
+    const job = await api(`/api/jobs/${id}/cancel`, { method: 'POST' });
+    state.mark = null;
+    state.markAt = 0;
+    drawStage(job);
+    syncEditor(job);
+    if (state.poll) { clearInterval(state.poll); state.poll = null; }
+    loadJobs();
+    // Anything already made is kept, so say where it went rather than leaving
+    // the user to guess whether the last ten minutes were wasted.
+    toast(job.status === 'review'
+      ? 'To‘xtatildi — tayyor sahnalar tahrirlash bo‘limida saqlandi.'
+      : 'To‘xtatildi.');
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = 'To‘xtatish';
+    toast(e.message);
+  }
+}
+
 function drawStage(job) {
   const p = [];
   const busy = BUSY.includes(job.status);
@@ -1163,12 +1193,30 @@ function drawStage(job) {
   if (job.duration) meta.push(clock(job.duration));
   if (job.scene_count) meta.push(`${job.scene_count} sahna`);
 
+  // How long since the job last said anything. A provider that accepts a
+  // request and never answers used to look exactly like a frozen app, so the
+  // wait is now on screen — with a way out of it once it stops being normal.
+  const stamp = `${job.id}:${job.updated_at}`;
+  if (!busy) { state.mark = null; state.markAt = 0; }
+  else if (state.mark !== stamp) { state.mark = stamp; state.markAt = Date.now(); }
+  const idle = busy && state.markAt ? Math.floor((Date.now() - state.markAt) / 1000) : 0;
+
   p.push(`<div class="stage-head">
       <h2>${esc(job.title || job.topic || 'Video')}</h2>
       <span class="stage-pct">${job.progress}%</span>
     </div>
     <div class="track ${esc(job.status)}${busy ? ' live' : ''}"><i style="width:${job.progress}%"></i></div>
     <p class="step${busy ? ' busy' : ''}">${esc(meta.join(' · '))}</p>`);
+
+  if (busy && idle >= IDLE_WARN) {
+    p.push(`<div class="stall${idle >= IDLE_STOP ? ' long' : ''}">
+      <span>${idle >= IDLE_STOP
+        ? `Provayder ${idle} soniyadan beri javob bermayapti.`
+        : `Kutilmoqda… ${idle} s`}</span>
+      ${idle >= IDLE_STOP
+        ? `<button class="btn ghost sm" data-stop="${esc(job.id)}">To‘xtatish</button>` : ''}
+    </div>`);
+  }
 
   if (job.status === 'failed' && job.error) p.push(`<p class="msg err">${esc(job.error)}</p>`);
   (job.warnings || []).forEach((w) => p.push(`<p class="msg warn">${esc(w)}</p>`));
@@ -1203,6 +1251,7 @@ function drawStage(job) {
 
   $('#stage').innerHTML = p.join('');
   $$('#stage [data-go]').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
+  $$('#stage [data-stop]').forEach((b) => b.addEventListener('click', () => stopJob(b.dataset.stop, b)));
 
   // The log grows downwards, so without this the newest line is the one you
   // cannot see — which is the whole reason for watching it.

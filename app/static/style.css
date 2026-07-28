@@ -538,6 +538,23 @@ input[type="range"]::-moz-range-thumb {
 .btn.primary:hover { filter: brightness(1.08); border-color: transparent; }
 .btn.ghost { background: none; color: var(--muted); }
 .btn.ghost:hover { color: var(--text); }
+.btn.sm { padding: 7px 12px; font-size: .78rem; }
+.btn:disabled { opacity: .5; pointer-events: none; }
+
+/* Shown only once a job has gone quiet for longer than it should have. It
+   starts as a patient timer and only turns into an exit when the wait is
+   clearly not normal, so a merely slow provider never reads as a failure. */
+.stall {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 10px; padding: 9px 12px; border-radius: var(--r-sm);
+  background: var(--raised); color: var(--muted);
+  font-size: .8rem; font-variant-numeric: tabular-nums;
+  animation: drop .3s var(--ease);
+}
+.stall.long { background: rgba(255, 189, 82, .1); color: #ffd79a; }
+.stall .btn { flex: none; }
+.stall.long .btn { color: #ffd79a; border-color: rgba(255, 189, 82, .35); }
+.stall.long .btn:hover { background: rgba(255, 189, 82, .14); border-color: rgba(255, 189, 82, .6); }
 
 .fold { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 .fold summary {

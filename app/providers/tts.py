@@ -11,6 +11,7 @@ import base64
 import re
 import struct
 from pathlib import Path
+from typing import Callable
 
 import httpx
 
@@ -204,28 +205,50 @@ async def synthesize(
     provider: str | None = None,
     voice_id: str | None = None,
     attempts: int = 3,
+    on_retry: Callable[[int, Exception], None] | None = None,
 ) -> tuple[Path, list[dict]]:
+    """Speak one line. Retries a stalled provider, but not for ever.
+
+    `TTS_DEADLINE` bounds the whole attempt sequence, because the failure that
+    actually hurts is not an error — it is a provider that accepts the request
+    and never answers. Without a ceiling, three retries behind a generous
+    per-call timeout hold the line, and every line queued behind it, for many
+    minutes with nothing to show for the wait.
+    """
     provider = (provider or config.TTS_PROVIDER).lower()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    timeout = httpx.Timeout(180.0, connect=30.0)
+    timeout = httpx.Timeout(config.TTS_TIMEOUT, connect=20.0)
     last_error: Exception | None = None
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        for attempt in range(attempts):
-            try:
-                if provider == "elevenlabs":
-                    return await _elevenlabs(client, text, out_path, voice_id)
-                if provider == "openai":
-                    return await _openai(client, text, out_path, voice_id)
-                if provider == "gemini":
-                    return await _gemini(client, text, out_path, voice_id)
-                raise TTSError(f"Unknown TTS provider '{provider}'.")
-            except Exception as exc:  # noqa: BLE001 - retried below
-                last_error = exc
-                if attempt < attempts - 1:
-                    await asyncio.sleep(2 * (attempt + 1))
+    async def run() -> tuple[Path, list[dict]]:
+        nonlocal last_error
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for attempt in range(attempts):
+                try:
+                    if provider == "elevenlabs":
+                        return await _elevenlabs(client, text, out_path, voice_id)
+                    if provider == "openai":
+                        return await _openai(client, text, out_path, voice_id)
+                    if provider == "gemini":
+                        return await _gemini(client, text, out_path, voice_id)
+                    raise TTSError(f"Unknown TTS provider '{provider}'.")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - retried below
+                    last_error = exc
+                    if attempt < attempts - 1:
+                        if on_retry:
+                            on_retry(attempt + 1, exc)
+                        await asyncio.sleep(2 * (attempt + 1))
+        raise TTSError(f"Voice generation failed after {attempts} attempts: {last_error}")
 
-    raise TTSError(f"Voice generation failed after {attempts} attempts: {last_error}")
+    try:
+        return await asyncio.wait_for(run(), timeout=config.TTS_DEADLINE)
+    except asyncio.TimeoutError as exc:
+        raise TTSError(
+            f"The voice provider did not answer within {config.TTS_DEADLINE:.0f}s"
+            + (f" (last error: {last_error})" if last_error else "")
+        ) from exc
 
 
 def available_providers() -> list[str]:
