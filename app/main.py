@@ -32,14 +32,25 @@ _job_slots = asyncio.Semaphore(max(1, config.MAX_CONCURRENT_JOBS))
 _running: set[asyncio.Task] = set()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    store.init()
-    store.reset_stale_jobs()
+async def _ensure_bucket_quietly() -> None:
     try:
         await storage.ensure_bucket()
     except Exception:  # noqa: BLE001 - remote storage is optional
         pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    store.init()
+    store.reset_stale_jobs()
+    # Provisioning the remote bucket is a network call. Never put one between
+    # the process starting and the server accepting requests: a wrong storage
+    # URL would stall startup and the platform reports that as a failed
+    # healthcheck, which looks nothing like the actual misconfiguration.
+    if storage.backend() != "local":
+        task = asyncio.create_task(_ensure_bucket_quietly())
+        _running.add(task)
+        task.add_done_callback(_running.discard)
     yield
 
 
@@ -141,6 +152,12 @@ async def favicon() -> RedirectResponse:
 
 
 # ── health ────────────────────────────────────────────────────────────────────
+
+@app.get("/health", include_in_schema=False)
+async def health_alias() -> dict[str, Any]:
+    """Alias for platforms whose healthcheck defaults to /health."""
+    return await health()
+
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
