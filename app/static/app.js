@@ -1,8 +1,8 @@
 /* AI Video Studio — frontend.
-   Single page: submit a job, then poll it until the MP4 is ready. */
+   Submit a topic, watch it build, edit the scenes, download the MP4. */
 
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
 const state = {
   health: null,
@@ -10,27 +10,36 @@ const state = {
   music: [],
   jobs: [],
   motions: [],
+  format: '16:9',
   activeId: null,
   poll: null,
-  editorFor: null,   // job id whose scenes are currently drawn in the editor
+  drawn: null,      // stamp of the editor currently on screen
 };
 
-const MOTION_LABELS = {
-  zoom_in: 'Zoom in (yaqinlashish)',
-  zoom_out: 'Zoom out (uzoqlashish)',
-  pan_left: 'Chapga surilish',
-  pan_right: 'O‘ngga surilish',
-  pan_up: 'Yuqoriga surilish',
-  pan_down: 'Pastga surilish',
-  zoom_in_pan_right: 'Zoom in + o‘ngga',
+const MOTIONS = {
+  zoom_in: 'Zoom in',
+  zoom_out: 'Zoom out',
+  pan_left: 'Chapga',
+  pan_right: "O'ngga",
+  pan_up: 'Yuqoriga',
+  pan_down: 'Pastga',
+  zoom_in_pan_right: "Zoom in + o'ngga",
   zoom_out_pan_left: 'Zoom out + chapga',
 };
 
-// ── api ───────────────────────────────────────────────────────────
+const STATUS = {
+  queued: 'navbatda', running: 'ishlayapti', rendering: 'render',
+  review: "ko'rib chiqish", done: 'tayyor', failed: 'xato',
+};
+
+const BUSY = ['queued', 'running', 'rendering'];
+const SETTLED = ['done', 'failed', 'review'];
+
+// ── utils ─────────────────────────────────────────────────────────
 async function api(path, options = {}) {
   const res = await fetch(path, options);
   let body = null;
-  try { body = await res.json(); } catch { /* empty body */ }
+  try { body = await res.json(); } catch { /* no body */ }
   if (!res.ok) throw new Error(body?.error || body?.detail || `${res.status} ${res.statusText}`);
   return body;
 }
@@ -38,208 +47,219 @@ async function api(path, options = {}) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const clock = (seconds) => {
-  const s = Math.max(0, Math.round(seconds || 0));
+const clock = (sec) => {
+  const s = Math.max(0, Math.round(sec || 0));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-// ── tabs ──────────────────────────────────────────────────────────
-$$('.tab').forEach((tab) => {
-  tab.addEventListener('click', () => {
-    $$('.tab').forEach((t) => t.classList.toggle('is-active', t === tab));
-    $$('.panel').forEach((p) => p.classList.toggle('is-active', p.id === `tab-${tab.dataset.tab}`));
-    if (tab.dataset.tab === 'jobs') loadJobs();
-    if (tab.dataset.tab === 'library') { loadHeroes(); loadMusic(); }
-  });
-});
+const durationLabel = (s) =>
+  s < 60 ? `${s} son` : `${(s / 60) % 1 ? (s / 60).toFixed(1) : s / 60} daq`;
+
+// ── sheets ────────────────────────────────────────────────────────
+function openSheet(name) {
+  $('#scrim').classList.add('on');
+  $(`#sheet-${name}`).classList.add('on');
+  $(`#sheet-${name}`).setAttribute('aria-hidden', 'false');
+  if (name === 'jobs') loadJobs();
+}
+function closeSheets() {
+  $('#scrim').classList.remove('on');
+  $$('.sheet').forEach((s) => { s.classList.remove('on'); s.setAttribute('aria-hidden', 'true'); });
+}
+$$('[data-open]').forEach((b) => b.addEventListener('click', () => openSheet(b.dataset.open)));
+$$('[data-close]').forEach((b) => b.addEventListener('click', closeSheets));
+$('#scrim').addEventListener('click', closeSheets);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheets(); });
+
+addEventListener('scroll', () => $('.bar').classList.toggle('stuck', scrollY > 8), { passive: true });
 
 // ── health ────────────────────────────────────────────────────────
 async function loadHealth() {
-  const health = await api('/api/health');
-  state.health = health;
+  const h = await api('/api/health');
+  state.health = h;
+  state.motions = h.motions || [];
 
-  state.motions = health.motions || [];
+  // format segmented control, each option drawn at its true aspect
+  $('#format-seg').innerHTML = h.formats.map((f) => {
+    const [a, b] = f.id.split(':').map(Number);
+    const scale = 15 / Math.max(a, b);
+    return `<button type="button" data-fmt="${esc(f.id)}" aria-pressed="${f.id === state.format}">
+      <i style="width:${(a * scale).toFixed(1)}px;height:${(b * scale).toFixed(1)}px"></i>${esc(f.id)}</button>`;
+  }).join('');
+  $$('#format-seg button').forEach((b) => b.addEventListener('click', () => {
+    state.format = b.dataset.fmt;
+    $$('#format-seg button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+  }));
 
-  const pills = [
-    ['ffmpeg', health.ffmpeg],
-    [`skript: ${health.llm_provider}`, health.llm],
-    ['transkripsiya', health.transcription],
-  ];
-  for (const [name, ready] of Object.entries(health.image_providers)) pills.push([`rasm: ${name}`, ready]);
-  for (const [name, ready] of Object.entries(health.tts_providers)) pills.push([`ovoz: ${name}`, ready]);
-
-  $('#health').innerHTML = pills
-    .map(([label, ok]) => `<span class="pill ${ok ? 'on' : 'off'}">${esc(label)}</span>`)
-    .join('');
-
-  $('#format-select').innerHTML = health.formats
-    .map((f) => `<option value="${esc(f.id)}">${esc(f.label)}</option>`).join('');
-
-  $('#language-select').innerHTML = health.languages
+  $('#language').innerHTML = h.languages
     .map((l) => `<option value="${esc(l.id)}"${l.id === 'en' ? ' selected' : ''}>${esc(l.label)}</option>`)
     .join('');
 
-  const option = (name, ready, fallbackReady) =>
-    `<option value="${name}"${!ready ? ' disabled' : ''}${ready && fallbackReady === name ? ' selected' : ''}>` +
-    `${name}${ready ? '' : ' — kalit yo‘q'}</option>`;
+  const fill = (sel, map, preferred) => {
+    const pick = map[preferred] ? preferred : Object.keys(map).find((k) => map[k]);
+    $(sel).innerHTML = Object.entries(map).map(([n, ok]) =>
+      `<option value="${n}"${ok ? '' : ' disabled'}${n === pick ? ' selected' : ''}>${n}${ok ? '' : ' — kalit yo‘q'}</option>`
+    ).join('');
+  };
+  fill('#image_provider', h.image_providers, h.defaults.image_provider);
+  fill('#tts_provider', h.tts_providers, h.defaults.tts_provider);
 
-  const firstReady = (map, preferred) =>
-    (map[preferred] ? preferred : Object.keys(map).find((k) => map[k])) || preferred;
+  const checks = [
+    ['ffmpeg', h.ffmpeg],
+    [`skript — ${h.llm_provider}`, h.llm],
+    ['transkripsiya', h.transcription],
+    ...Object.entries(h.image_providers).map(([n, v]) => [`rasm — ${n}`, v]),
+    ...Object.entries(h.tts_providers).map(([n, v]) => [`ovoz — ${n}`, v]),
+    [`saqlash — ${h.storage}`, true],
+  ];
+  $('#health-list').innerHTML = checks.map(([label, ok]) =>
+    `<div class="row"><span>${esc(label)}</span><span class="tag ${ok ? 'done' : 'failed'}">${ok ? 'bor' : 'yo‘q'}</span></div>`
+  ).join('');
 
-  const imgPreferred = firstReady(health.image_providers, health.defaults.image_provider);
-  $('#image-provider').innerHTML = Object.entries(health.image_providers)
-    .map(([name, ready]) => option(name, ready, imgPreferred)).join('');
-
-  const ttsPreferred = firstReady(health.tts_providers, health.defaults.tts_provider);
-  $('#tts-provider').innerHTML = Object.entries(health.tts_providers)
-    .map(([name, ready]) => option(name, ready, ttsPreferred)).join('');
+  const core = h.ffmpeg && h.llm && Object.values(h.image_providers).some(Boolean);
+  const voice = Object.values(h.tts_providers).some(Boolean);
+  $('#health-dot').className = `health-dot ${core && voice ? 'ok' : core ? 'part' : 'bad'}`;
+  $('#health-dot').title = core && voice ? 'Hammasi tayyor'
+    : core ? 'Ovoz provayderi sozlanmagan' : 'Sozlash kerak';
 }
 
 // ── heroes ────────────────────────────────────────────────────────
 async function loadHeroes() {
   state.heroes = await api('/api/heroes');
-  renderHeroPicker();
-  renderHeroLibrary();
-}
 
-function renderHeroPicker() {
-  const box = $('#hero-picker');
-  if (!state.heroes.length) {
-    box.innerHTML = '<p class="muted">Hali hero yuklanmagan — «Herolar va musiqa» bo‘limidan qo‘shing.</p>';
-    return;
-  }
-  box.innerHTML = state.heroes.map((h) => `
-    <label class="hero-chip" data-id="${esc(h.id)}">
+  $('#hero-picker').innerHTML = state.heroes.map((h) => `
+    <label class="hero-chip" title="${esc(h.name)}">
       <input type="checkbox" value="${esc(h.id)}" />
       <img src="${esc(h.url)}" alt="${esc(h.name)}" loading="lazy" />
-      <span>${esc(h.name)}</span>
     </label>`).join('');
-
   $$('#hero-picker .hero-chip').forEach((chip) => {
     const input = $('input', chip);
-    input.addEventListener('change', () => chip.classList.toggle('checked', input.checked));
+    input.addEventListener('change', () => chip.classList.toggle('on', input.checked));
   });
-}
 
-function renderHeroLibrary() {
-  const box = $('#hero-list');
-  if (!state.heroes.length) { box.innerHTML = '<p class="muted">Bo‘sh.</p>'; return; }
-  box.innerHTML = state.heroes.map((h) => `
-    <div class="hero-card">
-      <img src="${esc(h.url)}" alt="${esc(h.name)}" loading="lazy" />
-      <div class="body">
-        <b>${esc(h.name)}</b>
-        <p>${esc(h.description || '—')}</p>
-        <button class="ghost danger" data-del-hero="${esc(h.id)}">O‘chirish</button>
-      </div>
-    </div>`).join('');
+  $('#hero-list').innerHTML = state.heroes.length
+    ? state.heroes.map((h) => `
+        <div class="lib-card">
+          <img src="${esc(h.url)}" alt="${esc(h.name)}" loading="lazy" />
+          <button class="x" data-del-hero="${esc(h.id)}" aria-label="O‘chirish">×</button>
+          <b>${esc(h.name)}</b>
+        </div>`).join('')
+    : '<p class="empty">Hali hero yo‘q.</p>';
 
-  $$('[data-del-hero]').forEach((btn) => btn.addEventListener('click', async () => {
+  $$('[data-del-hero]').forEach((b) => b.addEventListener('click', async () => {
     if (!confirm('Bu heroni o‘chirasizmi?')) return;
-    await api(`/api/heroes/${btn.dataset.delHero}`, { method: 'DELETE' });
+    await api(`/api/heroes/${b.dataset.delHero}`, { method: 'DELETE' });
     loadHeroes();
   }));
 }
-
-$('#hero-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = event.target;
-  const button = $('button', form);
-  button.disabled = true;
-  try {
-    await api('/api/heroes', { method: 'POST', body: new FormData(form) });
-    form.reset();
-    loadHeroes();
-  } catch (err) {
-    alert(err.message);
-  } finally {
-    button.disabled = false;
-  }
-});
 
 // ── music ─────────────────────────────────────────────────────────
 async function loadMusic() {
   state.music = await api('/api/music');
-  $('#music-select').innerHTML = '<option value="">— yo‘q —</option>' +
+  $('#music_id').innerHTML = '<option value="">— yo‘q —</option>' +
     state.music.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
   $('#music-list').innerHTML = state.music.length
-    ? state.music.map((m) => `
-        <div class="job">
-          <div><b>${esc(m.name)}</b></div>
-          <button class="ghost danger" data-del-music="${esc(m.id)}">O‘chirish</button>
-        </div>`).join('')
-    : '<p class="muted">Bo‘sh.</p>';
-
-  $$('[data-del-music]').forEach((btn) => btn.addEventListener('click', async () => {
-    await api(`/api/music/${btn.dataset.delMusic}`, { method: 'DELETE' });
+    ? state.music.map((m) => `<div class="row"><span>${esc(m.name)}</span>
+        <button class="x" data-del-music="${esc(m.id)}" aria-label="O‘chirish">×</button></div>`).join('')
+    : '<p class="empty">Hali musiqa yo‘q.</p>';
+  $$('[data-del-music]').forEach((b) => b.addEventListener('click', async () => {
+    await api(`/api/music/${b.dataset.delMusic}`, { method: 'DELETE' });
     loadMusic();
   }));
 }
 
-$('#music-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = event.target;
+// file inputs show the chosen name
+$$('.file input').forEach((i) => i.addEventListener('change', () => {
+  const label = i.closest('.file');
+  const name = i.files[0]?.name;
+  label.classList.toggle('has', !!name);
+  if (name) $('span', label).textContent = name;
+}));
+
+async function submitLibraryForm(form, url, reload) {
   const button = $('button', form);
   button.disabled = true;
   try {
-    await api('/api/music', { method: 'POST', body: new FormData(form) });
+    await api(url, { method: 'POST', body: new FormData(form) });
     form.reset();
-    loadMusic();
+    $$('.file', form).forEach((l) => {
+      l.classList.remove('has');
+      $('span', l).textContent = l.querySelector('input').accept.startsWith('image')
+        ? 'Rasm tanlash' : 'Audio tanlash';
+    });
+    await reload();
   } catch (err) {
     alert(err.message);
   } finally {
     button.disabled = false;
   }
+}
+$('#hero-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  submitLibraryForm(e.target, '/api/heroes', loadHeroes);
+});
+$('#music-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  submitLibraryForm(e.target, '/api/music', loadMusic);
 });
 
-// ── create form ───────────────────────────────────────────────────
+// ── composer ──────────────────────────────────────────────────────
 const duration = $('#duration');
-const setDurationLabel = () => {
-  const seconds = Number(duration.value);
-  $('#duration-label').textContent =
-    seconds < 60 ? `${seconds} soniya` : `${(seconds / 60).toFixed(seconds % 60 ? 1 : 0)} daqiqa`;
-};
-duration.addEventListener('input', setDurationLabel);
-setDurationLabel();
+const syncDuration = () => { $('#duration-label').textContent = durationLabel(Number(duration.value)); };
+duration.addEventListener('input', syncDuration);
+syncDuration();
 
-$('#use-upload').addEventListener('change', (event) => {
-  const uploading = event.target.checked;
-  $('#audio-field').classList.toggle('hidden', !uploading);
-  $('#duration-field').classList.toggle('hidden', uploading);
-  $('#tts-provider').closest('.field').classList.toggle('hidden', uploading);
+$('#topic').addEventListener('input', (e) => {
+  e.target.style.height = 'auto';
+  e.target.style.height = `${Math.min(e.target.scrollHeight, 220)}px`;
 });
 
-$('#create-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = event.target;
-  const button = $('#submit-btn');
-  const errorBox = $('#create-error');
-  errorBox.classList.add('hidden');
-  button.disabled = true;
-  button.textContent = 'Yuborilmoqda…';
+$('#use_upload').addEventListener('change', (e) => {
+  const up = e.target.checked;
+  $('#audio-field').classList.toggle('hidden', !up);
+  $('#duration-row').classList.toggle('hidden', up);
+  $('#tts-field').classList.toggle('hidden', up);
+});
 
+$('#submit-btn').addEventListener('click', async () => {
+  const btn = $('#submit-btn');
+  const err = $('#create-error');
+  err.classList.add('hidden');
+
+  const topic = $('#topic').value.trim();
+  if (topic.length < 2) {
+    err.textContent = 'Avval mavzuni yozing.';
+    err.classList.remove('hidden');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Yuborilmoqda…';
   const heroIds = $$('#hero-picker input:checked').map((i) => i.value);
-  const data = new FormData(form);
-  const uploading = $('#use-upload').checked;
-  const autoRender = !$('#review-first').checked;
+  const uploading = $('#use_upload').checked;
+  const autoRender = !$('#review_first').checked;
+
+  const common = {
+    topic,
+    video_format: state.format,
+    language: $('#language').value,
+    art_style: $('#art_style').value,
+    tone: $('#tone').value,
+    subtitle_style: $('#subtitle_style').value,
+    burn_subtitles: $('#burn_subtitles').checked,
+    auto_render: autoRender,
+  };
 
   try {
     let job;
     if (uploading) {
-      const file = $('#audio-file').files[0];
+      const file = $('#audio_file').files[0];
       if (!file) throw new Error('Audio fayl tanlanmagan.');
       const body = new FormData();
-      body.append('topic', data.get('topic'));
-      body.append('video_format', data.get('video_format'));
-      body.append('language', data.get('language'));
-      body.append('art_style', data.get('art_style'));
-      body.append('tone', data.get('tone'));
+      Object.entries(common).forEach(([k, v]) => body.append(k, String(v)));
       body.append('hero_ids', heroIds.join(','));
-      body.append('subtitle_style', data.get('subtitle_style'));
-      body.append('burn_subtitles', form.burn_subtitles.checked ? 'true' : 'false');
-      body.append('auto_render', autoRender ? 'true' : 'false');
-      if (data.get('image_provider')) body.append('image_provider', data.get('image_provider'));
-      if (data.get('music_id')) body.append('music_id', data.get('music_id'));
+      if ($('#image_provider').value) body.append('image_provider', $('#image_provider').value);
+      if ($('#music_id').value) body.append('music_id', $('#music_id').value);
       body.append('audio', file);
       job = await api('/api/jobs/with-audio', { method: 'POST', body });
     } else {
@@ -247,176 +267,216 @@ $('#create-form').addEventListener('submit', async (event) => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          topic: data.get('topic'),
-          video_format: data.get('video_format'),
-          language: data.get('language'),
-          target_seconds: Number(data.get('target_seconds')),
-          art_style: data.get('art_style'),
-          tone: data.get('tone'),
+          ...common,
+          target_seconds: Number(duration.value),
           hero_ids: heroIds,
-          image_provider: data.get('image_provider') || null,
-          tts_provider: data.get('tts_provider') || null,
-          music_id: data.get('music_id') || null,
-          subtitle_style: data.get('subtitle_style'),
-          burn_subtitles: form.burn_subtitles.checked,
-          auto_render: autoRender,
+          image_provider: $('#image_provider').value || null,
+          tts_provider: $('#tts_provider').value || null,
+          music_id: $('#music_id').value || null,
         }),
       });
     }
-    watch(job.id);
-  } catch (err) {
-    errorBox.textContent = err.message;
-    errorBox.classList.remove('hidden');
+    watch(job.id, { reveal: true });
+  } catch (e) {
+    err.textContent = e.message;
+    err.classList.remove('hidden');
   } finally {
-    button.disabled = false;
-    button.textContent = 'Video yaratish';
+    btn.disabled = false;
+    btn.textContent = 'Video yaratish';
   }
 });
 
-// ── active job ────────────────────────────────────────────────────
-function watch(jobId) {
+// ── watch a job ───────────────────────────────────────────────────
+function watch(jobId, { reveal = false } = {}) {
   state.activeId = jobId;
-  $('#active-empty').classList.add('hidden');
-  $('#active').classList.remove('hidden');
+  state.drawn = null;
+  // Scrolling here would aim at an empty card — the first tick has not drawn
+  // anything yet. Defer it to drawStage, once there is something to land on.
+  state.reveal = reveal;
+  $('#stage').classList.remove('hidden');
   if (state.poll) clearInterval(state.poll);
   tick();
   state.poll = setInterval(tick, 2500);
 }
 
-const SETTLED = ['done', 'failed', 'review'];
-
 async function tick() {
   if (!state.activeId) return;
   try {
     const job = await api(`/api/jobs/${state.activeId}`);
-    renderActive(job);
+    drawStage(job);
     syncEditor(job);
     if (SETTLED.includes(job.status)) {
       clearInterval(state.poll);
       state.poll = null;
       loadJobs();
     }
-  } catch (err) {
+  } catch (e) {
     clearInterval(state.poll);
     state.poll = null;
-    $('#active').innerHTML = `<p class="error">${esc(err.message)}</p>`;
+    $('#stage').innerHTML = `<p class="msg err">${esc(e.message)}</p>`;
+  }
+}
+
+function drawStage(job) {
+  const p = [];
+  const busy = BUSY.includes(job.status);
+
+  // The raw step name is only worth showing while something is moving —
+  // once settled it just repeats the status word next to it.
+  const meta = [STATUS[job.status] || job.status];
+  if (busy && job.step && job.step !== job.status) meta.push(job.step);
+  if (job.duration) meta.push(clock(job.duration));
+  if (job.scene_count) meta.push(`${job.scene_count} sahna`);
+
+  p.push(`<div class="stage-head">
+      <h2>${esc(job.title || job.topic || 'Video')}</h2>
+      <span class="stage-pct">${job.progress}%</span>
+    </div>
+    <div class="track ${esc(job.status)}"><i style="width:${job.progress}%"></i></div>
+    <p class="step">${esc(meta.join(' · '))}</p>`);
+
+  if (job.status === 'failed' && job.error) p.push(`<p class="msg err">${esc(job.error)}</p>`);
+  (job.warnings || []).forEach((w) => p.push(`<p class="msg warn">${esc(w)}</p>`));
+
+  if (job.status === 'done' && job.video_url) {
+    p.push(`<video controls playsinline preload="metadata" src="${esc(job.video_url)}"></video>
+      <div class="acts">
+        <a class="btn primary" href="${esc(job.download_url || job.video_url)}" download>Videoni yuklab olish</a>
+        ${job.subtitle_url ? `<a class="btn" href="${esc(job.subtitle_url)}" download>Subtitr .srt</a>` : ''}
+      </div>`);
+  }
+
+  const m = job.metadata;
+  if (m?.title) {
+    p.push(`<details class="fold"><summary>YouTube uchun matnlar</summary><div class="fold-body kv">
+      <h4>Sarlavha</h4><pre>${esc(m.title)}</pre>
+      ${m.description ? `<h4>Tavsif</h4><pre>${esc(m.description)}</pre>` : ''}
+      ${m.tags?.length ? `<h4>Teglar</h4><div class="tags">${m.tags.map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : ''}
+      ${m.thumbnail_prompt ? `<h4>Thumbnail prompt</h4><pre>${esc(m.thumbnail_prompt)}</pre>` : ''}
+    </div></details>`);
+  }
+
+  if (job.logs?.length) {
+    p.push(`<details class="fold"${busy ? ' open' : ''}><summary>Jurnal</summary>
+      <div class="fold-body"><div class="logs">${esc(job.logs.join('\n'))}</div></div></details>`);
+  }
+
+  $('#stage').innerHTML = p.join('');
+
+  if (state.reveal) {
+    state.reveal = false;
+    // One frame later: the card was only just given its content, and scrolling
+    // to an element the browser has not laid out yet lands in the wrong place.
+    requestAnimationFrame(() =>
+      $('#stage').scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }
 }
 
 // ── scene editor ──────────────────────────────────────────────────
 function syncEditor(job) {
-  const editable = (job.status === 'review' || job.status === 'done') && job.scenes?.length;
-  $('#editor').classList.toggle('hidden', !editable);
-  if (!editable) { state.editorFor = null; return; }
+  const on = (job.status === 'review' || job.status === 'done') && job.scenes?.length;
+  $('#editor').classList.toggle('hidden', !on);
+  if (!on) { state.drawn = null; return; }
 
+  $('#editor-title').textContent = `Sahnalar · ${job.scenes.length}`;
   $('#editor-note').textContent = job.status === 'review'
-    ? 'Matn, prompt yoki kamera harakatini o‘zgartiring. Tayyor bo‘lsa render qiling.'
-    : 'Video tayyor. O‘zgartirish kiritsangiz qayta render qilishingiz mumkin.';
-  $('#render-btn').textContent = job.status === 'review'
-    ? '🎬 Videoni render qilish' : '🎬 Qayta render qilish';
+    ? 'Kartaga bosib tahrirlang, keyin render qiling.'
+    : 'Video tayyor. O‘zgartirsangiz qayta render qiling.';
+  $('#render-btn').textContent = job.status === 'review' ? 'Render qilish' : 'Qayta render';
 
-  // Only redraw when the job changed — otherwise polling would wipe out
-  // whatever the user is in the middle of typing.
+  // Never redraw over someone who is typing.
   const stamp = `${job.id}:${job.updated_at}`;
-  if (state.editorFor === stamp) return;
-  if (state.editorFor?.startsWith(`${job.id}:`) && document.activeElement?.closest('.ed-scene')) return;
-  state.editorFor = stamp;
+  if (state.drawn === stamp) return;
+  if (state.drawn?.startsWith(`${job.id}:`) && document.activeElement?.closest('.sc')) return;
+  state.drawn = stamp;
   drawEditor(job);
 }
 
 function drawEditor(job) {
-  const motions = state.motions.length ? state.motions : Object.keys(MOTION_LABELS);
+  const motions = state.motions.length ? state.motions : Object.keys(MOTIONS);
+  const open = new Set($$('#editor-scenes .sc.open').map((el) => el.dataset.i));
 
-  $('#editor-scenes').innerHTML = job.scenes.map((s) => `
-    <div class="ed-scene${s.needs_image || s.needs_voice ? ' dirty' : ''}" data-index="${s.index}">
-      ${s.image_url ? `<img src="${esc(s.image_url)}" alt="" loading="lazy" />` : ''}
-      <div class="ed-body">
-        <div class="ed-head">
-          <b>Sahna ${s.index + 1}</b>
-          <small>${clock(s.start)} · ${s.duration.toFixed(1)}s
-            ${s.needs_image ? '<span class="flag">rasm eskirgan</span>' : ''}
-            ${s.needs_voice ? '<span class="flag">ovoz eskirgan</span>' : ''}</small>
-        </div>
+  $('#editor-scenes').innerHTML = job.scenes.map((s) => {
+    const stale = s.needs_image || s.needs_voice;
+    return `
+    <article class="sc${stale ? ' stale' : ''}${open.has(String(s.index)) ? ' open' : ''}" data-i="${s.index}">
+      <figure class="sc-top">
+        ${s.image_url ? `<img src="${esc(s.image_url)}" alt="" loading="lazy" />` : ''}
+        ${stale ? `<span class="sc-flag">${s.needs_image ? 'rasm' : 'ovoz'} eskirgan</span>` : ''}
+        <figcaption>
+          <span class="sc-n">${s.index + 1}</span>
+          <span class="sc-t">${clock(s.start)} · ${s.duration.toFixed(1)}s</span>
+        </figcaption>
+      </figure>
 
-        <div>
-          <label>Matn (ovoz va subtitr)</label>
-          <textarea data-f="narration" rows="3">${esc(s.narration)}</textarea>
-        </div>
+      <p class="sc-line">${esc(s.narration)}</p>
 
-        <div>
-          <label>Rasm prompti</label>
-          <textarea data-f="image_prompt" rows="3">${esc(s.image_prompt)}</textarea>
-        </div>
-
-        <div class="row">
-          <div>
-            <label>Kamera harakati</label>
+      <div class="sc-edit">
+        <label class="f"><span>Matn — ovoz va subtitr</span>
+          <textarea data-f="narration" rows="3">${esc(s.narration)}</textarea></label>
+        <label class="f"><span>Rasm prompti</span>
+          <textarea data-f="image_prompt" rows="3">${esc(s.image_prompt)}</textarea></label>
+        <div class="f2">
+          <label class="f"><span>Kamera</span>
             <select data-f="motion">${motions.map((m) =>
-              `<option value="${esc(m)}"${m === s.motion ? ' selected' : ''}>${esc(MOTION_LABELS[m] || m)}</option>`).join('')}</select>
-          </div>
-          <div>
-            <label>Ekran yozuvi</label>
-            <input data-f="on_screen_text" value="${esc(s.on_screen_text)}" placeholder="ixtiyoriy" />
-          </div>
+              `<option value="${esc(m)}"${m === s.motion ? ' selected' : ''}>${esc(MOTIONS[m] || m)}</option>`).join('')}</select></label>
+          <label class="f"><span>Ekran yozuvi</span>
+            <input data-f="on_screen_text" value="${esc(s.on_screen_text)}" placeholder="ixtiyoriy" /></label>
         </div>
-
-        <div class="ed-actions">
-          <button class="ghost" data-act="save">💾 Saqlash</button>
-          <button class="ghost" data-act="image">🖼 Rasmni qayta</button>
-          ${job.uses_uploaded_audio ? '' : '<button class="ghost" data-act="voice">🎙 Ovozni qayta</button>'}
+        <div class="sc-acts">
+          <button class="btn primary" data-a="save">Saqlash</button>
+          <button class="btn" data-a="image">Rasmni qayta</button>
+          ${job.uses_uploaded_audio ? '' : '<button class="btn" data-a="voice">Ovozni qayta</button>'}
+          <button class="btn ghost" data-a="close">Yopish</button>
         </div>
-        <p class="error hidden" data-err></p>
+        <p class="msg err hidden" data-err></p>
       </div>
-    </div>`).join('');
+    </article>`;
+  }).join('');
 
-  $$('#editor-scenes .ed-scene').forEach((card) => {
-    const index = Number(card.dataset.index);
-    const errBox = $('[data-err]', card);
-    const fields = () => Object.fromEntries(
-      $$('[data-f]', card).map((el) => [el.dataset.f, el.value]));
+  $$('#editor-scenes .sc').forEach((card) => {
+    const index = Number(card.dataset.i);
+    const err = $('[data-err]', card);
+    const values = () => Object.fromEntries($$('[data-f]', card).map((el) => [el.dataset.f, el.value]));
 
-    const run = async (label, fn) => {
-      const buttons = $$('button', card);
-      buttons.forEach((b) => (b.disabled = true));
-      errBox.classList.add('hidden');
-      try {
-        await fn();
-      } catch (err) {
-        errBox.textContent = err.message;
-        errBox.classList.remove('hidden');
-      } finally {
-        buttons.forEach((b) => (b.disabled = false));
-      }
+    $('.sc-top', card).addEventListener('click', () => card.classList.toggle('open'));
+    $('[data-a="close"]', card).addEventListener('click', () => card.classList.remove('open'));
+
+    const guard = async (fn) => {
+      const btns = $$('.btn', card);
+      btns.forEach((b) => (b.disabled = true));
+      err.classList.add('hidden');
+      try { await fn(); } catch (e) {
+        err.textContent = e.message;
+        err.classList.remove('hidden');
+      } finally { btns.forEach((b) => (b.disabled = false)); }
     };
 
-    $('[data-act="save"]', card).addEventListener('click', () => run('save', async () => {
-      await api(`/api/jobs/${job.id}/scenes/${index}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fields()),
-      });
-      state.editorFor = null;
+    const save = () => api(`/api/jobs/${job.id}/scenes/${index}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(values()),
+    });
+
+    $('[data-a="save"]', card).addEventListener('click', () => guard(async () => {
+      await save();
+      state.drawn = null;
       tick();
     }));
 
-    const regen = (body) => run('regen', async () => {
-      await api(`/api/jobs/${job.id}/scenes/${index}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fields()),
-      });
+    const regen = (body) => guard(async () => {
+      await save();
       await api(`/api/jobs/${job.id}/scenes/${index}/regenerate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      state.editorFor = null;
+      state.drawn = null;
       watch(job.id);
     });
 
-    $('[data-act="image"]', card).addEventListener('click', () => regen({ image: true, voice: false }));
-    const voiceBtn = $('[data-act="voice"]', card);
-    if (voiceBtn) voiceBtn.addEventListener('click', () => regen({ image: false, voice: true }));
+    $('[data-a="image"]', card).addEventListener('click', () => regen({ image: true, voice: false }));
+    $('[data-a="voice"]', card)?.addEventListener('click', () => regen({ image: false, voice: true }));
   });
 }
 
@@ -426,107 +486,51 @@ $('#render-btn').addEventListener('click', async () => {
   btn.disabled = true;
   try {
     await api(`/api/jobs/${state.activeId}/render`, { method: 'POST' });
-    state.editorFor = null;
-    watch(state.activeId);
-  } catch (err) {
-    alert(err.message);
+    state.drawn = null;
+    watch(state.activeId, { reveal: true });
+  } catch (e) {
+    alert(e.message);
   } finally {
     btn.disabled = false;
   }
 });
 
-function renderActive(job) {
-  const parts = [];
-
-  parts.push(`
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-      <b>${esc(job.title || job.topic)}</b>
-      <span class="status ${esc(job.status)}">${esc(job.status)}</span>
-    </div>
-    <div class="bar"><i style="width:${job.progress}%"></i></div>
-    <small class="muted">${job.progress}% — ${esc(job.step || '')}${
-      job.duration ? ` · ${clock(job.duration)}` : ''}${
-      job.scene_count ? ` · ${job.scene_count} sahna` : ''}</small>`);
-
-  if (job.status === 'failed' && job.error) {
-    parts.push(`<p class="error">${esc(job.error)}</p>`);
-  }
-
-  (job.warnings || []).forEach((w) => parts.push(`<p class="warn">${esc(w)}</p>`));
-
-  if (job.status === 'done' && job.video_url) {
-    parts.push(`<video controls preload="metadata" src="${esc(job.video_url)}"></video>`);
-    parts.push(`
-      <div class="actions">
-        <a href="${esc(job.download_url || job.video_url)}" download>
-          <button class="ghost">⬇ Videoni yuklab olish</button></a>
-        ${job.subtitle_url ? `<a href="${esc(job.subtitle_url)}" download>
-          <button class="ghost">⬇ Subtitr (.srt)</button></a>` : ''}
-      </div>`);
-  }
-
-  const meta = job.metadata;
-  if (meta && meta.title) {
-    parts.push(`
-      <div class="meta-block">
-        <h4>YouTube sarlavhasi</h4>
-        <p>${esc(meta.title)}</p>
-        ${meta.description ? `<h4>Tavsif</h4><pre>${esc(meta.description)}</pre>` : ''}
-        ${meta.tags?.length ? `<h4>Teglar</h4><div class="tags">${
-          meta.tags.map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : ''}
-        ${meta.thumbnail_prompt ? `<h4>Thumbnail prompt</h4><pre>${esc(meta.thumbnail_prompt)}</pre>` : ''}
-      </div>`);
-  }
-
-  if (job.status === 'review') {
-    parts.push('<p class="warn">Qoralama tayyor. Pastdagi muharrirda sahnalarni ' +
-      'ko‘rib chiqing, kerak bo‘lsa tahrirlang, keyin render qiling.</p>');
-  }
-
-  if (job.logs?.length) {
-    const busy = job.status === 'running' || job.status === 'rendering';
-    parts.push(`<details${busy ? ' open' : ''}>
-      <summary>Jurnal</summary>
-      <div class="logs">${esc(job.logs.join('\n'))}</div></details>`);
-  }
-
-  $('#active').innerHTML = parts.join('');
-}
-
-// ── jobs list ─────────────────────────────────────────────────────
+// ── jobs sheet ────────────────────────────────────────────────────
 async function loadJobs() {
   state.jobs = await api('/api/jobs');
-  const box = $('#jobs-list');
-  if (!state.jobs.length) { box.innerHTML = '<p class="muted">Hali loyiha yo‘q.</p>'; return; }
 
-  box.innerHTML = state.jobs.map((job) => `
-    <div class="job" data-job="${esc(job.id)}">
-      <div>
-        <b>${esc(job.title || job.topic || job.id)}</b>
-        <small>${esc(job.video_format)} · ${esc(job.language)} · ${job.progress}%${
-          job.duration ? ` · ${clock(job.duration)}` : ''}</small>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <span class="status ${esc(job.status)}">${esc(job.status)}</span>
-        <button class="ghost danger" data-del-job="${esc(job.id)}">×</button>
-      </div>
-    </div>`).join('');
+  const live = state.jobs.filter((j) => BUSY.includes(j.status) || j.status === 'review').length;
+  $('#jobs-badge').textContent = live;
+  $('#jobs-badge').classList.toggle('hidden', !live);
 
-  $$('[data-job]').forEach((row) => row.addEventListener('click', (event) => {
-    if (event.target.closest('[data-del-job]')) return;
-    $$('.tab').forEach((t) => t.classList.toggle('is-active', t.dataset.tab === 'create'));
-    $$('.panel').forEach((p) => p.classList.toggle('is-active', p.id === 'tab-create'));
-    watch(row.dataset.job);
+  $('#jobs-list').innerHTML = state.jobs.length
+    ? state.jobs.map((j) => `
+        <div class="row tap" data-job="${esc(j.id)}">
+          <div>
+            <span>${esc(j.title || j.topic || j.id)}</span>
+            <small>${esc(j.video_format)} · ${esc(j.language)}${j.duration ? ` · ${clock(j.duration)}` : ''}</small>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="tag ${esc(j.status)}">${esc(STATUS[j.status] || j.status)}</span>
+            <button class="x" data-del-job="${esc(j.id)}" aria-label="O‘chirish">×</button>
+          </div>
+        </div>`).join('')
+    : '<p class="empty">Hali loyiha yo‘q.</p>';
+
+  $$('[data-job]').forEach((row) => row.addEventListener('click', (e) => {
+    if (e.target.closest('[data-del-job]')) return;
+    closeSheets();
+    watch(row.dataset.job, { reveal: true });
   }));
 
-  $$('[data-del-job]').forEach((btn) => btn.addEventListener('click', async (event) => {
-    event.stopPropagation();
+  $$('[data-del-job]').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
     if (!confirm('Loyihani o‘chirasizmi?')) return;
-    await api(`/api/jobs/${btn.dataset.delJob}`, { method: 'DELETE' });
-    if (state.activeId === btn.dataset.delJob) {
+    await api(`/api/jobs/${b.dataset.delJob}`, { method: 'DELETE' });
+    if (state.activeId === b.dataset.delJob) {
       state.activeId = null;
-      $('#active').classList.add('hidden');
-      $('#active-empty').classList.remove('hidden');
+      $('#stage').classList.add('hidden');
+      $('#editor').classList.add('hidden');
     }
     loadJobs();
   }));
@@ -537,11 +541,13 @@ async function loadJobs() {
   try {
     await loadHealth();
     await Promise.all([loadHeroes(), loadMusic(), loadJobs()]);
-    const resume = state.jobs.find((j) =>
-      ['running', 'queued', 'rendering', 'review'].includes(j.status));
+    // Only reattach to work that is actually moving. A draft waiting on review
+    // is not urgent, and unfolding it on load would bury the composer under a
+    // progress card and a scene grid before the user has asked for anything.
+    const resume = state.jobs.find((j) => BUSY.includes(j.status));
     if (resume) watch(resume.id);
-  } catch (err) {
+  } catch (e) {
     document.body.insertAdjacentHTML('afterbegin',
-      `<p class="error" style="margin:16px">Ilova yuklanmadi: ${esc(err.message)}</p>`);
+      `<p class="msg err" style="margin:16px">Ilova yuklanmadi: ${esc(e.message)}</p>`);
   }
 })();
