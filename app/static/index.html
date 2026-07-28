@@ -66,11 +66,7 @@
           <div class="f2">
             <label class="f"><span>Ohang</span><input id="tone" value="cinematic documentary" /></label>
             <label class="f"><span>Subtitr</span>
-              <select id="subtitle_style">
-                <option value="bold">Qalin</option>
-                <option value="karaoke">Karaoke</option>
-                <option value="clean">Toza</option>
-              </select>
+              <select id="subtitle_style"><option value="bold">Qalin</option></select>
             </label>
           </div>
 
@@ -118,15 +114,52 @@
 
     <section class="stage hidden" id="stage"></section>
 
+    <!-- ══ Studio: sahna + qatlam + subtitr tahrirlagichi ═════════════ -->
     <section class="editor hidden" id="editor">
       <div class="editor-bar">
         <div>
-          <h2 id="editor-title">Sahnalar</h2>
+          <h2 id="editor-title">Studio</h2>
           <p id="editor-note"></p>
         </div>
-        <button class="go slim" id="render-btn">Render qilish</button>
+        <div class="editor-acts">
+          <span class="saver" id="saver"></span>
+          <button class="go slim" id="render-btn">Render qilish</button>
+        </div>
       </div>
-      <div class="scenes" id="editor-scenes"></div>
+
+      <div class="studio">
+        <div class="canvas-wrap">
+          <div class="canvas" id="canvas">
+            <img id="canvas-img" alt="" />
+            <div class="ov-layer" id="ov-layer"></div>
+            <div class="cap-sample" id="cap-sample"><span></span></div>
+            <div class="canvas-empty" id="canvas-empty">Sahna tanlanmagan</div>
+          </div>
+          <div class="canvas-tools">
+            <button class="tool" data-add="text">
+              <svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v12"/></svg>Matn</button>
+            <label class="tool" data-add="image">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 15l5-4 4 3 3-2 6 5"/></svg>Rasm
+              <input type="file" accept="image/*" hidden id="layer-file" />
+            </label>
+            <span class="canvas-time" id="canvas-time"></span>
+          </div>
+        </div>
+
+        <div class="filmstrip" id="filmstrip"></div>
+
+        <div class="panel">
+          <div class="panel-tabs" id="panel-tabs">
+            <button data-tab="scene" aria-pressed="true">Sahna</button>
+            <button data-tab="layers">Qatlamlar</button>
+            <button data-tab="caption">Subtitr</button>
+          </div>
+          <div class="panel-body" id="tab-scene"></div>
+          <div class="panel-body hidden" id="tab-layers"></div>
+          <div class="panel-body hidden" id="tab-caption"></div>
+          <p class="msg err hidden" id="editor-error"></p>
+        </div>
+      </div>
     </section>
   </section>
 
@@ -156,6 +189,15 @@
       <button>Qo'shish</button>
     </form>
     <div class="lib-grid" id="hero-list"></div>
+
+    <h3>Qatlam rasmlari</h3>
+    <p class="hint">Stiker, logotip, kesilgan rasm — sahna ustiga qo'yiladi. Shaffof PNG eng yaxshisi.</p>
+    <form id="asset-form" class="mini">
+      <input name="name" placeholder="Nomi" />
+      <label class="file"><input type="file" name="image" accept="image/*" required /><span>Rasm tanlash</span></label>
+      <button>Qo'shish</button>
+    </form>
+    <div class="lib-grid" id="asset-list"></div>
 
     <h3>Musiqa</h3>
     <p class="hint">Ovoz ostida avtomatik pasayadi.</p>

@@ -13,7 +13,7 @@ import shutil
 from pathlib import Path
 
 from .. import config
-from . import kenburns
+from . import kenburns, overlays as ov
 
 SCENE_GAP = 0.25  # breath of silence appended to each narration segment
 
@@ -102,29 +102,56 @@ async def make_scene_clip(
     width: int,
     height: int,
     out_path: Path,
+    strength: float = 1.0,
+    image_overlays: list[dict] | None = None,
 ) -> Path:
-    """Render one still into a moving, silent clip."""
+    """Render one still into a moving, silent clip, with its picture layers on top."""
     fps = config.FPS
     frames = max(2, int(round(duration * fps)))
     vf = kenburns.build_filter(
-        motion=motion, frames=frames, width=width, height=height, fps=fps
+        motion=motion, frames=frames, width=width, height=height, fps=fps, strength=strength
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    await _run(
-        [
+    tail = [
+        "-frames:v", str(frames),
+        "-r", str(fps),
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "16",
+        "-pix_fmt", "yuv420p",
+        str(out_path),
+    ]
+
+    layers = [l for l in (image_overlays or []) if l.get("path")]
+    if not layers:
+        await _run([
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(image),
-            "-vf", vf,
-            "-frames:v", str(frames),
-            "-r", str(fps),
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "16",
-            "-pix_fmt", "yuv420p",
-            str(out_path),
-        ]
+            "-i", str(image), "-vf", vf, *tail,
+        ])
+        return out_path
+
+    extra_inputs, parts, final = ov.image_chain(
+        layers, width=width, height=height, base_label="[bg]", first_input=1
     )
+    graph = ";".join([f"[0:v]{vf}[bg]", *parts])
+
+    async def attempt(args: list[str]) -> None:
+        await _run(args)
+
+    try:
+        await attempt([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(image), *extra_inputs,
+            "-filter_complex", graph, "-map", final, *tail,
+        ])
+    except RenderError:
+        # A broken layer must never cost someone the whole video: fall back to
+        # the plain scene and let the render finish without it.
+        await attempt([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(image), "-vf", vf, *tail,
+        ])
     return out_path
 
 

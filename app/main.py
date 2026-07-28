@@ -14,9 +14,17 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 
 from . import config, pipeline, store
-from .models import CreateJobRequest, HeroPatch, RegenerateRequest, ScenePatch
+from .models import (
+    CreateJobRequest,
+    HeroPatch,
+    JobPatch,
+    RegenerateRequest,
+    ScenePatch,
+)
 from .providers import storage, tts
-from .render import kenburns, video
+from .render import kenburns, overlays as ov
+from .render import subtitles as subs
+from .render import video
 
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
@@ -113,6 +121,11 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "language": request.get("language", "en"),
         "auto_render": request.get("auto_render", True),
         "uses_uploaded_audio": bool(request.get("narration_audio")),
+        "caption_style": subs.resolve_style(
+            request.get("caption_style") or request.get("subtitle_style", "bold")),
+        "burn_subtitles": bool(request.get("burn_subtitles", True)),
+        "music_id": request.get("music_id") or "",
+        "music_start": float(request.get("music_start") or 0.0),
         "error": job.get("error") or None,
         "video_url": result.get("video_url"),
         "download_url": result.get("download_url"),
@@ -179,7 +192,22 @@ async def health() -> dict[str, Any]:
         },
         "motions": list(kenburns.MOTIONS),
         "transitions": list(video.TRANSITION_CHOICES),
-        "formats": [{"id": k, **v} for k, v in config.FORMATS.items()],
+        "caption_templates": [
+            {"id": name, "label": preset.get("label", name),
+             "style": subs.resolve_style(name)}
+            for name, preset in subs.CAPTION_TEMPLATES.items()
+        ],
+        "caption_defaults": subs.resolve_style("bold"),
+        "overlay_animations": {
+            "text": list(ov.TEXT_ANIMATIONS),
+            "image": list(ov.IMAGE_ANIMATIONS),
+        },
+        # The caption budget rides along so the editor's live preview can size
+        # its text exactly the way the renderer will, instead of guessing.
+        "formats": [
+            {"id": k, **v, "caption": config.caption_budget(v["width"], v["height"])}
+            for k, v in config.FORMATS.items()
+        ],
         "languages": [{"id": k, "label": v} for k, v in config.LANGUAGES.items()],
     }
 
@@ -259,6 +287,44 @@ async def remove_music(music_id: str) -> dict[str, bool]:
     return {"deleted": True}
 
 
+# ── overlay assets (stickers, logos, cut-outs) ────────────────────────────────
+
+def _asset_out(asset: dict[str, Any]) -> dict[str, Any]:
+    return {"id": asset["id"], "name": asset["name"],
+            "url": f"/api/assets/{asset['id']}/image"}
+
+
+@app.get("/api/assets")
+async def list_assets() -> list[dict[str, Any]]:
+    return [_asset_out(a) for a in store.list_assets()]
+
+
+@app.post("/api/assets", status_code=201)
+async def create_asset(
+    image: UploadFile = File(...), name: str = Form("")
+) -> dict[str, Any]:
+    data, mime, ext = await _read_upload(image, IMAGE_TYPES)
+    label = name.strip() or Path(image.filename or f"layer{ext}").stem
+    return _asset_out(store.add_asset(label, data, mime, ext))
+
+
+@app.get("/api/assets/{asset_id}/image")
+async def asset_image(asset_id: str) -> Response:
+    blob = store.get_asset(asset_id)
+    if blob is None:
+        raise HTTPException(status_code=404, detail="Layer image not found.")
+    data, mime, _ext = blob
+    return Response(content=data, media_type=mime,
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.delete("/api/assets/{asset_id}")
+async def remove_asset(asset_id: str) -> dict[str, bool]:
+    if not store.delete_asset(asset_id):
+        raise HTTPException(status_code=404, detail="Layer image not found.")
+    return {"deleted": True}
+
+
 # ── jobs ──────────────────────────────────────────────────────────────────────
 
 def _validate(request: dict[str, Any]) -> None:
@@ -291,6 +357,12 @@ def _validate(request: dict[str, Any]) -> None:
 @app.post("/api/jobs", status_code=202)
 async def create_job(request: CreateJobRequest) -> dict[str, Any]:
     payload = request.model_dump()
+    # Store only what the caller actually set, so the template's own look shows
+    # through instead of being overwritten by a wall of nulls.
+    payload["caption_style"] = subs.resolve_style({
+        "template": request.subtitle_style,
+        **(request.caption_style.patch() if request.caption_style else {}),
+    })
     _validate(payload)
     job_id = store.create_job(payload)
     _launch(lambda: pipeline.run_draft(job_id))
@@ -332,6 +404,7 @@ async def create_job_with_audio(
         "image_provider": image_provider, "music_id": music_id or None,
         "subtitle_style": subtitle_style, "burn_subtitles": burn_subtitles,
         "auto_render": auto_render, "narration_audio": str(staged), "target_seconds": 0,
+        "caption_style": subs.resolve_style(subtitle_style),
     }
     _validate(payload)
     job_id = store.create_job(payload)
@@ -373,6 +446,38 @@ def _editable_job(job_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return job, scenes
 
 
+@app.patch("/api/jobs/{job_id}")
+async def edit_job(job_id: str, patch: JobPatch) -> dict[str, Any]:
+    """Change what applies to the whole video: caption look, music, burn-in."""
+    job = _get_job_or_404(job_id)
+    if job["status"] in _BUSY:
+        raise HTTPException(status_code=409,
+                            detail="This job is still working — wait for it to finish.")
+
+    request = dict(job["request"])
+    if patch.caption_style is not None:
+        fields = patch.caption_style.patch()
+        current = subs.resolve_style(
+            request.get("caption_style") or request.get("subtitle_style", "bold"))
+        # Naming a *different* template means "give me that look", so the patch
+        # starts from the template rather than from knobs left over from the old
+        # one. Re-sending the same template is an ordinary tweak and merges.
+        base = current if fields.get("template", current["template"]) == current["template"] \
+            else subs.resolve_style(fields["template"])
+        resolved = subs.resolve_style({**base, **fields})
+        request["caption_style"] = resolved
+        request["subtitle_style"] = resolved["template"]
+    if patch.burn_subtitles is not None:
+        request["burn_subtitles"] = patch.burn_subtitles
+    if patch.music_id is not None:
+        request["music_id"] = patch.music_id or None
+    if patch.music_start is not None:
+        request["music_start"] = float(patch.music_start)
+
+    store.replace_request(job_id, request)
+    return _job_payload(_get_job_or_404(job_id), with_scenes=False)
+
+
 @app.patch("/api/jobs/{job_id}/scenes/{index}")
 async def edit_scene(job_id: str, index: int, patch: ScenePatch) -> dict[str, Any]:
     """Rewrite one scene. Changed text marks the scene's assets stale."""
@@ -404,6 +509,18 @@ async def edit_scene(job_id: str, index: int, patch: ScenePatch) -> dict[str, An
             raise HTTPException(status_code=400,
                                 detail=f"Unknown camera move '{patch.motion}'.")
         scene["motion"] = patch.motion
+
+    if patch.motion_strength is not None:
+        scene["motion_strength"] = round(float(patch.motion_strength), 2)
+
+    if patch.overlays is not None:
+        known = {a["id"] for a in store.list_assets()}
+        # A picture deleted from the library takes its layers with it rather
+        # than blocking every later edit to the scene it was used on.
+        scene["overlays"] = [
+            layer for layer in ov.normalize_all([o.model_dump() for o in patch.overlays])
+            if layer["type"] != "image" or layer["asset_id"] in known
+        ]
 
     if patch.transition is not None:
         chosen = patch.transition.strip()

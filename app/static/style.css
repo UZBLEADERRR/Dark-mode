@@ -439,8 +439,8 @@ input[type="range"]::-moz-range-thumb {
   padding: 3px 9px; font-size: .72rem; color: var(--muted);
 }
 
-/* ── scene editor ──────────────────────────────────────────────── */
-.editor { margin-top: 18px; animation: drop .3s var(--ease); }
+/* ── studio editor ─────────────────────────────────────────────── */
+.editor { margin-top: 18px; animation: drop .3s var(--ease); scroll-margin-top: 76px; }
 .editor-bar {
   display: flex; flex-wrap: wrap; gap: 12px;
   align-items: center; justify-content: space-between;
@@ -448,58 +448,248 @@ input[type="range"]::-moz-range-thumb {
 }
 .editor-bar h2 { font-size: 1.02rem; }
 .editor-bar p { font-size: .8rem; color: var(--muted); margin-top: 3px; }
+.editor-acts { display: flex; align-items: center; gap: 12px; }
 
-.scenes { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(224px, 1fr)); }
+.saver { font-size: .74rem; color: var(--faint); min-width: 74px; text-align: right; }
+.saver.ok { color: var(--ok); }
+.saver.bad { color: var(--accent); }
 
-.sc {
+.studio { display: grid; gap: 14px; }
+
+/* canvas — the frame as it will actually be exported */
+.canvas-wrap {
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: 14px; overflow: hidden;
-  transition: border-color .2s;
+  border-radius: var(--r); padding: 12px; overflow: hidden;
 }
-.sc.stale { border-color: rgba(255, 189, 82, .45); }
+/* The frame keeps its export aspect and is bounded by height, so a 9:16 short
+   does not turn the editor into a mile of scrolling. Multiplying the height cap
+   by the aspect gives the width the frame is allowed to take. */
+.canvas {
+  --ar: 1.7778;
+  position: relative;
+  aspect-ratio: var(--ar);
+  width: min(100%, calc(58vh * var(--ar)));
+  margin: 0 auto; border-radius: 10px; overflow: hidden;
+  background: #05060a;
+  /* The checker says "this is the export frame", not "this is a photo". */
+  background-image:
+    linear-gradient(45deg, #0d0f15 25%, transparent 25%, transparent 75%, #0d0f15 75%),
+    linear-gradient(45deg, #0d0f15 25%, transparent 25%, transparent 75%, #0d0f15 75%);
+  background-size: 22px 22px;
+  background-position: 0 0, 11px 11px;
+  touch-action: none;
+}
+.canvas > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.canvas-empty {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  color: var(--faint); font-size: .84rem;
+}
 
-/* An opened card spans the row. On anything wider than a phone the still sits
-   beside the fields instead of above them, so the image cannot push the inputs
-   off the bottom of the screen. */
-.sc.open { grid-column: 1 / -1; }
-.sc.open .sc-top img { max-height: 210px; }
-@media (min-width: 640px) {
-  /* align-items:start keeps the still at its real aspect instead of stretching
-     it to the height of the field column, which would crop a wide shot into a
-     tall strip and hide what the scene actually looks like. */
-  .sc.open { display: grid; grid-template-columns: minmax(0, 38%) minmax(0, 1fr); align-items: start; }
-  .sc.open .sc-top img { max-height: 300px; }
-  .sc.open .sc-edit { align-content: start; }
+.ov-layer { position: absolute; inset: 0; }
+.ov {
+  position: absolute; cursor: grab;
+  border: 1.5px solid transparent; border-radius: 6px;
+  user-select: none; -webkit-user-select: none;
+  transition: border-color .15s;
+}
+.ov:hover { border-color: rgba(255, 255, 255, .35); }
+.ov.on { border-color: var(--accent); }
+.ov:active { cursor: grabbing; }
+.ov.txt span {
+  display: inline-block; white-space: pre; line-height: 1.15;
+  paint-order: stroke fill; border-radius: 5px;
+  font-family: "DejaVu Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.ov.img img { width: 100%; height: auto; display: block; pointer-events: none; }
+.ov .grab {
+  position: absolute; right: -7px; bottom: -7px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--bg);
+  opacity: 0; cursor: nwse-resize; transition: opacity .15s;
+}
+.ov.on .grab, .ov:hover .grab { opacity: 1; }
+
+.cap-sample {
+  position: absolute; inset: 0;
+  display: flex; justify-content: center;
+  pointer-events: none;
+}
+.cap-sample span {
+  display: inline-block; text-align: center; line-height: 1.2;
+  paint-order: stroke fill; border-radius: 6px;
+  font-family: "DejaVu Sans", -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-.sc-top { position: relative; cursor: pointer; }
-.sc-top img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; background: #000; }
-.sc-top figcaption {
-  position: absolute; inset: auto 0 0 0;
-  padding: 22px 11px 9px;
-  background: linear-gradient(transparent, rgba(0, 0, 0, .88));
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  font-size: .74rem;
+.canvas-tools {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 10px;
 }
-.sc-n { font-weight: 650; }
-.sc-t { color: rgba(255, 255, 255, .62); font-variant-numeric: tabular-nums; }
-.sc-flag {
-  position: absolute; top: 8px; right: 8px;
-  padding: 2px 7px; border-radius: 99px;
-  background: rgba(255, 189, 82, .92); color: #1a1204;
-  font-size: .64rem; font-weight: 700;
+.tool {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 13px; border-radius: var(--r-sm);
+  background: var(--raised); border: 1px solid transparent;
+  font-size: .8rem; font-weight: 500; cursor: pointer;
+  transition: border-color .18s;
 }
-.sc-line {
-  padding: 10px 12px; font-size: .8rem; color: var(--muted);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+.tool:hover { border-color: var(--line-2); }
+.tool svg {
+  width: 15px; height: 15px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
-.sc.open .sc-line { display: none; }
+.canvas-time {
+  margin-left: auto; font-size: .74rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 
-.sc-edit { display: none; padding: 12px; gap: 11px; }
-.sc.open .sc-edit { display: grid; animation: drop .22s var(--ease); }
-.sc-edit textarea { min-height: 64px; resize: vertical; }
+/* filmstrip */
+.filmstrip {
+  display: flex; gap: 8px; overflow-x: auto;
+  padding: 2px; scrollbar-width: thin;
+}
+.filmstrip::-webkit-scrollbar { height: 5px; }
+.filmstrip::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 9px; }
+.frame {
+  position: relative; flex: 0 0 auto;
+  width: 92px; aspect-ratio: 16 / 10;
+  border-radius: 9px; overflow: hidden; padding: 0;
+  border: 2px solid transparent; background: var(--raised);
+  opacity: .55; transition: opacity .18s, border-color .18s, transform .18s;
+}
+.frame:hover { opacity: .9; transform: translateY(-1px); }
+.frame.on { opacity: 1; border-color: var(--accent); }
+.frame.stale { box-shadow: inset 0 0 0 2px rgba(255, 189, 82, .6); }
+.frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.frame .blank { display: block; width: 100%; height: 100%; background: var(--raised); }
+.frame b {
+  position: absolute; left: 5px; bottom: 4px;
+  font-size: .68rem; font-weight: 700;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .9);
+}
+.frame em {
+  position: absolute; right: 4px; top: 4px;
+  min-width: 15px; height: 15px; padding: 0 4px; border-radius: 99px;
+  background: var(--accent); color: #fff;
+  font-size: .6rem; font-weight: 700; font-style: normal;
+  line-height: 15px; text-align: center;
+}
+
+/* inspector */
+.panel {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r); overflow: hidden;
+}
+.panel-tabs {
+  display: flex; gap: 2px; padding: 5px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-tabs button {
+  flex: 1; padding: 8px 10px; border-radius: 9px;
+  color: var(--muted); font-size: .8rem; font-weight: 500;
+  transition: background .18s, color .18s;
+}
+.panel-tabs button:hover { color: var(--text); }
+.panel-tabs button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+
+.panel-body { display: grid; gap: 12px; padding: 16px; animation: drop .2s var(--ease); }
+.panel-body textarea { min-height: 68px; resize: vertical; }
+.panel-body .note { font-size: .72rem; color: var(--faint); margin-top: -6px; }
+.panel-body .dim { opacity: .4; pointer-events: none; }
+#cap-knobs { display: grid; gap: 12px; }
+
 .sc-acts { display: flex; flex-wrap: wrap; gap: 7px; }
 .sc-acts .btn { padding: 8px 13px; font-size: .79rem; }
+
+.f.rng > span { display: flex; justify-content: space-between; align-items: baseline; }
+.f.rng b {
+  color: var(--text); font-size: .74rem; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* colour picking: eight taps for the common answers, a wheel for the rest */
+.sw-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sw-row button {
+  width: 24px; height: 24px; border-radius: 7px;
+  border: 1.5px solid var(--line-2); padding: 0;
+  transition: transform .15s, border-color .15s;
+}
+.sw-row button:hover { transform: scale(1.1); }
+.sw-row button.on { border-color: var(--text); transform: scale(1.12); }
+.sw-row input[type="color"] {
+  width: 30px; height: 26px; padding: 0; cursor: pointer;
+  background: none; border: 1px solid var(--line-2); border-radius: 7px;
+}
+.sw-row input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+.sw-row input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 5px; }
+
+.seg.tight { width: 100%; }
+.seg.tight button { flex: 1; justify-content: center; }
+
+/* layer list */
+.layer-list { display: grid; gap: 5px; }
+.layer-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 9px 11px; border-radius: var(--r-sm);
+  background: var(--raised); border: 1px solid transparent;
+  font-size: .82rem; text-align: left;
+  transition: border-color .18s;
+}
+.layer-row:hover { border-color: var(--line-2); }
+.layer-row.on { border-color: var(--accent); }
+.layer-row .kind {
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px;
+  background: var(--surface); color: var(--muted);
+  font-size: .7rem; font-weight: 700; font-style: normal;
+  display: grid; place-items: center;
+}
+.layer-row span {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.layer-row em {
+  color: var(--faint); font-style: normal; padding: 0 4px;
+  transition: color .18s;
+}
+.layer-row em:hover { color: var(--accent); }
+
+.layer-edit {
+  display: grid; gap: 12px;
+  margin-top: 4px; padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.asset-pick { display: flex; flex-wrap: wrap; gap: 7px; }
+.asset-pick button {
+  width: 54px; height: 54px; border-radius: 9px; overflow: hidden; padding: 0;
+  border: 2px solid transparent; background: var(--raised);
+  transition: border-color .18s;
+}
+.asset-pick button.on { border-color: var(--accent); }
+.asset-pick img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+.cast-strip.small .hero-chip { width: 36px; height: 36px; }
+
+/* Side by side once there is room: the frame stays visible while the knobs
+   are being turned, which is the whole point of a live preview. */
+/* The editor is the one thing that wants more than the reading width the rest
+   of the app is set in, so on a desktop it breaks out of the column. */
+@media (min-width: 1080px) {
+  .editor {
+    width: min(1180px, 100vw - 56px);
+    margin-left: 50%; transform: translateX(-50%);
+  }
+}
+
+@media (min-width: 880px) {
+  .studio {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
+    grid-template-areas: "canvas panel" "strip panel";
+    align-items: start;
+  }
+  .canvas-wrap { grid-area: canvas; }
+  .filmstrip { grid-area: strip; }
+  .panel { grid-area: panel; position: sticky; top: 76px; max-height: calc(100vh - 100px); overflow-y: auto; }
+}
 
 /* ── ready gallery ─────────────────────────────────────────────── */
 .ready { display: grid; gap: 16px; }

@@ -24,6 +24,7 @@ from typing import Any
 
 from . import config, skills, store
 from .providers import align, images, storage, tts
+from .render import overlays as ov
 from .render import subtitles as subs
 from .render import video
 
@@ -111,6 +112,32 @@ def replace_scene_image(job_id: str, index: int, data: bytes) -> dict | None:
     return scene
 
 
+def _materialize_assets(workdir: Path, scenes: list[dict]) -> dict[str, Path]:
+    """Overlay pictures live in the database; ffmpeg needs real files."""
+    wanted = {
+        layer.get("asset_id")
+        for scene in scenes
+        for layer in (scene.get("overlays") or [])
+        if layer.get("type") == "image" and layer.get("asset_id")
+    }
+    if not wanted:
+        return {}
+
+    folder = workdir / "overlays"
+    folder.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, Path] = {}
+    for asset_id in wanted:
+        blob = store.get_asset(asset_id)
+        if blob is None:
+            continue
+        data, _mime, ext = blob
+        target = folder / f"{asset_id}{ext or '.png'}"
+        if not target.exists() or target.stat().st_size != len(data):
+            target.write_bytes(data)
+        paths[asset_id] = target
+    return paths
+
+
 def _materialize_music(workdir: Path, music_id: str | None) -> Path | None:
     if not music_id:
         return None
@@ -147,9 +174,11 @@ def public_scene(job_id: str, scene: dict) -> dict:
         "narration": scene.get("narration", ""),
         "image_prompt": scene.get("image_prompt", ""),
         "motion": scene.get("motion", "zoom_in"),
+        "motion_strength": round(float(scene.get("motion_strength") or 1.0), 2),
         "transition": scene.get("transition") or "",
         "on_screen_text": scene.get("on_screen_text", ""),
         "hero_ids": scene.get("hero_ids", []),
+        "overlays": scene.get("overlays") or [],
         "start": round(float(scene.get("start", 0.0)), 2),
         "duration": round(float(scene.get("audio_duration", 0.0)), 2),
         "image_url": (
@@ -479,26 +508,49 @@ async def run_render(job_id: str) -> None:
             for s in scenes if s.get("on_screen_text")
         ]
 
+        # Text layers ride in the same ASS file as the captions — libass is
+        # already running, so they cost nothing extra and stay just as sharp.
+        text_layers: list[dict] = []
+        for scene in scenes:
+            text_layers += ov.text_layers(
+                scene, float(scene.get("start", 0.0)), float(scene["audio_duration"])
+            )
+
+        burn_captions = bool(request.get("burn_subtitles", True))
+        caption_style = request.get("caption_style") or request.get("subtitle_style", "bold")
+
         ass_path = workdir / "subtitles.ass"
         subs.write_ass(ass_path, subs.build_ass(
             captions=captions, width=width, height=height, font=config.SUBTITLE_FONT,
-            style=request.get("subtitle_style", "bold"), title_cards=title_cards,
+            style=caption_style, title_cards=title_cards, overlays=text_layers,
+            include_captions=burn_captions,
         ))
         srt_path = workdir / "subtitles.srt"
         srt_path.write_text(subs.build_srt(captions), encoding="utf-8")
+        # Turning captions off must not also throw away title cards and text
+        # layers, so the file is still burned whenever it has anything in it.
+        burn_file = burn_captions or bool(title_cards) or bool(text_layers)
 
         # --- scene clips -------------------------------------------------------
         _progress(job_id, "clips", 78, "Animating the scenes", status="rendering")
         transition = min(config.TRANSITION_SECONDS,
                          max(0.2, min(s["audio_duration"] for s in scenes) / 2))
+        asset_paths = _materialize_assets(workdir, scenes)
         clips: list[Path] = []
         clip_durations: list[float] = []
 
         for scene in scenes:
             duration = scene["audio_duration"] + transition
+            picture_layers = [
+                {**layer, "path": asset_paths[layer["asset_id"]]}
+                for layer in ov.image_layers(scene, float(scene["audio_duration"]))
+                if layer.get("asset_id") in asset_paths
+            ]
             clip = await video.make_scene_clip(
                 image=Path(scene["image_path"]), motion=scene.get("motion", "zoom_in"),
                 duration=duration, width=width, height=height,
+                strength=float(scene.get("motion_strength") or 1.0),
+                image_overlays=picture_layers,
                 out_path=workdir / f"clip_{scene['index']:03d}.mp4",
             )
             clips.append(clip)
@@ -517,7 +569,7 @@ async def run_render(job_id: str) -> None:
         await video.assemble(
             clips=clips, clip_durations=clip_durations, narration=narration_path,
             total_duration=total_audio, out_path=out_path, workdir=workdir,
-            subtitle_file=ass_path if request.get("burn_subtitles", True) else None,
+            subtitle_file=ass_path if burn_file else None,
             music=music_path,
             music_start=float(request.get("music_start") or 0.0),
             effects=[s.get("transition") or None for s in scenes],

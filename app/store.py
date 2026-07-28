@@ -37,6 +37,16 @@ CREATE TABLE IF NOT EXISTS music (
     created_at  TEXT NOT NULL
 );
 
+-- Stickers, logos and cut-outs dropped onto a scene as an overlay layer.
+CREATE TABLE IF NOT EXISTS assets (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    mime        TEXT NOT NULL DEFAULT 'image/png',
+    ext         TEXT NOT NULL DEFAULT '.png',
+    data        BLOB NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id           TEXT PRIMARY KEY,
     status       TEXT NOT NULL,
@@ -181,6 +191,42 @@ def delete_music(music_id: str) -> bool:
         return conn.execute("DELETE FROM music WHERE id = ?", (music_id,)).rowcount > 0
 
 
+# --- overlay assets ----------------------------------------------------------
+
+_ASSET_COLS = "id, name, mime, ext, created_at"
+
+
+def add_asset(name: str, data: bytes, mime: str, ext: str) -> dict[str, Any]:
+    asset_id = new_id("ast")
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO assets (id, name, mime, ext, data, created_at) VALUES (?,?,?,?,?,?)",
+            (asset_id, name, mime, ext, data, _now()),
+        )
+    return {"id": asset_id, "name": name, "mime": mime, "ext": ext}
+
+
+def list_assets() -> list[dict[str, Any]]:
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT {_ASSET_COLS} FROM assets ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_asset(asset_id: str) -> tuple[bytes, str, str] | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT data, mime, ext FROM assets WHERE id = ?", (asset_id,)
+        ).fetchone()
+    return (row["data"], row["mime"], row["ext"]) if row else None
+
+
+def delete_asset(asset_id: str) -> bool:
+    with _conn() as conn:
+        return conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,)).rowcount > 0
+
+
 # --- jobs --------------------------------------------------------------------
 
 def create_job(request: dict[str, Any]) -> str:
@@ -230,6 +276,16 @@ def update_job(
                 job_id,
             ),
         )
+
+
+def replace_request(job_id: str, request: dict[str, Any]) -> bool:
+    """Rewrite a job's settings in place — used when the editor changes the look."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE jobs SET request = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(request), _now(), job_id),
+        )
+        return cur.rowcount > 0
 
 
 def get_job(job_id: str) -> dict[str, Any] | None:
