@@ -49,7 +49,7 @@ LLM_PROVIDER = _env("LLM_PROVIDER", "auto").lower()
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
 LLM_MODEL = _env("LLM_MODEL", "claude-opus-5")
 LLM_EFFORT = _env("LLM_EFFORT", "high")
-GEMINI_TEXT_MODEL = _env("GEMINI_TEXT_MODEL", "gemini-2.5-pro")
+GEMINI_TEXT_MODEL = _env("GEMINI_TEXT_MODEL", "gemini-3.1-pro-preview")
 GEMINI_TEXT_FALLBACK = _env("GEMINI_TEXT_FALLBACK", "gemini-2.5-flash")
 
 # --- image generation --------------------------------------------------------
@@ -77,7 +77,10 @@ ELEVENLABS_MODEL = _env("ELEVENLABS_MODEL", "eleven_multilingual_v2")
 OPENAI_TTS_MODEL = _env("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
 OPENAI_TTS_VOICE = _env("OPENAI_TTS_VOICE", "alloy")
 
-GEMINI_TTS_MODEL = _env("GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts")
+GEMINI_TTS_MODEL = _env("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+# A preview model can vanish or be missing from a given key, and unlike the
+# script stage the voice had nowhere to fall back to.
+GEMINI_TTS_FALLBACK = _env("GEMINI_TTS_FALLBACK", "gemini-2.5-flash-preview-tts")
 GEMINI_TTS_VOICE = _env("GEMINI_TTS_VOICE", "Kore")
 
 # --- subtitle alignment ------------------------------------------------------
@@ -133,6 +136,7 @@ MODEL_STAGES: dict[str, dict] = {
     "gemini_text_fallback": {"provider": "gemini", "role": "text"},
     "gemini_image":      {"provider": "gemini", "role": "image"},
     "gemini_tts":        {"provider": "gemini", "role": "tts"},
+    "gemini_tts_fallback": {"provider": "gemini", "role": "tts"},
     "anthropic_text":    {"provider": "anthropic", "role": "text"},
     "fal_image":         {"provider": "fal", "role": "image"},
     "fal_text2img":      {"provider": "fal", "role": "image"},
@@ -147,6 +151,7 @@ _MODEL_DEFAULTS: dict[str, str] = {
     "gemini_text_fallback": GEMINI_TEXT_FALLBACK,
     "gemini_image": GEMINI_IMAGE_MODEL,
     "gemini_tts": GEMINI_TTS_MODEL,
+    "gemini_tts_fallback": GEMINI_TTS_FALLBACK,
     "anthropic_text": LLM_MODEL,
     "fal_image": FAL_IMAGE_MODEL,
     "fal_text2img": FAL_TEXT2IMG_MODEL,

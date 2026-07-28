@@ -53,14 +53,18 @@ tanlanmaydi va job yaratilganda aniq xabar beriladi.
 
 ## Modellar
 
-Standart modellar: skript `gemini-2.5-pro`, rasm **`gemini-2.5-flash-image`**,
-ovoz `gemini-2.5-flash-preview-tts`.
+Standart modellar: skript `gemini-3.1-pro-preview`, rasm
+**`gemini-2.5-flash-image`**, ovoz `gemini-3.1-flash-tts-preview`. Ovoz uchun
+zaxira ham bor (`gemini-2.5-flash-preview-tts`) — preview model kalitingizga
+berilmagan bo'lsa, video to'xtamasdan o'shanga tushadi.
 
-**Kutubxona → Modellar** da har bosqichni alohida almashtirasiz — deploy qilish
-shart emas, tanlov bazaga yoziladi. «Ro'yxatni yangilash» tugmasi mavjud
-modellarni **provayderdan sizning kalitingiz uchun** so'raydi, ya'ni bugun
-chiqqan model ham darhol ro'yxatda bo'ladi. Ro'yxatda yo'q nomni qo'lda ham
-yozsangiz bo'ladi. Maydonni bo'sh qoldirsangiz env'dagi qiymatga qaytadi.
+**Kutubxona → Modellar** da har bosqichni **ro'yxatdan tanlaysiz** — deploy
+qilish shart emas, tanlov bazaga yoziladi. Ro'yxat bo'lim ochilishi bilan
+**provayderdan sizning kalitingiz uchun** olinadi, ya'ni bugun chiqqan model
+ham darhol menyuda bo'ladi. Har bosqich faqat o'ziga mos modellarni ko'rsatadi
+(ovoz joyida rasm modeli chiqmaydi). Ro'yxatda yo'q nomni «boshqa nom
+yozaman…» orqali qo'lda kiritasiz. «Standart» ni tanlasangiz env'dagi qiymatga
+qaytadi.
 
 **Kutubxona → Holat** har doim aynan qaysi model chaqirilayotganini ko'rsatadi.
 
@@ -156,11 +160,16 @@ emas: namuna aynan renderer ishlatadigan shrift o'lchamidan hisoblanadi.
 subtitr so'zma-so'z yonadi, qatlamlar o'z vaqtida chiqib-yo'qoladi. Qaysi so'zga
 qaysi yozuv tushishini render kutmasdan ko'rasiz.
 
-**Sahna jarrohligi.** Lentadagi kadrni **sudrab tartibini o'zgartirasiz**,
-keraksizini o'chirasiz, yangisini qo'shasiz — matnini yozasiz, qolganini AI
-qiladi (prompt, ovoz, rasm). Har bir sahnaning fayllari o'ziniki bo'lgan
-o'zgarmas nom bilan saqlanadi, shuning uchun tartib o'zgarganda rasmlar
-aralashib ketmaydi.
+**Sahna jarrohligi.** Tanlangan kadrning pastida **‹ ›** tugmalari chiqadi —
+sahnani chapga yoki o'ngga surasiz. Kompyuterda sudrab ham bo'ladi; telefonda
+esa gorizontal sudrash lentani aylantirish uchun ishlatiladi, shuning uchun
+tugmalar ishonchliroq.
+
+**Sahna bir butun ko'chadi**: matni, ovozi, so'z vaqtlari, rasmi, qatlamlari va
+tovush effekti — hammasi birga. Har bir sahnaning fayllari o'ziniki bo'lgan
+o'zgarmas nom bilan saqlanadi, shuning uchun tartib o'zgarganda rasm va ovoz
+aralashib ketmaydi. Keraksizini o'chirasiz, yangisini qo'shasiz — matnini
+yozasiz, qolganini AI qiladi (prompt, ovoz, rasm).
 
 **Tovush effektlari.** Sahnaga qisqa tovush (whoosh, ding) qo'yiladi — balandligi
 va kechikishi sozlanadi. Ovoz va musiqa bilan bir mikserda birlashadi.

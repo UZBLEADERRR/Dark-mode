@@ -15,6 +15,7 @@ const state = {
   models: null,
   voices: [],
   available: {},
+  loadingModels: false,
   motions: [],
   transitions: [],
   format: '16:9',
@@ -76,6 +77,7 @@ const STYLE_PRESETS = [
 const STAGE_LABELS = {
   gemini_text: 'Gemini — skript', gemini_text_fallback: 'Gemini — zaxira skript',
   gemini_image: 'Gemini — rasm', gemini_tts: 'Gemini — ovoz',
+  gemini_tts_fallback: 'Gemini — zaxira ovoz',
   anthropic_text: 'Claude — skript',
   fal_image: 'fal — rasm (referens bilan)', fal_text2img: 'fal — rasm (referenssiz)',
   openai_image: 'OpenAI — rasm', openai_tts: 'OpenAI — ovoz',
@@ -473,6 +475,27 @@ $('#asset-form').addEventListener('submit', (e) => {
 async function loadModels() {
   state.models = await api('/api/models');
   drawModels();
+  // Ask each provider what it offers straight away. Making that a button press
+  // meant the fields stayed as free text on first sight, which is the one time
+  // a menu would have helped most.
+  refreshAvailable();
+}
+
+async function refreshAvailable(force = false) {
+  const providers = [...new Set(Object.values(state.models?.stages || {})
+    .map((meta) => meta.provider))].filter((p) => providersInPlay().has(p));
+  const wanted = providers.filter((p) => force || !state.available[p]);
+  if (!wanted.length) return;
+
+  state.loadingModels = true;
+  drawModels();
+  await Promise.all(wanted.map(async (provider) => {
+    state.available[provider] = await api(
+      `/api/models/available?provider=${encodeURIComponent(provider)}`
+    ).catch((e) => ({ models: [], error: e.message }));
+  }));
+  state.loadingModels = false;
+  drawModels();
 }
 
 function providersInPlay() {
@@ -494,21 +517,7 @@ function drawModels() {
     .filter(([key, meta]) => live.has(meta.provider) || inUse.has(key));
 
   $('#models-box').innerHTML = `
-    ${rows.map(([key, meta]) => {
-      const value = m.overrides[key] || '';
-      const fallback = m.defaults[key] || '';
-      return `<label class="f model-row${inUse.has(key) ? ' live' : ''}">
-        <span>${esc(STAGE_LABELS[key] || key)}${inUse.has(key) ? '<b>ishlatilmoqda</b>' : ''}</span>
-        <input data-model="${esc(key)}" list="dl-${esc(meta.provider)}" value="${esc(value)}"
-          placeholder="${esc(fallback)}" spellcheck="false" />
-      </label>`;
-    }).join('')}
-
-    ${[...new Set(rows.map(([, meta]) => meta.provider))].map((p) => {
-      const list = state.available?.[p];
-      return `<datalist id="dl-${esc(p)}">${(list?.models || []).map((x) =>
-        `<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('')}</datalist>`;
-    }).join('')}
+    ${rows.map(([key, meta]) => modelRow(key, meta, m, inUse.has(key))).join('')}
 
     <div class="model-acts">
       <button class="btn" id="models-refresh">Ro‘yxatni yangilash</button>
@@ -517,16 +526,20 @@ function drawModels() {
     </div>
     <p class="hint" id="models-note">${esc(modelsNote(rows))}</p>`;
 
+  // "Other" is the escape hatch: a model can exist before the listing endpoint
+  // knows about it, and fal has no listing endpoint at all.
+  $$('#models-box [data-msel]').forEach((select) => select.addEventListener('change', () => {
+    const row = select.closest('.model-row');
+    const other = select.value === OTHER_MODEL;
+    $('[data-mtext]', row).classList.toggle('hidden', !other);
+    if (other) $('[data-mtext]', row).focus();
+  }));
+
   $('#models-refresh').addEventListener('click', async () => {
     const btn = $('#models-refresh');
     btn.disabled = true;
     btn.textContent = 'Yuklanmoqda…';
-    state.available = {};
-    await Promise.all([...new Set(rows.map(([, meta]) => meta.provider))].map(async (p) => {
-      state.available[p] = await api(`/api/models/available?provider=${encodeURIComponent(p)}`)
-        .catch((e) => ({ models: [], error: e.message }));
-    }));
-    drawModels();
+    await refreshAvailable(true);
     toast('Ro‘yxat yangilandi');
   });
 
@@ -537,10 +550,7 @@ function drawModels() {
       state.models = await api('/api/models', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          models: Object.fromEntries($$('[data-model]').map((el) => [el.dataset.model, el.value.trim()])),
-          voices: state.models.voices || {},
-        }),
+        body: JSON.stringify({ models: readModelRows(), voices: state.models.voices || {} }),
       });
       $('#models-saver').textContent = 'saqlandi';
       $('#models-saver').className = 'saver ok';
@@ -553,7 +563,53 @@ function drawModels() {
   });
 }
 
+const OTHER_MODEL = '__other';
+
+/** One stage: a menu of what the provider offers, or a text box when it has none. */
+function modelRow(key, meta, m, live) {
+  const value = m.overrides[key] || '';
+  const fallback = m.defaults[key] || '';
+  const catalogue = state.available[meta.provider];
+  // Each stage only shows models that can do its job — offering an image model
+  // where the voice goes is worse than offering nothing.
+  const options = (catalogue?.models || []).filter((x) => x.role === meta.role);
+  const listed = options.some((x) => x.id === value);
+  const head = `<span>${esc(STAGE_LABELS[key] || key)}${live ? '<b>ishlatilmoqda</b>' : ''}</span>`;
+
+  if (!options.length) {
+    return `<label class="f model-row${live ? ' live' : ''}" data-mkey="${esc(key)}">
+      ${head}
+      <input data-mtext value="${esc(value)}" placeholder="${esc(fallback)}" spellcheck="false" />
+    </label>`;
+  }
+
+  return `<div class="f model-row${live ? ' live' : ''}" data-mkey="${esc(key)}">
+    ${head}
+    <select data-msel>
+      <option value=""${value ? '' : ' selected'}>standart — ${esc(fallback)}</option>
+      ${options.map((x) =>
+        `<option value="${esc(x.id)}"${x.id === value ? ' selected' : ''}>${esc(x.id)}</option>`).join('')}
+      ${value && !listed
+        ? `<option value="${esc(value)}" selected>${esc(value)}</option>` : ''}
+      <option value="${OTHER_MODEL}">boshqa nom yozaman…</option>
+    </select>
+    <input data-mtext class="hidden" value="${esc(value)}"
+      placeholder="${esc(fallback)}" spellcheck="false" />
+  </div>`;
+}
+
+function readModelRows() {
+  return Object.fromEntries($$('#models-box [data-mkey]').map((row) => {
+    const select = $('[data-msel]', row);
+    const text = $('[data-mtext]', row);
+    if (!select) return [row.dataset.mkey, text.value.trim()];
+    return [row.dataset.mkey,
+      select.value === OTHER_MODEL ? text.value.trim() : select.value];
+  }));
+}
+
 function modelsNote(rows) {
+  if (state.loadingModels) return 'Provayderlardan modellar ro‘yxati olinmoqda…';
   const providers = [...new Set(rows.map(([, meta]) => meta.provider))];
   const errors = providers
     .map((p) => state.available?.[p]?.error && `${p}: ${state.available[p].error}`)
@@ -562,7 +618,8 @@ function modelsNote(rows) {
   const counted = providers
     .map((p) => state.available?.[p] && `${p}: ${state.available[p].models.length} ta model`)
     .filter(Boolean);
-  return counted.length ? counted.join(' · ')
+  return counted.length
+    ? `${counted.join(' · ')}. Ro‘yxatda yo‘q modelni «boshqa nom yozaman» orqali qo‘shasiz.`
     : 'Provayderdan mavjud modellar ro‘yxatini olish uchun «Ro‘yxatni yangilash».';
 }
 
@@ -1341,16 +1398,71 @@ function drawFilmstrip() {
   $('#filmstrip').innerHTML = ED.scenes.map((s, i) => {
     const stale = s.needs_image || s.needs_voice;
     const count = (s.overlays || []).length;
-    return `<button class="frame${i === ED.i ? ' on' : ''}${stale ? ' stale' : ''}" data-scene="${i}">
+    return `<div class="frame${i === ED.i ? ' on' : ''}${stale ? ' stale' : ''}"
+        data-scene="${i}" role="button" tabindex="0">
       ${s.image_url ? `<img src="${esc(s.image_url)}" alt="" loading="lazy" draggable="false" />` : '<i class="blank"></i>'}
       <b>${i + 1}</b>
       ${count ? `<em>${count}</em>` : ''}
       ${s.sfx_id ? '<u class="cue" title="tovush effekti"></u>' : ''}
-    </button>`;
+      <div class="move">
+        <button data-move="-1"${i === 0 ? ' disabled' : ''} aria-label="Chapga surish">‹</button>
+        <button data-move="1"${i === ED.scenes.length - 1 ? ' disabled' : ''} aria-label="O‘ngga surish">›</button>
+      </div>
+    </div>`;
   }).join('');
 
-  $$('#filmstrip [data-scene]').forEach((b) =>
-    b.addEventListener('pointerdown', (e) => startFrameDrag(e, Number(b.dataset.scene))));
+  $$('#filmstrip [data-scene]').forEach((b) => {
+    const index = Number(b.dataset.scene);
+    // Dragging is a mouse gesture here. On a touch screen a horizontal drag on
+    // the strip is a scroll, and the browser claims it before we see the move —
+    // which is what the arrows below are for.
+    b.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') return;
+      startFrameDrag(e, index);
+    });
+    b.addEventListener('click', (e) => {
+      if (e.target.closest('[data-move]')) return;
+      if (ED.i === index) return;
+      ED.i = index;
+      ED.sel = null;
+      stopPreview();
+      drawAll();
+    });
+  });
+
+  $$('#filmstrip [data-move]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const from = Number(b.closest('.frame').dataset.scene);
+    moveScene(from, from + Number(b.dataset.move));
+  }));
+}
+
+/** Move a scene — and everything that belongs to it — to another position. */
+async function moveScene(from, to) {
+  if (!ED.job || to < 0 || to >= ED.scenes.length || from === to) return;
+  const order = ED.scenes.map((_, i) => i);
+  order.splice(to, 0, ...order.splice(from, 1));
+
+  // Show the new order at once; the server confirms a beat later. A scene is
+  // one object — narration, voice, image, layers and timings all travel with
+  // it — so nothing can end up on the wrong picture.
+  ED.scenes = order.map((i) => ED.scenes[i]);
+  ED.scenes.forEach((s, i) => { s.index = i; });
+  ED.i = to;
+  stopPreview();
+  drawAll();
+
+  try {
+    await flush();
+    mergeScenes(await api(`/api/jobs/${ED.job.id}/scenes/order`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    }));
+    toast('Tartib o‘zgartirildi');
+  } catch (e) {
+    editorError(e.message);
+  }
 }
 
 /** Click to select, drag past a threshold to move the scene in the running order. */
@@ -1385,34 +1497,8 @@ function startFrameDrag(event, index) {
     removeEventListener('pointerup', up);
     strip.classList.remove('sorting');
     frames.forEach((f) => f.classList.remove('dragging', 'drop'));
-
-    if (!moved || target === index) {
-      ED.i = index;
-      ED.sel = null;
-      stopPreview();
-      drawAll();
-      return;
-    }
-
-    const order = ED.scenes.map((_, i) => i);
-    order.splice(target, 0, ...order.splice(index, 1));
-    // Show the new order at once; the server confirms a beat later.
-    ED.scenes = order.map((i) => ED.scenes[i]);
-    ED.scenes.forEach((s, i) => { s.index = i; });
-    ED.i = target;
-    drawAll();
-    try {
-      await flush();
-      const scenes = await api(`/api/jobs/${ED.job.id}/scenes/order`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order }),
-      });
-      mergeScenes(scenes);
-      toast('Tartib o‘zgartirildi');
-    } catch (e) {
-      editorError(e.message);
-    }
+    // A click that never turned into a drag is handled by the click listener.
+    if (moved && target !== index) await moveScene(index, target);
   };
 
   addEventListener('pointermove', move);
