@@ -110,6 +110,14 @@ class SceneOrder(BaseModel):
     order: list[int] = Field(min_length=1)
 
 
+class TranslateRequest(BaseModel):
+    """Make this video again in another language, keeping the pictures."""
+
+    language: str
+    voice_id: str | None = None
+    tts_provider: str | None = None
+
+
 class RepurposeRequest(BaseModel):
     video_format: str
     # Reused stills are centre-cropped into the new frame; regenerating draws
@@ -150,6 +158,8 @@ class CreateJobRequest(BaseModel):
     auto_hook: bool = False
     # Stamp the brand logo on every scene, when one is configured.
     brand_logo: bool = True
+    # fast | balanced | quality — trades encode time against picture quality.
+    render_speed: Literal["fast", "balanced", "quality"] = "balanced"
     # False stops after the draft so scenes can be reviewed and edited first.
     auto_render: bool = True
 

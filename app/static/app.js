@@ -19,6 +19,8 @@ const state = {
   transitions: [],
   format: '16:9',
   mode: 'topic',
+  speed: 'balanced',
+  cores: 0,
   view: 'create',
   activeId: null,
   poll: null,
@@ -230,8 +232,16 @@ const DOCK = {
   ],
 };
 
+// Dubbing decides nothing about the picture, so most of the create tools have
+// nothing to act on — offering them would only invite fiddling with settings
+// that will be ignored.
+const DUB_TOOLS = new Set(['format', 'voice', 'more']);
+
 function drawDock() {
-  const items = DOCK[state.view] || [];
+  let items = DOCK[state.view] || [];
+  if (state.view === 'create' && state.mode === 'dub') {
+    items = items.filter((item) => DUB_TOOLS.has(item.id));
+  }
   const dock = $('#dock');
   dock.classList.toggle('hidden', !items.length);
   if (!items.length) { dock.innerHTML = ''; return; }
@@ -291,23 +301,31 @@ addEventListener('keydown', (e) => {
 // What the video will be, in one row, with every part of it tappable.
 function drawSummary() {
   const scriptMode = state.mode === 'script';
+  const dub = state.mode === 'dub';
   const uploading = $('#use_upload').checked;
   const heroes = $$('#hero-picker input:checked').length;
   const music = $('#music_id');
   const voice = $('#voice_id');
   const styleOn = $$('#style-presets button[aria-pressed="true"]')[0];
+  const language = $('#language').selectedOptions[0]?.text.split(' ')[0] || '';
+  const voiceName = uploading ? 'o‘z ovozim'
+    : (voice.value ? voice.selectedOptions[0].text.split(' —')[0] : 'standart ovoz');
 
-  const chips = [
-    ['format', `${state.format} · ${$('#language').selectedOptions[0]?.text.split(' ')[0] || ''}`],
+  // Dubbing keeps the original picture, so shape, length, style, cast and music
+  // are all decided already — only the new language and voice are ours to pick.
+  const chips = (dub ? [
+    ['format', language && `${language}ga`],
+    ['voice', voiceName],
+  ] : [
+    ['format', `${state.format} · ${language}`],
     ['length', scriptMode || uploading ? null : durationLabel(Number($('#duration').value))],
     ['style', styleOn ? styleOn.textContent : 'o‘z uslubim'],
     ['cast', heroes ? `${heroes} hero` : null],
-    ['voice', uploading ? 'o‘z ovozim'
-      : (voice.value ? voice.selectedOptions[0].text.split(' —')[0] : 'standart ovoz')],
+    ['voice', voiceName],
     ['music', music.value ? music.selectedOptions[0].text : null],
     ['subtitle', $('#burn_subtitles').checked
       ? $('#subtitle_style').selectedOptions[0]?.text || 'subtitr' : 'subtitrsiz'],
-  ].filter(([, value]) => value);
+  ]).filter(([, value]) => value);
 
   $('#summary').innerHTML = chips.map(([key, value]) =>
     `<button type="button" data-sheet="${key}">${esc(value)}</button>`).join('');
@@ -348,6 +366,19 @@ async function loadHealth() {
   fill('#image_provider', h.image_providers, h.defaults.image_provider);
   fill('#tts_provider', h.tts_providers, h.defaults.tts_provider);
   await loadVoices();
+
+  $('#speed-seg').innerHTML = (h.speeds || []).map((sp) =>
+    `<button type="button" data-speed="${esc(sp.id)}" aria-pressed="${sp.id === state.speed}">${esc(sp.label)}</button>`).join('');
+  $$('#speed-seg button').forEach((b) => b.addEventListener('click', () => {
+    state.speed = b.dataset.speed;
+    $$('#speed-seg button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+    syncSpeedNote();
+  }));
+  syncSpeedNote(h.cores);
+
+  $('#dub_source').innerHTML = '<option value="">avtomatik aniqlansin</option>' +
+    h.languages.map((l) => `<option value="${esc(l.id)}">${esc(l.label)}</option>`).join('');
+  $('#mode-tabs [data-mode="dub"]').classList.toggle('hidden', !h.can_dub);
 
   $('#subtitle_style').innerHTML = (h.caption_templates || []).map((t) =>
     `<option value="${esc(t.id)}"${t.id === 'bold' ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
@@ -788,6 +819,19 @@ $('#art_style').addEventListener('input', () => {
   drawSummary();
 });
 
+const SPEED_NOTES = {
+  fast: 'Eng tez — kuchli zoom paytida rasm biroz yumshoqroq chiqadi.',
+  balanced: 'Tavsiya etiladi.',
+  quality: 'Eng tiniq, lekin sezilarli sekinroq.',
+};
+
+function syncSpeedNote(cores) {
+  if (cores) state.cores = cores;
+  const note = SPEED_NOTES[state.speed] || '';
+  $('#speed-note').textContent = state.cores
+    ? `${note} Server ${state.cores} yadroli.` : note;
+}
+
 // ── voices ────────────────────────────────────────────────────────
 // A voice id tells you nothing until you hear it, so the picker lists what the
 // provider actually offers and every entry can be auditioned.
@@ -850,18 +894,28 @@ $('#language').addEventListener('change', drawSummary);
 $('#subtitle_style').addEventListener('change', drawSummary);
 $('#burn_subtitles').addEventListener('change', drawSummary);
 
-// ── topic / script mode ───────────────────────────────────────────
+// ── topic / script / dub mode ─────────────────────────────────────
 $$('#mode-tabs button').forEach((b) => b.addEventListener('click', () => {
   state.mode = b.dataset.mode;
   $$('#mode-tabs button').forEach((x) => x.setAttribute('aria-pressed', x === b));
   const script = state.mode === 'script';
+  const dub = state.mode === 'dub';
   $('#script-box').classList.toggle('hidden', !script);
+  $('#dub-box').classList.toggle('hidden', !dub);
+  // Dubbing replaces the voice on a picture that already exists, so there is no
+  // topic to write and nothing for the AI to imagine.
+  $('.composer .prompt').classList.toggle('hidden', dub);
+  $('#topic').closest('.prompt').classList.toggle('hidden', dub);
   // With a script supplied, length comes from the words, not from a slider.
-  $('#duration-row').classList.toggle('hidden', script || $('#use_upload').checked);
+  $('#duration-row').classList.toggle('hidden', script || dub || $('#use_upload').checked);
   $('#topic').placeholder = script
     ? 'Video nima haqida — bir qatorda (ixtiyoriy kontekst)'
     : "Ipak yo'li bo'ylab sayohat qilgan uch savdogarning haqiqiy tarixi…";
   $('#topic').rows = script ? 1 : 2;
+  $('#submit-btn').textContent = dub ? 'Dublyaj qilish' : 'Video yaratish';
+  $('.composer h1').textContent = dub
+    ? 'Qaysi videoni tarjima qilamiz?' : 'Nima haqida video?';
+  drawDock();
   drawSummary();
 }));
 
@@ -888,10 +942,47 @@ $('#use_upload').addEventListener('change', (e) => {
   drawSummary();
 });
 
+async function submitDub() {
+  const err = $('#create-error');
+  const file = $('#dub_file').files[0];
+  if (!file) {
+    err.textContent = 'Avval videoni tanlang.';
+    err.classList.remove('hidden');
+    return;
+  }
+  const body = new FormData();
+  body.append('video', file);
+  body.append('language', $('#language').value);
+  body.append('source_language', $('#dub_source').value);
+  body.append('original_volume', $('#dub_original').value);
+  body.append('render_speed', state.speed);
+  body.append('topic', file.name.replace(/\.[^.]+$/, ''));
+  if ($('#tts_provider').value) body.append('tts_provider', $('#tts_provider').value);
+  if ($('#voice_id').value) body.append('voice_id', $('#voice_id').value);
+  const job = await api('/api/dub', { method: 'POST', body });
+  go('edit');
+  watch(job.id, { reveal: true });
+}
+
 $('#submit-btn').addEventListener('click', async () => {
   const btn = $('#submit-btn');
   const err = $('#create-error');
   err.classList.add('hidden');
+
+  if (state.mode === 'dub') {
+    btn.disabled = true;
+    btn.textContent = 'Yuborilmoqda…';
+    try {
+      await submitDub();
+    } catch (e) {
+      err.textContent = e.message;
+      err.classList.remove('hidden');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Dublyaj qilish';
+    }
+    return;
+  }
 
   const scriptMode = state.mode === 'script';
   const script = $('#script').value.trim();
@@ -923,6 +1014,7 @@ $('#submit-btn').addEventListener('click', async () => {
     tone: $('#tone').value,
     subtitle_style: $('#subtitle_style').value,
     burn_subtitles: $('#burn_subtitles').checked,
+    render_speed: state.speed,
     auto_hook: $('#auto_hook').checked,
     brand_logo: $('#brand_logo').checked,
     auto_render: !$('#review_first').checked,
@@ -1004,8 +1096,13 @@ function drawStage(job) {
 
   // The raw step name is only worth showing while something is moving —
   // once settled it just repeats the status word next to it.
+  // While something is moving, the newest log line is the only thing worth
+  // reading — "Voice-over 7/12" says more than the step name ever does, and it
+  // was previously buried at the bottom of a scrolled box.
+  const latest = (job.logs || []).at(-1)?.replace(/^\[[\d:]+\]\s*/, '') || '';
   const meta = [STATUS[job.status] || job.status];
-  if (busy && job.step && job.step !== job.status) meta.push(job.step);
+  if (busy && latest) meta.push(latest);
+  else if (busy && job.step && job.step !== job.status) meta.push(job.step);
   if (job.duration) meta.push(clock(job.duration));
   if (job.scene_count) meta.push(`${job.scene_count} sahna`);
 
@@ -1013,8 +1110,8 @@ function drawStage(job) {
       <h2>${esc(job.title || job.topic || 'Video')}</h2>
       <span class="stage-pct">${job.progress}%</span>
     </div>
-    <div class="track ${esc(job.status)}"><i style="width:${job.progress}%"></i></div>
-    <p class="step">${esc(meta.join(' · '))}</p>`);
+    <div class="track ${esc(job.status)}${busy ? ' live' : ''}"><i style="width:${job.progress}%"></i></div>
+    <p class="step${busy ? ' busy' : ''}">${esc(meta.join(' · '))}</p>`);
 
   if (job.status === 'failed' && job.error) p.push(`<p class="msg err">${esc(job.error)}</p>`);
   (job.warnings || []).forEach((w) => p.push(`<p class="msg warn">${esc(w)}</p>`));
@@ -1026,6 +1123,13 @@ function drawStage(job) {
         ${job.subtitle_url ? `<a class="btn" href="${esc(job.subtitle_url)}" download>Subtitr .srt</a>` : ''}
         <button class="btn ghost" data-go="ready">Matnlarni ko‘rish</button>
       </div>`);
+  }
+
+  if (job.transcript?.length) {
+    p.push(`<details class="fold"><summary>Tarjima matni · ${job.transcript.length} qator</summary>
+      <div class="fold-body"><div class="lines">${job.transcript.map((t) => `
+        <div><b>${clock(t.start)}</b><span>${esc(t.text)}</span><em>${esc(t.translation || '')}</em></div>`).join('')}
+      </div></div></details>`);
   }
 
   if (job.status === 'done' && job.thumbnails?.length) {
@@ -1042,6 +1146,11 @@ function drawStage(job) {
 
   $('#stage').innerHTML = p.join('');
   $$('#stage [data-go]').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
+
+  // The log grows downwards, so without this the newest line is the one you
+  // cannot see — which is the whole reason for watching it.
+  const logs = $('#stage .logs');
+  if (logs) logs.scrollTop = logs.scrollHeight;
 
   if (state.reveal) {
     state.reveal = false;
@@ -1177,7 +1286,8 @@ async function flush() {
 
 // ── build ─────────────────────────────────────────────────────────
 function syncEditor(job) {
-  const on = (job.status === 'review' || job.status === 'done') && job.scenes?.length;
+  const on = job.kind !== 'dub'
+    && (job.status === 'review' || job.status === 'done') && job.scenes?.length;
   $('#editor').classList.toggle('hidden', !on);
   if (!on) {
     state.drawn = null;
@@ -2158,6 +2268,8 @@ function drawReady(done) {
           ${j.subtitle_url ? `<a class="btn" href="${esc(j.subtitle_url)}" download>.srt</a>` : ''}
           <button class="btn" data-thumbs="${esc(j.id)}">Muqova yaratish</button>
           <button class="btn" data-repurpose="${esc(j.id)}" data-fmt="${esc(j.video_format)}">Boshqa formatga</button>
+          ${j.kind === 'dub' ? '' :
+            `<button class="btn" data-translate="${esc(j.id)}" data-lang="${esc(j.language)}">Boshqa tilga</button>`}
         </div>
 
         ${j.thumbnails?.length ? `<div class="thumbs">
@@ -2202,6 +2314,49 @@ function drawReady(done) {
       alert(e.message);
       b.disabled = false;
       b.textContent = 'Muqova yaratish';
+    }
+  }));
+
+  // Same pictures, same cuts, a different language — the cheapest way to reach
+  // a second audience with a video that already works.
+  $$('#ready-list [data-translate]').forEach((b) => b.addEventListener('click', async () => {
+    const languages = (state.health?.languages || []).filter((l) => l.id !== b.dataset.lang);
+    const answer = await ask({
+      title: 'Boshqa tilga',
+      ok: 'Tarjima qilish',
+      html: `<label class="f"><span>Qaysi tilga</span>
+          <select name="language">${languages.map((l) =>
+            `<option value="${esc(l.id)}">${esc(l.label)}</option>`).join('')}</select></label>
+        <label class="f"><span>Ovoz</span>
+          <select name="voice_id"><option value="">standart</option>
+            ${(state.voices || []).map((v) =>
+              `<option value="${esc(v.id)}">${esc(v.label)}${v.hint ? ` — ${esc(v.hint)}` : ''}</option>`).join('')}
+          </select></label>
+        <small class="note">Rasmlar, qatlamlar va kamera harakatlari o‘zgarmaydi —
+          faqat matn tarjima qilinib, qaytadan ovozlanadi.</small>`,
+    });
+    if (!answer) return;
+    b.disabled = true;
+    b.textContent = 'Tarjima qilinmoqda…';
+    try {
+      const clone = await api(`/api/jobs/${b.dataset.translate}/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language: answer.language,
+          voice_id: answer.voice_id || null,
+          tts_provider: $('#tts_provider').value || null,
+        }),
+      });
+      await loadJobs();
+      go('edit');
+      watch(clone.id, { reveal: true });
+      toast('Tarjima tayyor — endi render qiling');
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      b.disabled = false;
+      b.textContent = 'Boshqa tilga';
     }
   }));
 

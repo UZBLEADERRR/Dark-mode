@@ -5,6 +5,7 @@
     imagesmith -> turns each scene into an image-generation prompt
     subtitler  -> turns word timings into readable, well-broken caption lines
     publisher  -> title, description, tags, thumbnail prompt, music mood
+    translator -> re-voices a script in another language, to the same length
 """
 
 from .director import (
@@ -15,6 +16,7 @@ from .director import (
 from .imagesmith import build_image_prompts
 from .publisher import build_publish_pack
 from .subtitler import build_captions
+from .translator import translate_lines
 
 __all__ = [
     "direct_script",
@@ -23,4 +25,5 @@ __all__ = [
     "build_image_prompts",
     "build_captions",
     "build_publish_pack",
+    "translate_lines",
 ]

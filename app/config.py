@@ -199,6 +199,52 @@ def set_voice_overrides(values: dict | None) -> dict[str, str]:
     return dict(VOICE_OVERRIDES)
 
 
+# --- render speed ------------------------------------------------------------
+# Rendering encodes twice: once per scene into a clip, then once more to
+# cross-fade them together. Every knob that matters for wall-clock time is
+# collected here so one choice moves all of them coherently.
+
+import os as _os
+
+CPU_COUNT = max(1, _os.cpu_count() or 2)
+RENDER_SPEED = _env("RENDER_SPEED", "balanced").lower()
+
+SPEED_PROFILES: dict[str, dict] = {
+    "fast": {
+        "label": "Tez",
+        "clip_preset": "ultrafast", "clip_crf": 14,
+        "final_preset": "veryfast", "final_crf": 22,
+        # The still is scaled above the canvas so a zoom downsamples rather than
+        # stretches. Less headroom is softer under a hard zoom, but zoompan cost
+        # scales with the square of this number, so it is the biggest lever.
+        "supersample": 1.35,
+    },
+    "balanced": {
+        "label": "Muvozanat",
+        "clip_preset": "veryfast", "clip_crf": 16,
+        "final_preset": "faster", "final_crf": 20,
+        "supersample": 1.7,
+    },
+    "quality": {
+        "label": "Sifat",
+        "clip_preset": "veryfast", "clip_crf": 14,
+        "final_preset": "medium", "final_crf": 18,
+        "supersample": 2.0,
+    },
+}
+
+
+def speed_profile(name: str | None = None) -> dict:
+    profile = SPEED_PROFILES.get((name or RENDER_SPEED).lower())
+    if profile is None:
+        profile = SPEED_PROFILES["balanced"]
+    # Clips run several at a time, but each ffmpeg also threads internally, so
+    # the two have to be divided rather than both given the whole machine —
+    # oversubscribing costs more in context switching than it wins in overlap.
+    workers = max(2, min(CPU_COUNT, 4))
+    return {**profile, "workers": workers, "threads": max(1, CPU_COUNT // workers)}
+
+
 def caption_budget(width: int, height: int) -> dict[str, int | float]:
     """How wide a caption line may be, for this canvas.
 

@@ -675,27 +675,34 @@ async def run_render(job_id: str) -> None:
         transition = min(config.TRANSITION_SECONDS,
                          max(0.2, min(s["audio_duration"] for s in scenes) / 2))
         asset_paths = _materialize_assets(workdir, scenes)
-        clips: list[Path] = []
-        clip_durations: list[float] = []
+        speed = config.speed_profile(request.get("render_speed"))
+        clip_durations = [s["audio_duration"] + transition for s in scenes]
+        clips: list[Path] = [workdir / f"clip_{s['index']:03d}.mp4" for s in scenes]
+        made = 0
+        lock = asyncio.Lock()
 
-        for scene in scenes:
-            duration = scene["audio_duration"] + transition
+        async def one_clip(scene: dict) -> None:
+            nonlocal made
             picture_layers = [
                 {**layer, "path": asset_paths[layer["asset_id"]]}
                 for layer in ov.image_layers(scene, float(scene["audio_duration"]))
                 if layer.get("asset_id") in asset_paths
             ]
-            clip = await video.make_scene_clip(
+            await video.make_scene_clip(
                 image=Path(scene["image_path"]), motion=scene.get("motion", "zoom_in"),
-                duration=duration, width=width, height=height,
+                duration=scene["audio_duration"] + transition, width=width, height=height,
                 strength=float(scene.get("motion_strength") or 1.0),
-                image_overlays=picture_layers,
+                image_overlays=picture_layers, speed=speed,
                 out_path=workdir / f"clip_{scene['index']:03d}.mp4",
             )
-            clips.append(clip)
-            clip_durations.append(duration)
-            _progress(job_id, "clips", 78 + int(12 * len(clips) / max(len(scenes), 1)),
-                      f"Animated scene {len(clips)}/{len(scenes)}", status="rendering")
+            async with lock:
+                made += 1
+                _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
+                          f"Animated scene {made}/{len(scenes)}", status="rendering")
+
+        # Each clip is independent, and animating them is the slowest stage of a
+        # render, so they go out together rather than one after another.
+        await _gather_limited([one_clip(s) for s in scenes], speed["workers"])
 
         # --- assemble ----------------------------------------------------------
         _progress(job_id, "render", 90, "Rendering the final video", status="rendering")
@@ -713,6 +720,7 @@ async def run_render(job_id: str) -> None:
             music_start=float(request.get("music_start") or 0.0),
             effects=[s.get("transition") or None for s in scenes],
             sfx=_materialize_sfx(workdir, scenes),
+            speed=speed,
         )
 
         # --- publish -----------------------------------------------------------
@@ -1050,6 +1058,243 @@ def repurpose(job_id: str, video_format: str, regenerate_images: bool) -> str | 
         },
     )
     return clone_id
+
+
+# ── one video, several languages ──────────────────────────────────────────────
+
+async def translate_job(
+    job_id: str, language: str, voice_id: str | None, tts_provider: str | None
+) -> str | None:
+    """Clone a finished video into another language, keeping the pictures.
+
+    The images, layers, camera moves and captions are all language-independent,
+    so only the narration is rewritten and re-recorded. Scene lengths then follow
+    the new voice-over, which is why the timings are simply recomputed rather
+    than forced — a dubbed *project* has no picture to stay in step with, unlike
+    dubbing a finished file.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return None
+    if language not in config.LANGUAGES:
+        raise PipelineError(f"Unknown language '{language}'.")
+
+    scenes = _load_scenes(job)
+    if not scenes:
+        raise PipelineError("This job has no scenes to translate.")
+
+    request = {
+        **job["request"],
+        "language": language,
+        "script": None,
+        "auto_hook": False,
+        "auto_render": False,
+        # An uploaded voice-over cannot be reused for a different language.
+        "narration_audio": None,
+    }
+    if voice_id is not None:
+        request["voice_id"] = voice_id or None
+    if tts_provider:
+        request["tts_provider"] = tts_provider
+
+    clone_id = store.create_job(request)
+    source, target = workdir_for(job_id), workdir_for(clone_id)
+    for folder in ("images", "overlays", "heroes", "sfx"):
+        if (source / folder).is_dir():
+            shutil.copytree(source / folder, target / folder, dirs_exist_ok=True)
+
+    store.update_job(clone_id, status="running", step="translate", progress=12,
+                     log=f"Translating {len(scenes)} scenes into {config.LANGUAGES[language]}")
+
+    try:
+        translated = await skills.translate_lines(
+            lines=[s["narration"] for s in scenes],
+            target_language=language,
+            source_language=job["request"].get("language", ""),
+            tone=job["request"].get("tone", ""),
+            durations=[float(s.get("audio_duration") or 0.0) for s in scenes],
+        )
+    except Exception as exc:  # noqa: BLE001
+        _fail(clone_id, exc, [])
+        return clone_id
+
+    clone: list[dict] = []
+    for scene, line in zip(scenes, translated):
+        copy = dict(scene)
+        copy["narration"] = line
+        copy["words"] = []
+        copy["audio_path"] = None
+        copy["needs_voice"] = True
+        copy["needs_image"] = False
+        copy["overlays"] = [dict(o) for o in (scene.get("overlays") or [])]
+        if scene.get("image_path"):
+            copy["image_path"] = str(target / Path(scene["image_path"]).relative_to(source))
+        clone.append(copy)
+
+    store.update_job(
+        clone_id, status="review", step="review", progress=70,
+        log="Translated — render to hear it",
+        result={
+            "scenes": _reindex(clone),
+            "title": job.get("result", {}).get("title"),
+            "scene_count": len(clone),
+            "style_bible": job.get("result", {}).get("style_bible"),
+            "warnings": [],
+        },
+    )
+    return clone_id
+
+
+# ── dubbing a finished video ──────────────────────────────────────────────────
+
+# Segments shorter than this are folded into the next one: a two-word fragment
+# translates badly on its own and leaves no room to fit the result.
+MIN_SEGMENT = 1.2
+
+
+def _merge_segments(segments: list[dict], total: float) -> list[dict]:
+    merged: list[dict] = []
+    for segment in sorted(segments, key=lambda s: s["start"]):
+        start = max(0.0, float(segment["start"]))
+        end = min(total, float(segment["end"]))
+        text = str(segment.get("text", "")).strip()
+        if not text or end <= start:
+            continue
+        if merged and (start - merged[-1]["end"] < 0.35) and \
+                (end - merged[-1]["start"] < 14.0) and \
+                (merged[-1]["end"] - merged[-1]["start"] < MIN_SEGMENT):
+            merged[-1]["end"] = end
+            merged[-1]["text"] = f"{merged[-1]['text']} {text}".strip()
+        else:
+            merged.append({"start": start, "end": end, "text": text})
+    return merged
+
+
+async def run_dub(job_id: str) -> None:
+    """Replace a finished video's narration with the same thing in another
+    language, leaving the picture untouched."""
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    request = job["request"]
+    warnings: list[str] = []
+
+    try:
+        workdir = workdir_for(job_id)
+        source = Path(request["source_video"])
+        language = request.get("language", "en")
+        provider = (request.get("tts_provider") or config.TTS_PROVIDER).lower()
+
+        _progress(job_id, "probe", 6, "Reading the video")
+        info = await video.probe_video(source)
+        total = float(info["duration"])
+
+        _progress(job_id, "extract", 10, "Separating the soundtrack")
+        audio = await video.extract_audio(source, workdir / "original.mp3")
+
+        _progress(job_id, "transcribe", 18,
+                  "Listening to the original — this is the slow part")
+        segments = _merge_segments(
+            await align.transcribe_segments(audio, request.get("source_language") or None),
+            total,
+        )
+        if not segments:
+            raise PipelineError(
+                "Could not make out any speech in that video. A Gemini or OpenAI "
+                "key is needed to transcribe it."
+            )
+        _progress(job_id, "transcribe", 34, f"{len(segments)} lines heard")
+
+        _progress(job_id, "translate", 40,
+                  f"Translating into {config.LANGUAGES.get(language, language)}")
+        lines = await skills.translate_lines(
+            lines=[s["text"] for s in segments],
+            target_language=language,
+            source_language=request.get("source_language") or "",
+            tone=request.get("tone", ""),
+            durations=[s["end"] - s["start"] for s in segments],
+        )
+
+        # --- speak it, one line at a time, each fitted to its own slot ---------
+        voice_dir = workdir / "dub"
+        done = 0
+        lock = asyncio.Lock()
+
+        async def speak(index: int, text: str) -> Path | None:
+            nonlocal done
+            try:
+                spoken, _words = await tts.synthesize(
+                    text=text, out_path=voice_dir / f"line_{index:04d}",
+                    provider=provider, voice_id=request.get("voice_id"),
+                )
+            except Exception as exc:  # noqa: BLE001 - a lost line is not a lost video
+                warnings.append(f"Line {index + 1} could not be voiced: {exc}")
+                return None
+            finally:
+                async with lock:
+                    done += 1
+                    _progress(job_id, "voice", 45 + int(35 * done / max(len(lines), 1)),
+                              f"Voice-over {done}/{len(lines)}")
+            return spoken
+
+        spoken = await _gather_limited(
+            [speak(i, text) for i, text in enumerate(lines)], config.TTS_CONCURRENCY
+        )
+
+        # --- lay them back on the original timeline ---------------------------
+        _progress(job_id, "mix", 82, "Placing each line where it was said")
+        pieces: list[Path] = []
+        if segments[0]["start"] > 0.05:
+            pieces.append(await video.silence(voice_dir / "lead.wav", segments[0]["start"]))
+
+        for i, segment in enumerate(segments):
+            # The slot runs to the *next* line, so the pause after a sentence is
+            # kept rather than squeezed out.
+            next_start = segments[i + 1]["start"] if i + 1 < len(segments) else total
+            slot = max(0.25, next_start - segment["start"])
+            source_audio = spoken[i]
+            if source_audio is None:
+                pieces.append(await video.silence(voice_dir / f"gap_{i:04d}.wav", slot))
+                continue
+            pieces.append(await video.fit_speech(
+                source=source_audio, out_path=voice_dir / f"fit_{i:04d}.wav",
+                speech=segment["end"] - segment["start"], slot=slot,
+            ))
+
+        dub_track = await video.concat_audio(pieces, workdir / "dub.wav")
+
+        _progress(job_id, "render", 92, "Putting the new voice on the picture")
+        title = _slug(request.get("topic") or source.stem)
+        out_path = workdir / f"{title}-{language}.mp4"
+        # Keeping the original under the dub preserves the music and effects that
+        # were baked into it; at zero the video is narration-only.
+        await video.mux_dub(
+            video_path=source, dub=dub_track, out_path=out_path,
+            original_volume=float(request.get("original_volume") or 0.0),
+            speed=config.speed_profile(request.get("render_speed")),
+        )
+
+        stored, upload_warning = await storage.publish(out_path, f"{job_id}/{out_path.name}")
+        if upload_warning:
+            warnings.append(upload_warning)
+        duration = await video.probe_duration(out_path)
+        store.update_job(
+            job_id, status="done", step="done", progress=100,
+            log=f"Dubbed into {config.LANGUAGES.get(language, language)}",
+            result={
+                "video_url": stored, "download_url": f"/api/jobs/{job_id}/download",
+                "duration": duration, "scene_count": len(segments),
+                "title": request.get("topic") or source.stem,
+                "transcript": [
+                    {**segment, "translation": line}
+                    for segment, line in zip(segments, lines)
+                ],
+                "warnings": warnings,
+            },
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        _fail(job_id, exc, warnings)
 
 
 def _fail(job_id: str, exc: Exception, warnings: list[str]) -> None:

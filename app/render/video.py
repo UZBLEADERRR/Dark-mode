@@ -104,12 +104,15 @@ async def make_scene_clip(
     out_path: Path,
     strength: float = 1.0,
     image_overlays: list[dict] | None = None,
+    speed: dict | None = None,
 ) -> Path:
     """Render one still into a moving, silent clip, with its picture layers on top."""
     fps = config.FPS
+    profile = speed or config.speed_profile()
     frames = max(2, int(round(duration * fps)))
     vf = kenburns.build_filter(
-        motion=motion, frames=frames, width=width, height=height, fps=fps, strength=strength
+        motion=motion, frames=frames, width=width, height=height, fps=fps,
+        strength=strength, supersample=profile["supersample"],
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -117,8 +120,11 @@ async def make_scene_clip(
         "-frames:v", str(frames),
         "-r", str(fps),
         "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "16",
+        "-preset", profile["clip_preset"],
+        # This file is only ever an input to the final encode, so it is cheap
+        # rather than small — a high bitrate here costs disk, not quality.
+        "-crf", str(profile["clip_crf"]),
+        "-threads", str(profile["threads"]),
         "-pix_fmt", "yuv420p",
         str(out_path),
     ]
@@ -152,6 +158,157 @@ async def make_scene_clip(
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", str(image), "-vf", vf, *tail,
         ])
+    return out_path
+
+
+# ── dubbing an existing video ─────────────────────────────────────────────────
+
+async def probe_video(path: Path) -> dict:
+    """Duration plus the dimensions, for a file the user handed us."""
+    out = await _run([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1", str(path),
+    ])
+    info: dict = {}
+    for line in out.splitlines():
+        key, _, value = line.partition("=")
+        try:
+            info[key] = float(value) if key == "duration" else int(value)
+        except ValueError:
+            pass
+    if "duration" not in info:
+        raise RenderError("Could not read the length of that video.")
+    return info
+
+
+async def extract_audio(video_path: Path, out_path: Path) -> Path:
+    """Pull the soundtrack out as small mono audio a transcriber will accept."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    await _run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(video_path),
+        "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k",
+        str(out_path),
+    ])
+    return out_path
+
+
+def _tempo_chain(factor: float) -> str:
+    """`atempo` only accepts 0.5–2.0, so a bigger change is chained."""
+    factor = max(0.25, min(4.0, factor))
+    steps: list[float] = []
+    while factor < 0.5:
+        steps.append(0.5)
+        factor /= 0.5
+    while factor > 2.0:
+        steps.append(2.0)
+        factor /= 2.0
+    steps.append(factor)
+    return ",".join(f"atempo={s:.4f}" for s in steps)
+
+
+async def fit_speech(
+    *, source: Path, out_path: Path, speech: float, slot: float,
+    min_tempo: float = 0.75, max_tempo: float = 1.45,
+) -> Path:
+    """Squeeze one spoken line into the slot the original occupied.
+
+    A translation is rarely the same length as what it replaces, so the speech is
+    gently sped up or slowed down to fit — bounded, because past about 1.5x it
+    stops sounding like a person — and the remainder of the slot is silence, so
+    the next line still starts exactly where it did in the original.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    actual = await probe_duration(source)
+    target = max(0.2, min(speech, slot))
+    tempo = max(min_tempo, min(max_tempo, actual / target)) if target > 0 else 1.0
+
+    await _run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(source),
+        "-af", f"{_tempo_chain(tempo)},aresample=48000,"
+               f"aformat=sample_fmts=fltp:channel_layouts=stereo,"
+               f"apad=whole_dur={slot:.3f},atrim=0:{slot:.3f}",
+        "-c:a", "pcm_s16le", str(out_path),
+    ])
+    return out_path
+
+
+async def silence(out_path: Path, seconds: float) -> Path:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    await _run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-t", f"{max(0.01, seconds):.3f}", "-c:a", "pcm_s16le", str(out_path),
+    ])
+    return out_path
+
+
+async def concat_audio(pieces: list[Path], out_path: Path) -> Path:
+    """Join pieces end to end. Each already has its exact length, so the join
+    alone places every line at the second it belongs on."""
+    if not pieces:
+        raise RenderError("There is nothing to join.")
+    inputs: list[str] = []
+    for piece in pieces:
+        inputs += ["-i", str(piece)]
+    labels = "".join(f"[{i}:a]" for i in range(len(pieces)))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    await _run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *inputs,
+        "-filter_complex", f"{labels}concat=n={len(pieces)}:v=0:a=1[out]",
+        "-map", "[out]", "-c:a", "pcm_s16le", str(out_path),
+    ])
+    return out_path
+
+
+async def mux_dub(
+    *, video_path: Path, dub: Path, out_path: Path,
+    original_volume: float = 0.0, subtitle_file: Path | None = None,
+    speed: dict | None = None,
+) -> Path:
+    """Put the new soundtrack on the original picture.
+
+    Without burned-in subtitles the video stream is copied rather than
+    re-encoded, so dubbing a ten-minute film is a matter of seconds.
+    """
+    profile = speed or config.speed_profile()
+    # cwd is the project folder purely so the subtitle file can be a bare name in
+    # the filter graph, where an absolute path would need its colons escaped. The
+    # inputs stay absolute: the source video was uploaded elsewhere.
+    workdir = out_path.parent
+    inputs = ["-i", str(video_path.resolve()), "-i", str(dub.resolve())]
+
+    keep = max(0.0, min(1.0, original_volume))
+    if keep > 0.01:
+        audio_graph = (
+            f"[0:a]volume={keep:.3f},aresample=48000,"
+            "aformat=sample_fmts=fltp:channel_layouts=stereo[bed];"
+            "[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[dub];"
+            "[dub][bed]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[aout]"
+        )
+        audio_map = "[aout]"
+    else:
+        audio_graph = ""
+        audio_map = "1:a"
+
+    args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *inputs]
+    if subtitle_file:
+        graph = f"[0:v]subtitles={subtitle_file.name}[vout]"
+        if audio_graph:
+            graph += ";" + audio_graph
+        args += ["-filter_complex", graph, "-map", "[vout]", "-map", audio_map,
+                 "-c:v", "libx264", "-preset", profile["final_preset"],
+                 "-crf", str(profile["final_crf"]), "-pix_fmt", "yuv420p"]
+    else:
+        if audio_graph:
+            args += ["-filter_complex", audio_graph]
+        args += ["-map", "0:v", "-map", audio_map, "-c:v", "copy"]
+
+    args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+             "-shortest", "-movflags", "+faststart", out_path.name]
+    await _run(args, cwd=workdir)
     return out_path
 
 
@@ -314,6 +471,7 @@ async def assemble(
     music_start: float = 0.0,
     effects: list[str | None] | None = None,
     sfx: list[dict] | None = None,
+    speed: dict | None = None,
 ) -> Path:
     """Cross-fade the clips, burn the captions, mix the audio, write the MP4.
 
@@ -325,6 +483,7 @@ async def assemble(
 
     transition = min(config.TRANSITION_SECONDS, max(0.2, min(clip_durations) / 2))
     cues = [c for c in (sfx or []) if c.get("path")]
+    profile = speed or config.speed_profile()
 
     async def attempt(with_music: bool, duck: bool, with_sfx: bool = True) -> Path:
         inputs: list[str] = []
@@ -370,8 +529,8 @@ async def assemble(
             "-map", audio_label,
             "-t", f"{total_duration:.3f}",
             "-c:v", "libx264",
-            "-preset", config.VIDEO_PRESET,
-            "-crf", str(config.VIDEO_CRF),
+            "-preset", profile["final_preset"],
+            "-crf", str(profile["final_crf"]),
             "-pix_fmt", "yuv420p",
             "-r", str(config.FPS),
             "-c:a", "aac",

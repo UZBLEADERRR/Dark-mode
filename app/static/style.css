@@ -882,6 +882,32 @@ input[type="range"]::-moz-range-thumb {
 .proj:hover .x { opacity: 1; }
 .proj .x:hover { color: var(--accent); }
 
+
+/* The step line is where progress is actually read, so while something is
+   running it is the loudest thing on the card. */
+.step.busy { color: var(--text); }
+.track.live > i {
+  background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, .45), transparent);
+  background-size: 60px 100%;
+  animation: sweep 1.3s linear infinite;
+}
+@keyframes sweep { to { background-position: 120px 0; } }
+
+/* dubbing */
+.drop { margin-top: 14px; display: grid; gap: 12px; }
+.file.big span { padding: 26px 16px; font-size: .88rem; }
+.lines { display: grid; gap: 9px; max-height: 260px; overflow-y: auto; padding-right: 4px; }
+.lines > div {
+  display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 4px 10px;
+  font-size: .82rem;
+}
+.lines b {
+  grid-row: span 2; color: var(--faint); font-size: .72rem; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.lines span { color: var(--muted); }
+.lines em { font-style: normal; }
+
 /* ── ready gallery ─────────────────────────────────────────────── */
 .ready { display: grid; gap: 16px; }
 .ready-card {
