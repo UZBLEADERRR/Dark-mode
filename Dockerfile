@@ -25,4 +25,9 @@ RUN mkdir -p /data
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# ${PORT:-8000} matters: platforms that inject PORT are honoured, and the
+# container still starts when nothing injects it. Do not override this with a
+# start command that references $PORT without a fallback — an unset PORT makes
+# uvicorn exit with "Option '--port' requires an argument", which the platform
+# then reports as a hung healthcheck rather than a crash.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
