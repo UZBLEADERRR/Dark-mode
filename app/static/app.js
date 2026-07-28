@@ -214,7 +214,9 @@ async function loadHealth() {
   ];
   $('#health-list').innerHTML = checks.map(([label, ok]) =>
     `<div class="row"><span>${esc(label)}</span><span class="tag ${ok ? 'done' : 'failed'}">${ok ? 'bor' : 'yo‘q'}</span></div>`
-  ).join('');
+  ).join('') + Object.entries(h.models || {}).map(([stage, model]) =>
+    `<div class="row"><span>${esc({ text: 'skript modeli', image: 'rasm modeli', tts: 'ovoz modeli' }[stage] || stage)}</span>
+      <span class="model">${esc(model)}</span></div>`).join('');
 
   const core = h.ffmpeg && h.llm && Object.values(h.image_providers).some(Boolean);
   const voice = Object.values(h.tts_providers).some(Boolean);

@@ -895,6 +895,12 @@ input[type="range"]::-moz-range-thumb {
 .tag.done { background: rgba(61, 220, 145, .14); color: var(--ok); }
 .tag.failed { background: rgba(255, 92, 71, .16); color: #ff8f7d; }
 
+.model {
+  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 55%;
+}
+
 .empty { color: var(--faint); font-size: .84rem; padding: 6px 0; }
 
 @media (prefers-reduced-motion: reduce) {

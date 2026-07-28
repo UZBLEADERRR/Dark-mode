@@ -195,6 +195,23 @@ async def health() -> dict[str, Any]:
             "tts_provider": config.TTS_PROVIDER,
             "fps": config.FPS,
         },
+        # Which model each stage will actually call. Every one of these can be
+        # overridden by an environment variable, so the only trustworthy answer
+        # to "what is this deployment running?" is the one it reports itself.
+        "models": {
+            "text": config.LLM_MODEL if config.llm_provider() == "anthropic"
+                    else config.GEMINI_TEXT_MODEL,
+            "image": {
+                "gemini": config.GEMINI_IMAGE_MODEL,
+                "fal": config.FAL_IMAGE_MODEL,
+                "openai": config.OPENAI_IMAGE_MODEL,
+            }.get(config.IMAGE_PROVIDER, config.GEMINI_IMAGE_MODEL),
+            "tts": {
+                "gemini": config.GEMINI_TTS_MODEL,
+                "elevenlabs": config.ELEVENLABS_MODEL,
+                "openai": config.OPENAI_TTS_MODEL,
+            }.get(config.TTS_PROVIDER, config.GEMINI_TTS_MODEL),
+        },
         "motions": list(kenburns.MOTIONS),
         "transitions": list(video.TRANSITION_CHOICES),
         "caption_templates": [

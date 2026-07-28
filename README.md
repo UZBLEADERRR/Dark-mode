@@ -50,6 +50,11 @@ Hammasi adapter — `.env` orqali almashtirasiz, kod o'zgarmaydi.
 Qaysi kalit bor-yo'qligi UI tepasidagi yorliqlarda ko'rinadi; kalitsiz provayder
 tanlanmaydi va job yaratilganda aniq xabar beriladi.
 
+Standart modellar: skript `gemini-2.5-pro`, rasm **`gemini-2.5-flash-image`**,
+ovoz `gemini-2.5-flash-preview-tts`. Har birini env orqali almashtirish mumkin
+(`GEMINI_IMAGE_MODEL` va h.k.), shuning uchun deploy aynan qaysi modelni
+chaqirayotganini **Kutubxona → Holat** bo'limida o'zi ko'rsatadi.
+
 ## Ma'lumotlar qayerda
 
 - **Herolar, musiqa, tovush effektlari, qatlam rasmlari va brend** — SQLite
@@ -243,7 +248,7 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `GET/POST /api/music?kind=sfx` | Fon musiqasi va tovush effektlari |
 | `POST /api/jobs/{id}/render` | Render qilish / qayta render |
 | `GET /api/jobs/{id}/download` | MP4 yuklab olish |
-| `GET /api/health` | Qaysi kalitlar bor, formatlar, harakatlar |
+| `GET /api/health` | Qaysi kalitlar bor, qaysi modellar ishlaydi, formatlar, harakatlar |
 
 ## Loyiha tuzilishi
 
