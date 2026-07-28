@@ -112,6 +112,24 @@ zoom+surilish kombinatsiyalari, diagonal, nafas (`pulse`), tebranish (`sway`) va
 harakatsiz. Ustiga **harakat kuchi** (0.3×…1.8×) — bir xil harakatni sezilar-
 sezilmas siljishdan haqiqiy push'gacha sozlaydi.
 
+## Ilova tuzilishi
+
+Yuqorida to'rtta bo'lim: **Yaratish · Tahrirlash · Tayyor · Kutubxona**.
+Pastda esa **dock** — o'sha bo'limning asboblari, barmoq yetadigan joyda.
+
+**Yaratish** ekranida bitta savol, bitta maydon va bitta tugma. Sozlamalar
+pastdagi dock'da: Format, Uzunlik, Uslub, Herolar, Ovoz, Musiqa, Subtitr,
+Boshqa. Har biri pastdan chiqadigan panel ochadi. Maydon ostidagi qatorda esa
+hozirgi tanlovlaringiz turadi — bosib o'sha panelni ochasiz. Hech narsa
+pastga scroll bo'lib ketmaydi.
+
+**Musiqani va heroni to'g'ridan-to'g'ri o'sha panelda qurilmangizdan
+yuklaysiz** — Kutubxonaga borib qaytish shart emas.
+
+**Tahrirlash** bo'limida yuqorida loyihalaringiz lentasi, birini bossangiz
+ostida studio ochiladi. Dock'da: Eshitish, Matn, Rasm, Sahna, Qatlam, Subtitr,
+Render.
+
 ## Studio — tahrirlagich
 
 Qoralama tayyor bo'lgach oddiy ro'yxat emas, **studio** ochiladi: chapda kadr

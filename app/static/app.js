@@ -165,13 +165,155 @@ addEventListener('keydown', (e) => {
 function go(view) {
   state.view = view;
   $$('.view').forEach((v) => v.classList.toggle('on', v.id === `view-${view}`));
-  $$('#tabbar button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.go === view));
+  $$('#topnav button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.go === view));
+  closeSheet();
+  drawDock();
   scrollTo({ top: 0, behavior: 'instant' in document.documentElement.style ? 'instant' : 'auto' });
-  if (view === 'jobs' || view === 'ready') loadJobs();
+  if (view === 'edit' || view === 'ready') loadJobs();
 }
-$$('[data-go]').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
+addEventListener('click', (e) => {
+  const target = e.target.closest('[data-go]');
+  if (target) go(target.dataset.go);
+});
 
 addEventListener('scroll', () => $('.bar').classList.toggle('stuck', scrollY > 8), { passive: true });
+
+// ── the dock ──────────────────────────────────────────────────────
+// One row of tools for whichever section you are in — the settings that used to
+// be a column of fields below the fold. Each opens a sheet holding the real
+// controls; nothing is duplicated, the panels are moved in and out.
+
+const ICONS = {
+  format: '<rect x="3" y="5" width="18" height="14" rx="2.5"/>',
+  length: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 1.8"/>',
+  style: '<path d="M12 3.5l2.4 5.3 5.6.6-4.2 3.9 1.2 5.7L12 16.2 6.9 19l1.2-5.7L4 9.4l5.6-.6z"/>',
+  cast: '<circle cx="12" cy="8" r="3.4"/><path d="M5.5 19.5c.6-3.4 3.3-5.3 6.5-5.3s5.9 1.9 6.5 5.3"/>',
+  voice: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  music: '<path d="M9 17.5V5l11-2v12.5"/><circle cx="6.5" cy="17.5" r="2.6"/><circle cx="17.5" cy="15.5" r="2.6"/>',
+  subtitle: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7 14.5h5M14.5 14.5h2.5"/>',
+  more: '<circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/>',
+  play: '<path d="M8 5.5l11 6.5-11 6.5z"/>',
+  text: '<path d="M5 6.5h14M12 6.5v11"/>',
+  image: '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M3 15l5-4 4 3 3-2 6 5"/>',
+  scene: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 9.5h18M8 5v4M16 5v4"/>',
+  layers: '<path d="M12 3.5l8.5 4.5L12 12.5 3.5 8zM3.5 12.5L12 17l8.5-4.5"/>',
+  render: '<path d="M12 3.5v11M8 11l4 3.5 4-3.5M4.5 19.5h15"/>',
+};
+
+const SHEETS = {
+  format: 'Kadr shakli va til',
+  length: 'Uzunlik',
+  style: 'Vizual uslub',
+  cast: 'Herolar',
+  voice: 'Ovoz',
+  music: 'Fon musiqasi',
+  subtitle: 'Subtitr',
+  more: 'Boshqa',
+};
+
+const DOCK_LABELS = {
+  format: 'Format', length: 'Uzunlik', style: 'Uslub', cast: 'Herolar',
+  voice: 'Ovoz', music: 'Musiqa', subtitle: 'Subtitr', more: 'Boshqa',
+};
+
+const DOCK = {
+  create: Object.keys(DOCK_LABELS)
+    .map((id) => ({ id, label: DOCK_LABELS[id], icon: ICONS[id], sheet: id })),
+  edit: [
+    { id: 'play', label: 'Eshitish', icon: ICONS.play, act: () => togglePreview() },
+    { id: 'text', label: 'Matn', icon: ICONS.text, act: () => addLayer(TEXT_DEFAULTS) },
+    { id: 'image', label: 'Rasm', icon: ICONS.image, act: () => $('#layer-file').click() },
+    { id: 'scene', label: 'Sahna', icon: ICONS.scene, act: () => showPanel('scene') },
+    { id: 'layers', label: 'Qatlam', icon: ICONS.layers, act: () => showPanel('layers') },
+    { id: 'subtitle', label: 'Subtitr', icon: ICONS.subtitle, act: () => showPanel('caption') },
+    { id: 'render', label: 'Render', icon: ICONS.render, act: () => $('#render-btn').click(), hero: true },
+  ],
+};
+
+function drawDock() {
+  const items = DOCK[state.view] || [];
+  const dock = $('#dock');
+  dock.classList.toggle('hidden', !items.length);
+  if (!items.length) { dock.innerHTML = ''; return; }
+
+  // In the editor the tools act on a scene, so they are dead until one is open.
+  const idle = state.view === 'edit' && !ED.job;
+  // In the editor three of the tools are really the inspector's tabs, so they
+  // show which one you are looking at.
+  const tabOf = { scene: 'scene', layers: 'layers', subtitle: 'caption' };
+  dock.innerHTML = items.map((item) => `
+    <button data-dock="${esc(item.id)}"${item.hero ? ' class="hero"' : ''}${idle ? ' disabled' : ''}${
+      !idle && tabOf[item.id] && tabOf[item.id] === ED.tab ? ' aria-pressed="true"' : ''}>
+      <svg viewBox="0 0 24 24">${item.icon}</svg><span>${esc(item.label)}</span>
+    </button>`).join('');
+
+  $$('#dock button').forEach((button) => button.addEventListener('click', () => {
+    const item = items.find((i) => i.id === button.dataset.dock);
+    if (!item) return;
+    if (item.sheet) openSheet(item.sheet);
+    else item.act();
+  }));
+}
+
+function showPanel(tab) {
+  ED.tab = tab;
+  drawPanel();
+  drawDock();
+  $('.panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ── the sheet ─────────────────────────────────────────────────────
+function openSheet(name) {
+  const panel = $(`[data-panel="${name}"]`);
+  if (!panel) return;
+  closeSheet();
+  $('#sheet-title').textContent = SHEETS[name] || name;
+  $('#sheet-body').append(panel);
+  $('#sheet').classList.remove('hidden');
+  $$('#dock button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.dock === name));
+}
+
+function closeSheet() {
+  const panel = $('#sheet-body > [data-panel]');
+  if (panel) $('#bank').append(panel);
+  $('#sheet').classList.add('hidden');
+  $$('#dock button').forEach((b) => b.removeAttribute('aria-pressed'));
+  drawSummary();
+}
+
+$('#sheet-close').addEventListener('click', closeSheet);
+$('#sheet').addEventListener('click', (e) => { if (e.target.id === 'sheet') closeSheet(); });
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#sheet').classList.contains('hidden')) closeSheet();
+});
+
+// ── the summary line ──────────────────────────────────────────────
+// What the video will be, in one row, with every part of it tappable.
+function drawSummary() {
+  const scriptMode = state.mode === 'script';
+  const uploading = $('#use_upload').checked;
+  const heroes = $$('#hero-picker input:checked').length;
+  const music = $('#music_id');
+  const voice = $('#voice_id');
+  const styleOn = $$('#style-presets button[aria-pressed="true"]')[0];
+
+  const chips = [
+    ['format', `${state.format} · ${$('#language').selectedOptions[0]?.text.split(' ')[0] || ''}`],
+    ['length', scriptMode || uploading ? null : durationLabel(Number($('#duration').value))],
+    ['style', styleOn ? styleOn.textContent : 'o‘z uslubim'],
+    ['cast', heroes ? `${heroes} hero` : null],
+    ['voice', uploading ? 'o‘z ovozim'
+      : (voice.value ? voice.selectedOptions[0].text.split(' —')[0] : 'standart ovoz')],
+    ['music', music.value ? music.selectedOptions[0].text : null],
+    ['subtitle', $('#burn_subtitles').checked
+      ? $('#subtitle_style').selectedOptions[0]?.text || 'subtitr' : 'subtitrsiz'],
+  ].filter(([, value]) => value);
+
+  $('#summary').innerHTML = chips.map(([key, value]) =>
+    `<button type="button" data-sheet="${key}">${esc(value)}</button>`).join('');
+  $$('#summary [data-sheet]').forEach((b) =>
+    b.addEventListener('click', () => openSheet(b.dataset.sheet)));
+}
 
 // ── health ────────────────────────────────────────────────────────
 async function loadHealth() {
@@ -190,6 +332,7 @@ async function loadHealth() {
   $$('#format-seg button').forEach((b) => b.addEventListener('click', () => {
     state.format = b.dataset.fmt;
     $$('#format-seg button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+    drawSummary();
   }));
 
   $('#language').innerHTML = h.languages
@@ -242,7 +385,10 @@ async function loadHeroes() {
     </label>`).join('');
   $$('#hero-picker .hero-chip').forEach((chip) => {
     const input = $('input', chip);
-    input.addEventListener('change', () => chip.classList.toggle('on', input.checked));
+    input.addEventListener('change', () => {
+      chip.classList.toggle('on', input.checked);
+      drawSummary();
+    });
   });
 
   $('#hero-list').innerHTML = state.heroes.length
@@ -541,28 +687,71 @@ async function loadMusic() {
 // The trim offset is meaningless with no track chosen, so it only appears once
 // there is something to trim.
 function syncMusicStart() {
-  $('#music-start-field').classList.toggle('hidden', !$('#music_id').value);
+  const chosen = !!$('#music_id').value;
+  $('#music-start-field').classList.toggle('hidden', !chosen);
+  $('#music-start-label').textContent = clock(Number($('#music_start').value) || 0);
 }
-$('#music_id').addEventListener('change', syncMusicStart);
+$('#music_id').addEventListener('change', () => { syncMusicStart(); drawSummary(); });
+$('#music_start').addEventListener('input', syncMusicStart);
 
-// file inputs show the chosen name
+// Uploading a track from the composer, rather than making the user leave for the
+// library and come back, is the difference between adding music and not.
+$('#music-quick').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const file = $('input[type=file]', form).files[0];
+  if (!file) return;
+  const button = $('button', form);
+  button.disabled = true;
+  try {
+    const body = new FormData();
+    body.append('audio', file);
+    body.append('name', file.name.replace(/\.[^.]+$/, ''));
+    body.append('kind', 'music');
+    const track = await api('/api/music', { method: 'POST', body });
+    await loadMusic();
+    $('#music_id').value = track.id;
+    syncMusicStart();
+    drawSummary();
+    form.reset();
+    $('.file', form).classList.remove('has');
+    $('.file span', form).textContent = 'Qurilmadan musiqa yuklash';
+    toast('Musiqa qo‘shildi');
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// Same for a hero: the cast is chosen here, so it can be added here.
+$('#hero-quick').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await submitLibraryForm(e.target, '/api/heroes', loadHeroes);
+});
+
+// file inputs show the chosen name, keeping their own wording to go back to
 $$('.file input').forEach((i) => i.addEventListener('change', () => {
   const label = i.closest('.file');
+  const span = $('span', label);
+  if (label.dataset.label === undefined) label.dataset.label = span.textContent;
   const name = i.files[0]?.name;
   label.classList.toggle('has', !!name);
-  if (name) $('span', label).textContent = name;
+  span.textContent = name || label.dataset.label;
 }));
 
 async function submitLibraryForm(form, url, reload) {
   const button = $('button', form);
   button.disabled = true;
+  // Restoring each label's own wording is why it is read before the reset,
+  // rather than guessed from the input's accept attribute afterwards.
+  const labels = $$('.file', form);
   try {
     await api(url, { method: 'POST', body: new FormData(form) });
     form.reset();
-    $$('.file', form).forEach((l) => {
-      l.classList.remove('has');
-      $('span', l).textContent = l.querySelector('input').accept.startsWith('image')
-        ? 'Rasm tanlash' : 'Audio tanlash';
+    labels.forEach((label) => {
+      label.classList.remove('has');
+      if (label.dataset.label !== undefined) $('span', label).textContent = label.dataset.label;
     });
     await reload();
     toast('Qo‘shildi');
@@ -588,6 +777,7 @@ $('#style-presets').innerHTML = STYLE_PRESETS.map(([label], i) =>
 $$('#style-presets button').forEach((b) => b.addEventListener('click', () => {
   $('#art_style').value = STYLE_PRESETS[Number(b.dataset.p)][1];
   $$('#style-presets button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+  drawSummary();
 }));
 
 // Typing a style by hand means none of the presets describes it any more.
@@ -595,6 +785,7 @@ $('#art_style').addEventListener('input', () => {
   const value = $('#art_style').value.trim();
   $$('#style-presets button').forEach((b) =>
     b.setAttribute('aria-pressed', STYLE_PRESETS[Number(b.dataset.p)][1] === value));
+  drawSummary();
 });
 
 // ── voices ────────────────────────────────────────────────────────
@@ -654,6 +845,10 @@ $('#voice-play').addEventListener('click', () =>
   playVoiceSample($('#tts_provider').value, $('#voice_id').value, $('#voice-play')));
 
 $('#tts_provider').addEventListener('change', loadVoices);
+$('#voice_id').addEventListener('change', drawSummary);
+$('#language').addEventListener('change', drawSummary);
+$('#subtitle_style').addEventListener('change', drawSummary);
+$('#burn_subtitles').addEventListener('change', drawSummary);
 
 // ── topic / script mode ───────────────────────────────────────────
 $$('#mode-tabs button').forEach((b) => b.addEventListener('click', () => {
@@ -667,11 +862,15 @@ $$('#mode-tabs button').forEach((b) => b.addEventListener('click', () => {
     ? 'Video nima haqida — bir qatorda (ixtiyoriy kontekst)'
     : "Ipak yo'li bo'ylab sayohat qilgan uch savdogarning haqiqiy tarixi…";
   $('#topic').rows = script ? 1 : 2;
+  drawSummary();
 }));
 
 // ── composer ──────────────────────────────────────────────────────
 const duration = $('#duration');
-const syncDuration = () => { $('#duration-label').textContent = durationLabel(Number(duration.value)); };
+const syncDuration = () => {
+  $('#duration-label').textContent = durationLabel(Number(duration.value));
+  drawSummary();
+};
 duration.addEventListener('input', syncDuration);
 syncDuration();
 
@@ -686,6 +885,7 @@ $('#use_upload').addEventListener('change', (e) => {
   $('#duration-row').classList.toggle('hidden', up || state.mode === 'script');
   $('#tts-field').classList.toggle('hidden', up);
   $('#voice-field').classList.toggle('hidden', up);
+  drawSummary();
 });
 
 $('#submit-btn').addEventListener('click', async () => {
@@ -757,6 +957,7 @@ $('#submit-btn').addEventListener('click', async () => {
         }),
       });
     }
+    go('edit');
     watch(job.id, { reveal: true });
   } catch (e) {
     err.textContent = e.message;
@@ -770,6 +971,7 @@ $('#submit-btn').addEventListener('click', async () => {
 // ── watch a job ───────────────────────────────────────────────────
 function watch(jobId, { reveal = false } = {}) {
   state.activeId = jobId;
+  drawDock();
   state.drawn = null;
   state.reveal = reveal;
   $('#stage').classList.remove('hidden');
@@ -977,7 +1179,11 @@ async function flush() {
 function syncEditor(job) {
   const on = (job.status === 'review' || job.status === 'done') && job.scenes?.length;
   $('#editor').classList.toggle('hidden', !on);
-  if (!on) { state.drawn = null; ED.job = null; return; }
+  if (!on) {
+    state.drawn = null;
+    if (ED.job) { ED.job = null; drawDock(); }
+    return;
+  }
 
   $('#editor-title').textContent = `Studio · ${job.scenes.length} sahna`;
   $('#editor-note').textContent = job.status === 'review'
@@ -1010,6 +1216,8 @@ function buildStudio(job) {
   if (!selected()) ED.sel = null;
   stopPreview();
   drawAll();
+  // The editor's tools act on an open job, so the dock only comes alive here.
+  drawDock();
 }
 
 function drawAll() {
@@ -1435,6 +1643,7 @@ new ResizeObserver(() => { if (ED.job) { drawLayers(); drawCaptionSample(); } })
 $$('#panel-tabs button').forEach((b) => b.addEventListener('click', () => {
   ED.tab = b.dataset.tab;
   drawPanel();
+  drawDock();
 }));
 
 function drawPanel() {
@@ -1730,6 +1939,7 @@ function addLayer(base) {
   ED.tab = 'layers';
   touch();
   drawAll();
+  drawDock();
 }
 
 $('.canvas-tools [data-add="text"]').addEventListener('click', () => addLayer(TEXT_DEFAULTS));
@@ -1864,23 +2074,20 @@ async function loadJobs() {
   $('#ready-badge').textContent = done.length;
   $('#ready-badge').classList.toggle('hidden', !done.length);
 
+  // A strip of projects, newest first — pick one and the studio below is it.
   $('#jobs-list').innerHTML = state.jobs.length
     ? state.jobs.map((j) => `
-        <div class="row tap" data-job="${esc(j.id)}">
-          <div>
-            <span>${esc(j.title || j.topic || j.id)}</span>
-            <small>${esc(j.video_format)} · ${esc(j.language)}${j.duration ? ` · ${clock(j.duration)}` : ''}</small>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span class="tag ${esc(j.status)}">${esc(STATUS[j.status] || j.status)}</span>
-            <button class="x" data-del-job="${esc(j.id)}" aria-label="O‘chirish">×</button>
-          </div>
-        </div>`).join('')
-    : '<p class="empty">Hali loyiha yo‘q.</p>';
+        <button class="proj${j.id === state.activeId ? ' on' : ''}" data-job="${esc(j.id)}">
+          <span class="tag ${esc(j.status)}">${esc(STATUS[j.status] || j.status)}</span>
+          <b>${esc(j.title || j.topic || j.id)}</b>
+          <small>${esc(j.video_format)}${j.duration ? ` · ${clock(j.duration)}` : ''}</small>
+          <i class="x" data-del-job="${esc(j.id)}" role="button" aria-label="O‘chirish">×</i>
+        </button>`).join('')
+    : '<p class="empty">Hali loyiha yo‘q. «Yaratish» bo‘limidan boshlang.</p>';
 
   $$('[data-job]').forEach((row) => row.addEventListener('click', (e) => {
     if (e.target.closest('[data-del-job]')) return;
-    go('create');
+    go('edit');
     watch(row.dataset.job, { reveal: true });
   }));
 
@@ -1890,8 +2097,10 @@ async function loadJobs() {
     await api(`/api/jobs/${b.dataset.delJob}`, { method: 'DELETE' });
     if (state.activeId === b.dataset.delJob) {
       state.activeId = null;
+      ED.job = null;
       $('#stage').classList.add('hidden');
       $('#editor').classList.add('hidden');
+      drawDock();
     }
     loadJobs();
   }));
@@ -1986,7 +2195,7 @@ function drawReady(done) {
     b.textContent = 'Yaratilmoqda…';
     try {
       await api(`/api/jobs/${b.dataset.thumbs}/thumbnails`, { method: 'POST' });
-      go('create');
+      go('edit');
       watch(b.dataset.thumbs, { reveal: true });
       toast('Uchta muqova tayyorlanmoqda');
     } catch (e) {
@@ -2021,7 +2230,7 @@ function drawReady(done) {
         }),
       });
       await loadJobs();
-      go('create');
+      go('edit');
       watch(clone.id, { reveal: true });
       toast('Nusxa tayyor — endi render qiling');
     } catch (e) {
@@ -2039,8 +2248,10 @@ function drawReady(done) {
     applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.
+    drawDock();
+    drawSummary();
     const resume = state.jobs.find((j) => BUSY.includes(j.status));
-    if (resume) watch(resume.id);
+    if (resume) { go('edit'); watch(resume.id); }
   } catch (e) {
     document.body.insertAdjacentHTML('afterbegin',
       `<p class="msg err" style="margin:16px">Ilova yuklanmadi: ${esc(e.message)}</p>`);
