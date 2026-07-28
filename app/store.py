@@ -28,12 +28,33 @@ CREATE TABLE IF NOT EXISTS heroes (
     created_at  TEXT NOT NULL
 );
 
+-- `kind` separates a background bed ('music') from a one-shot sting ('sfx');
+-- they are the same kind of file and differ only in how the renderer uses them.
 CREATE TABLE IF NOT EXISTS music (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'music',
     mime        TEXT NOT NULL DEFAULT 'audio/mpeg',
     ext         TEXT NOT NULL DEFAULT '.mp3',
     audio       BLOB NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+-- One row per named blob of JSON. Right now that is the brand kit; anything
+-- else app-wide can live here without another table.
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Stickers, logos and cut-outs dropped onto a scene as an overlay layer.
+CREATE TABLE IF NOT EXISTS assets (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    mime        TEXT NOT NULL DEFAULT 'image/png',
+    ext         TEXT NOT NULL DEFAULT '.png',
+    data        BLOB NOT NULL,
     created_at  TEXT NOT NULL
 );
 
@@ -72,6 +93,18 @@ def init() -> None:
     config.ensure_dirs()
     with _conn() as conn:
         conn.executescript(_SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns that arrived after a database was first created.
+
+    CREATE TABLE IF NOT EXISTS is a no-op on an existing table, so a new column
+    in the schema above never reaches a database that already has the table.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(music)")}
+    if "kind" not in columns:
+        conn.execute("ALTER TABLE music ADD COLUMN kind TEXT NOT NULL DEFAULT 'music'")
 
 
 def new_id(prefix: str) -> str:
@@ -147,24 +180,29 @@ def delete_hero(hero_id: str) -> bool:
 
 # --- music -------------------------------------------------------------------
 
-_MUSIC_COLS = "id, name, mime, ext, created_at"
+_MUSIC_COLS = "id, name, kind, mime, ext, created_at"
 
 
-def add_music(name: str, audio: bytes, mime: str, ext: str) -> dict[str, Any]:
-    music_id = new_id("mus")
+def add_music(name: str, audio: bytes, mime: str, ext: str,
+              kind: str = "music") -> dict[str, Any]:
+    music_id = new_id("sfx" if kind == "sfx" else "mus")
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO music (id, name, mime, ext, audio, created_at) VALUES (?,?,?,?,?,?)",
-            (music_id, name, mime, ext, audio, _now()),
+            "INSERT INTO music (id, name, kind, mime, ext, audio, created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (music_id, name, kind, mime, ext, audio, _now()),
         )
-    return {"id": music_id, "name": name, "mime": mime, "ext": ext}
+    return {"id": music_id, "name": name, "kind": kind, "mime": mime, "ext": ext}
 
 
-def list_music() -> list[dict[str, Any]]:
+def list_music(kind: str | None = None) -> list[dict[str, Any]]:
+    query = f"SELECT {_MUSIC_COLS} FROM music"
+    params: tuple = ()
+    if kind:
+        query += " WHERE kind = ?"
+        params = (kind,)
     with _conn() as conn:
-        rows = conn.execute(
-            f"SELECT {_MUSIC_COLS} FROM music ORDER BY created_at DESC"
-        ).fetchall()
+        rows = conn.execute(query + " ORDER BY created_at DESC", params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -179,6 +217,65 @@ def get_music_audio(music_id: str) -> tuple[bytes, str, str] | None:
 def delete_music(music_id: str) -> bool:
     with _conn() as conn:
         return conn.execute("DELETE FROM music WHERE id = ?", (music_id,)).rowcount > 0
+
+
+# --- settings (the brand kit) ------------------------------------------------
+
+def get_setting(key: str, default: Any = None) -> Any:
+    with _conn() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return default
+    try:
+        return json.loads(row["value"])
+    except json.JSONDecodeError:
+        return default
+
+
+def set_setting(key: str, value: Any) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value,"
+            " updated_at = excluded.updated_at",
+            (key, json.dumps(value), _now()),
+        )
+
+
+# --- overlay assets ----------------------------------------------------------
+
+_ASSET_COLS = "id, name, mime, ext, created_at"
+
+
+def add_asset(name: str, data: bytes, mime: str, ext: str) -> dict[str, Any]:
+    asset_id = new_id("ast")
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO assets (id, name, mime, ext, data, created_at) VALUES (?,?,?,?,?,?)",
+            (asset_id, name, mime, ext, data, _now()),
+        )
+    return {"id": asset_id, "name": name, "mime": mime, "ext": ext}
+
+
+def list_assets() -> list[dict[str, Any]]:
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT {_ASSET_COLS} FROM assets ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_asset(asset_id: str) -> tuple[bytes, str, str] | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT data, mime, ext FROM assets WHERE id = ?", (asset_id,)
+        ).fetchone()
+    return (row["data"], row["mime"], row["ext"]) if row else None
+
+
+def delete_asset(asset_id: str) -> bool:
+    with _conn() as conn:
+        return conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,)).rowcount > 0
 
 
 # --- jobs --------------------------------------------------------------------
@@ -230,6 +327,16 @@ def update_job(
                 job_id,
             ),
         )
+
+
+def replace_request(job_id: str, request: dict[str, Any]) -> bool:
+    """Rewrite a job's settings in place — used when the editor changes the look."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE jobs SET request = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(request), _now(), job_id),
+        )
+        return cur.rowcount > 0
 
 
 def get_job(job_id: str) -> dict[str, Any] | None:

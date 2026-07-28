@@ -66,11 +66,7 @@
           <div class="f2">
             <label class="f"><span>Ohang</span><input id="tone" value="cinematic documentary" /></label>
             <label class="f"><span>Subtitr</span>
-              <select id="subtitle_style">
-                <option value="bold">Qalin</option>
-                <option value="karaoke">Karaoke</option>
-                <option value="clean">Toza</option>
-              </select>
+              <select id="subtitle_style"><option value="bold">Qalin</option></select>
             </label>
           </div>
 
@@ -100,6 +96,10 @@
               <span>Render'dan oldin ko'rib chiqaman</span></label>
             <label class="sw"><input type="checkbox" id="burn_subtitles" checked /><i></i>
               <span>Subtitrni videoga yoqish</span></label>
+            <label class="sw"><input type="checkbox" id="auto_hook" /><i></i>
+              <span>Hook matnini birinchi 3 soniyaga qo'yish</span></label>
+            <label class="sw hidden" id="brand-logo-sw"><input type="checkbox" id="brand_logo" checked /><i></i>
+              <span>Brend logotipini har sahnaga qo'yish</span></label>
             <label class="sw"><input type="checkbox" id="use_upload" /><i></i>
               <span>Ovozni o'zim yuklayman</span></label>
           </div>
@@ -118,15 +118,60 @@
 
     <section class="stage hidden" id="stage"></section>
 
+    <!-- ══ Studio: sahna + qatlam + subtitr tahrirlagichi ═════════════ -->
     <section class="editor hidden" id="editor">
       <div class="editor-bar">
         <div>
-          <h2 id="editor-title">Sahnalar</h2>
+          <h2 id="editor-title">Studio</h2>
           <p id="editor-note"></p>
         </div>
-        <button class="go slim" id="render-btn">Render qilish</button>
+        <div class="editor-acts">
+          <span class="saver" id="saver"></span>
+          <button class="go slim" id="render-btn">Render qilish</button>
+        </div>
       </div>
-      <div class="scenes" id="editor-scenes"></div>
+
+      <div class="studio">
+        <div class="canvas-wrap">
+          <div class="canvas" id="canvas">
+            <img id="canvas-img" alt="" />
+            <div class="ov-layer" id="ov-layer"></div>
+            <div class="cap-sample" id="cap-sample"><span></span></div>
+            <div class="canvas-empty" id="canvas-empty">Sahna tanlanmagan</div>
+          </div>
+          <div class="canvas-tools">
+            <button class="tool play" id="play-btn" aria-label="Sahnani eshitish">
+              <svg viewBox="0 0 24 24" id="play-icon"><path d="M8 5.5l11 6.5-11 6.5z"/></svg>
+              <span>Eshitish</span>
+            </button>
+            <button class="tool" data-add="text">
+              <svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v12"/></svg>Matn</button>
+            <label class="tool" data-add="image">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 15l5-4 4 3 3-2 6 5"/></svg>Rasm
+              <input type="file" accept="image/*" hidden id="layer-file" />
+            </label>
+            <span class="canvas-time" id="canvas-time"></span>
+          </div>
+          <div class="scrub"><i id="scrub-fill"></i></div>
+        </div>
+
+        <div class="strip-row">
+          <div class="filmstrip" id="filmstrip"></div>
+          <button class="frame-add" id="add-scene" aria-label="Sahna qo'shish">+</button>
+        </div>
+
+        <div class="panel">
+          <div class="panel-tabs" id="panel-tabs">
+            <button data-tab="scene" aria-pressed="true">Sahna</button>
+            <button data-tab="layers">Qatlamlar</button>
+            <button data-tab="caption">Subtitr</button>
+          </div>
+          <div class="panel-body" id="tab-scene"></div>
+          <div class="panel-body hidden" id="tab-layers"></div>
+          <div class="panel-body hidden" id="tab-caption"></div>
+          <p class="msg err hidden" id="editor-error"></p>
+        </div>
+      </div>
     </section>
   </section>
 
@@ -157,10 +202,28 @@
     </form>
     <div class="lib-grid" id="hero-list"></div>
 
-    <h3>Musiqa</h3>
-    <p class="hint">Ovoz ostida avtomatik pasayadi.</p>
+    <h3>Brend</h3>
+    <p class="hint">Bir marta sozlaysiz — har yangi video shundan boshlanadi.</p>
+    <div class="brand-box" id="brand-box"></div>
+
+    <h3>Qatlam rasmlari</h3>
+    <p class="hint">Stiker, logotip, kesilgan rasm — sahna ustiga qo'yiladi. Shaffof PNG eng yaxshisi.</p>
+    <form id="asset-form" class="mini">
+      <input name="name" placeholder="Nomi" />
+      <label class="file"><input type="file" name="image" accept="image/*" required /><span>Rasm tanlash</span></label>
+      <button>Qo'shish</button>
+    </form>
+    <div class="lib-grid" id="asset-list"></div>
+
+    <h3>Musiqa va effektlar</h3>
+    <p class="hint">Fon musiqasi ovoz ostida avtomatik pasayadi. Effekt — sahna
+      boshida bir marta yangraydigan qisqa tovush.</p>
     <form id="music-form" class="mini">
-      <input name="name" placeholder="Trek nomi" required />
+      <input name="name" placeholder="Nomi" required />
+      <select name="kind">
+        <option value="music">Fon musiqasi</option>
+        <option value="sfx">Tovush effekti</option>
+      </select>
       <label class="file"><input type="file" name="audio" accept="audio/*" required /><span>Audio tanlash</span></label>
       <button>Qo'shish</button>
     </form>
@@ -190,6 +253,17 @@
 </nav>
 
 <div class="toast" id="toast"></div>
+
+<div class="modal hidden" id="modal">
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+    <div class="modal-acts">
+      <button class="btn ghost" data-m="cancel">Bekor</button>
+      <button class="btn primary" data-m="ok" id="modal-ok">Qo'shish</button>
+    </div>
+  </div>
+</div>
 
 <script src="/static/app.js"></script>
 </body>

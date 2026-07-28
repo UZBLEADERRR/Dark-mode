@@ -52,8 +52,9 @@ tanlanmaydi va job yaratilganda aniq xabar beriladi.
 
 ## Ma'lumotlar qayerda
 
-- **Herolar va musiqa** — SQLite bazasida, rasm/audio ham blob sifatida ichida.
-  Alohida fayl papkasi kerak emas: bitta `app.db` — butun kutubxona.
+- **Herolar, musiqa, tovush effektlari, qatlam rasmlari va brend** — SQLite
+  bazasida, fayllari ham blob sifatida ichida. Alohida papka kerak emas: bitta
+  `app.db` — butun kutubxona.
 - **Renderlar** — `DATA_DIR/projects/<job>/` ichida. Video tayyor bo'lgach
   yuklab olasiz. Supabase yoqilgan bo'lsa nusxasi bucket'ga ham chiqadi.
 
@@ -70,8 +71,68 @@ ko'rsatadi:
    ~45 barobar katta. Chiziqli harakatdagi "keskin boshlanib keskin to'xtash"
    yo'qoladi.
 
-Har bir sahna uchun 8 xil harakatdan birini tanlash mumkin (muharrirdan ham):
-zoom in/out, chap/o'ng/yuqori/past surilish, va zoom+surilish kombinatsiyalari.
+Har bir sahna uchun **15 xil harakat**: zoom in/out, to'rt tomonga surilish,
+zoom+surilish kombinatsiyalari, diagonal, nafas (`pulse`), tebranish (`sway`) va
+harakatsiz. Ustiga **harakat kuchi** (0.3×…1.8×) — bir xil harakatni sezilar-
+sezilmas siljishdan haqiqiy push'gacha sozlaydi.
+
+## Studio — tahrirlagich
+
+Qoralama tayyor bo'lgach oddiy ro'yxat emas, **studio** ochiladi: chapda kadr
+qanday eksport bo'lsa shundayligicha, o'ngda sozlamalar, pastda sahnalar lentasi.
+
+**Qatlamlar.** Kadr ustiga matn va rasm qo'yasiz — **sichqoncha bilan sudrab
+joylashtirasiz**, burchagidan tortib kattalashtirasiz. Har bir qatlamning rangi,
+orqa foni, burilishi, shaffofligi, vaqti (sahnaning qaysi soniyasidan qaysigacha)
+va kirish animatsiyasi bor. Bir sahnada 8 tagacha qatlam.
+
+Matn qatlamlari subtitr bilan bitta ASS faylida chiziladi — qo'shimcha kodlash
+yo'q, sifat yo'qolmaydi. Rasm qatlamlari o'sha sahnaning ffmpeg zanjiriga
+qo'shiladi. Qatlam buzilsa render to'xtamaydi: o'sha sahna qatlamsiz chiqadi.
+
+**Subtitr ko'rinishi.** 8 ta tayyor uslub (Qalin, Toza, Karaoke, Neon, Fonli,
+Pop, So'zma-so'z, Nozik) va ularning ostida barcha tugmalar: matn rangi,
+aytilayotgan so'z rangi, kontur/soya/fon, fon rangi va shaffofligi, o'lcham,
+chetdan masofa, joylashuvi (yuqori/o'rta/past), BOSH HARFLAR, kirish
+animatsiyasi. **Kadrdagi namuna real vaqtda o'zgaradi** — render kutish shart
+emas: namuna aynan renderer ishlatadigan shrift o'lchamidan hisoblanadi.
+
+**Eshitish.** Sahnaning o'z ovozini o'ynatadi va kadr shu soat bo'yicha yuradi:
+subtitr so'zma-so'z yonadi, qatlamlar o'z vaqtida chiqib-yo'qoladi. Qaysi so'zga
+qaysi yozuv tushishini render kutmasdan ko'rasiz.
+
+**Sahna jarrohligi.** Lentadagi kadrni **sudrab tartibini o'zgartirasiz**,
+keraksizini o'chirasiz, yangisini qo'shasiz — matnini yozasiz, qolganini AI
+qiladi (prompt, ovoz, rasm). Har bir sahnaning fayllari o'ziniki bo'lgan
+o'zgarmas nom bilan saqlanadi, shuning uchun tartib o'zgarganda rasmlar
+aralashib ketmaydi.
+
+**Tovush effektlari.** Sahnaga qisqa tovush (whoosh, ding) qo'yiladi — balandligi
+va kechikishi sozlanadi. Ovoz va musiqa bilan bir mikserda birlashadi.
+
+O'zgarishlar **o'zi saqlanadi** (yozganingizdan ~0.8 soniya keyin), tepada
+"saqlandi" deb turadi.
+
+## Brend
+
+Kutubxonada bir marta sozlaysiz: logotip (har sahnaga qo'yiladi), brend rangi,
+doimiy vizual uslub, ohang, ovoz va fon musiqasi. Har yangi video shundan
+boshlanadi — lekin bu qulf emas, formada nima yozsangiz o'sha g'olib.
+
+**Hook.** "Hook matnini birinchi 3 soniyaga qo'yish" belgilansa, Director
+yozgan hook jumlasi kadrga brend rangidagi fonda chiqadi. Shorts va TikTok
+uchun eng muhim uch soniya.
+
+## Muqova va boshqa formatlar
+
+**Muqova.** Tayyor video ostidagi «Muqova yaratish» uchta variant chizadi — yaqin
+plan, umumiy plan va hissiy cho'qqi. Ichida yozuv bo'lmaydi (sarlavhani o'zingiz
+qo'yasiz, generator uni baribir xato yozadi).
+
+**Boshqa formatga.** Bitta skriptdan 16:9, 9:16, 1:1 va 4:5 chiqadi. Ovoz,
+vaqtlar, subtitr va qatlamlar o'zgarmaydi — ular formatga bog'liq emas. Rasmlar
+esa bog'liq: eskilarini ishlatsangiz o'rtasidan kesiladi (tez), qayta
+yaratsangiz yangi kadr uchun chiziladi (sifatli).
 
 ---
 
@@ -122,17 +183,20 @@ docker run --rm -p 8000:8000 -e GEMINI_API_KEY=AIza... -v "$PWD/data:/data" ai-v
 1. **Herolar va musiqa** bo'limida personaj rasmini yuklang (ism + qisqa tavsif).
    Tavsif AI ga qiyofani saqlashda yordam beradi.
 2. **Yangi video**: mavzu, format, uzunlik, til, herolar → **Video yaratish**.
-3. Qoralama tayyor bo'lgach pastda **sahna muharriri** ochiladi:
-   - **Matn** — ovoz va subtitr shundan olinadi. O'zgartirsangiz "ovoz eskirgan"
-     belgisi chiqadi va render paytida o'sha sahna qayta o'qiladi.
-   - **Rasm prompti** — o'zgartirsangiz "rasm eskirgan" belgisi chiqadi.
-   - **Kamera harakati** va **ekran yozuvi**.
-   - **💾 Saqlash** — o'zgarishni yozadi.
-   - **🖼 Rasmni qayta** / **🎙 Ovozni qayta** — faqat o'sha sahnani darhol
-     qayta yaratadi.
-4. **🎬 Videoni render qilish** — eskirgan sahnalar avtomatik yangilanadi, keyin
-   video yig'iladi.
-5. Tugagach **⬇ Videoni yuklab olish**. Subtitr `.srt` alohida.
+3. Qoralama tayyor bo'lgach **studio** ochiladi. Pastdagi lentadan sahnani
+   tanlaysiz, o'ngdagi uch bo'limda ishlaysiz:
+   - **Sahna** — matn (ovoz va subtitr shundan olinadi; o'zgartirsangiz "ovoz
+     eskirgan" belgisi chiqadi), rasm prompti, kamera harakati va kuchi, o'tish
+     effekti, ekran yozuvi, shu sahnadagi herolar. Shu yerda **Rasmni qayta**,
+     **Ovozni qayta** va **O'z rasmim** tugmalari.
+   - **Qatlamlar** — kadrga matn/rasm qo'shish, sudrab joylashtirish, rang, fon,
+     burilish, vaqt, animatsiya.
+   - **Subtitr** — tayyor uslublar va barcha ranglar/o'lchamlar. Namuna kadrda
+     darhol ko'rinadi.
+4. **Render qilish** — eskirgan sahnalar avtomatik yangilanadi, keyin video
+   yig'iladi.
+5. Tugagach **Videoni yuklab olish**. Subtitr `.srt` alohida. **Tayyor** bo'limida
+   YouTube / TikTok / Instagram uchun sarlavha va hashtaglar nusxalashga tayyor.
 
 Video tayyor bo'lgandan keyin ham tahrirlab, **qayta render** qilishingiz mumkin.
 
@@ -166,8 +230,17 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs` | Yangi video (`auto_render: false` — qoralamada to'xtaydi) |
 | `POST /api/jobs/with-audio` | Tayyor ovoz bilan |
 | `GET /api/jobs/{id}` | Holat, progress, sahnalar, jurnal |
-| `PATCH /api/jobs/{id}/scenes/{i}` | Sahnani tahrirlash |
+| `PATCH /api/jobs/{id}` | Subtitr uslubi, musiqa, subtitrni yoqish/o'chirish |
+| `PATCH /api/jobs/{id}/scenes/{i}` | Sahnani, qatlamlarini va tovush effektini tahrirlash |
+| `POST /api/jobs/{id}/scenes` | Yangi sahna qo'shish (prompt + ovoz + rasm) |
+| `DELETE /api/jobs/{id}/scenes/{i}` | Sahnani o'chirish |
+| `POST /api/jobs/{id}/scenes/order` | Tartibni o'zgartirish |
 | `POST /api/jobs/{id}/scenes/{i}/regenerate` | Faqat o'sha sahnani qayta yaratish |
+| `POST /api/jobs/{id}/thumbnails` | Uchta muqova varianti |
+| `POST /api/jobs/{id}/repurpose` | Boshqa formatga nusxa olish |
+| `GET/PUT /api/brand` | Brend to'plami |
+| `GET/POST/DELETE /api/assets` | Qatlam rasmlari (stiker, logotip) |
+| `GET/POST /api/music?kind=sfx` | Fon musiqasi va tovush effektlari |
 | `POST /api/jobs/{id}/render` | Render qilish / qayta render |
 | `GET /api/jobs/{id}/download` | MP4 yuklab olish |
 | `GET /api/health` | Qaysi kalitlar bor, formatlar, harakatlar |
@@ -182,7 +255,7 @@ app/
 ├── store.py           SQLite: herolar (blob), musiqa (blob), joblar
 ├── skills/            AI promptlari + provayder adapteri (llm.py)
 ├── providers/         Tashqi API adapterlari (images, tts, align, storage)
-├── render/            ffmpeg: kenburns, subtitles (ASS), video
+├── render/            ffmpeg: kenburns, subtitles (ASS), overlays, video
 └── static/            UI (vanilla HTML/CSS/JS, build kerak emas)
 ```
 
