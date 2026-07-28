@@ -15,12 +15,13 @@ render stage always works from what is actually on disk.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
 import traceback
 import unicodedata
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import config, skills, store
 from .providers import align, images, storage, tts
@@ -43,6 +44,42 @@ def _progress(job_id: str, step: str, percent: int, message: str | None = None,
               status: str = "running") -> None:
     store.update_job(job_id, status=status, step=step, progress=percent,
                      log=message or step)
+
+
+def _note(job_id: str, message: str) -> None:
+    """Add a line to the log without touching the step or the percentage.
+
+    Retries used to happen in silence, so a slow provider looked exactly like a
+    frozen app. Every note also refreshes `updated_at`, which is what the
+    progress card watches to decide whether the job has genuinely stalled.
+    """
+    store.update_job(job_id, log=message)
+
+
+def _retry_note(job_id: str, label: str) -> Callable[[int, Exception], None]:
+    def note(attempt: int, exc: Exception) -> None:
+        _note(job_id, f"{label} — attempt {attempt} failed, retrying ({_short(exc)})")
+
+    return note
+
+
+def _wait_note(job_id: str, label: str) -> Callable[[float, str], None]:
+    """Report a deliberate wait, so pacing never looks like a hang.
+
+    Only waits worth mentioning are logged. At ten calls a minute the limiter
+    holds each line for about six seconds, and narrating that would bury the
+    progress it is meant to sit beside.
+    """
+    def note(seconds: float, reason: str) -> None:
+        if seconds >= 10:
+            _note(job_id, f"{label} — {reason}, waiting {seconds:.0f}s")
+
+    return note
+
+
+def _short(exc: Exception, limit: int = 120) -> str:
+    text = " ".join(str(exc).split()) or exc.__class__.__name__
+    return text[:limit] + "…" if len(text) > limit else text
 
 
 def _slug(text: str, limit: int = 60) -> str:
@@ -341,30 +378,51 @@ async def _voice_scenes(
     job_id: str,
     base_progress: int = 25,
     span: int = 20,
-) -> None:
-    """Synthesize `targets` (a subset of `scenes`) and refresh every start time."""
+    strict: bool = True,
+) -> list[str]:
+    """Synthesize `targets` (a subset of `scenes`) and refresh every start time.
+
+    With `strict=False` a scene that will not speak is left marked `needs_voice`
+    instead of failing the batch. That is what the draft wants: losing fifty-seven
+    good scenes because the provider went quiet on the fifty-eighth is a far worse
+    outcome than finishing with one gap the render stage can try again.
+    """
     audio_dir = workdir / "audio"
     align_provider = config.resolve_align_provider(provider)
+    warnings: list[str] = []
     done = 0
     lock = asyncio.Lock()
 
     async def one(scene: dict) -> None:
         nonlocal done
-        path, provider_words = await tts.synthesize(
-            text=scene["narration"],
-            out_path=audio_dir / f"scene_{scene['sid']}",
-            provider=provider,
-            voice_id=voice_id,
-        )
-        raw_duration = await video.probe_duration(path)
-        words = await align.words_for(
-            audio_path=path,
-            text=scene["narration"],
-            duration=raw_duration,
-            provider=align_provider,
-            language=language,
-            provider_words=provider_words,
-        )
+        try:
+            path, provider_words = await tts.synthesize(
+                text=scene["narration"],
+                out_path=audio_dir / f"scene_{scene['sid']}",
+                provider=provider,
+                voice_id=voice_id,
+                on_retry=_retry_note(job_id, f"Scene {scene['index'] + 1} voice-over"),
+                on_wait=_wait_note(job_id, f"Scene {scene['index'] + 1} voice-over"),
+            )
+            raw_duration = await video.probe_duration(path)
+            words = await align.words_for(
+                audio_path=path,
+                text=scene["narration"],
+                duration=raw_duration,
+                provider=align_provider,
+                language=language,
+                provider_words=provider_words,
+            )
+        except Exception as exc:  # noqa: BLE001 - re-raised below when strict
+            if strict:
+                raise
+            scene["needs_voice"] = True
+            async with lock:
+                done += 1
+                warnings.append(f"Scene {scene['index'] + 1} has no voice-over yet: {_short(exc)}")
+                _note(job_id, f"Scene {scene['index'] + 1} voice-over failed — carrying on")
+            return
+
         scene["audio_path"] = str(path)
         scene["audio_duration"] = raw_duration + video.SCENE_GAP
         scene["words"] = words
@@ -377,6 +435,7 @@ async def _voice_scenes(
     if targets:
         await _gather_limited([one(scene) for scene in targets], config.TTS_CONCURRENCY)
     _recompute_starts(scenes)
+    return warnings
 
 
 async def _render_images(
@@ -408,6 +467,7 @@ async def _render_images(
             size=size,
             provider=provider,
             out_path=image_dir / f"scene_{scene['sid']}.png",
+            on_retry=_retry_note(job_id, f"Scene {scene['index'] + 1} image"),
         )
         scene["image_path"] = str(path)
         scene["needs_image"] = False
@@ -551,9 +611,10 @@ async def run_draft(job_id: str) -> None:
         # --- voice ------------------------------------------------------------
         if not uploaded_audio:
             _progress(job_id, "voice", 26, "Recording the voice-over")
-            await _voice_scenes(
+            warnings += await _voice_scenes(
                 scenes=scenes, targets=scenes, workdir=workdir, provider=tts_provider,
                 voice_id=request.get("voice_id"), language=language, job_id=job_id,
+                strict=False,
             )
 
         # --- images -----------------------------------------------------------
@@ -751,6 +812,88 @@ async def run_render(job_id: str) -> None:
 
     except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
         _fail(job_id, exc, warnings)
+
+
+async def restyle_music(job_id: str, music_id: str | None, music_start: float) -> None:
+    """Put a different track under a finished video — or take the music away.
+
+    Only the soundtrack is rebuilt. The render already saved the narration
+    separately, so the bed is mixed against that rather than against the
+    finished file's own audio; the picture is copied through untouched, which
+    makes this seconds of work instead of a whole render, and means a track can
+    be auditioned as many times as it takes without degrading the video.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    request = job["request"]
+    result = job.get("result") or {}
+    warnings: list[str] = list(result.get("warnings") or [])
+
+    try:
+        workdir = workdir_for(job_id)
+        current = _finished_video(workdir)
+        if current is None:
+            raise PipelineError("This job has no rendered video to add music to.")
+        narration_path = next(iter(workdir.glob("narration.*")), None)
+        if narration_path is None:
+            raise PipelineError(
+                "The narration for this video is no longer on disk — render it again first.")
+
+        scenes = _load_scenes(job)
+        total = float(result.get("duration") or 0.0) or await video.probe_duration(current)
+
+        _progress(job_id, "music", 40,
+                  "Removing the music" if not music_id else "Mixing in the new track",
+                  status="rendering")
+
+        music_path = _materialize_music(workdir, music_id)
+        if music_id and music_path is None:
+            raise PipelineError("That track is no longer in the library.")
+
+        # ffmpeg cannot read and write the same file, so the mix lands beside the
+        # original and only replaces it once it has been written in full.
+        staging = workdir / "remix.mp4"
+        await video.remix_audio(
+            video_path=current, narration=narration_path, out_path=staging,
+            workdir=workdir, total_duration=total, music=music_path,
+            music_start=float(music_start or 0.0),
+            sfx=_materialize_sfx(workdir, scenes),
+        )
+        os.replace(staging, current)
+
+        # Remember the choice: a later re-render should keep the music, not
+        # silently go back to whatever the video was created with.
+        request["music_id"] = music_id or None
+        request["music_start"] = float(music_start or 0.0)
+        store.replace_request(job_id, request)
+
+        _progress(job_id, "music", 85, "Publishing the new mix", status="rendering")
+        video_url, upload_warning = await storage.publish(current, f"{job_id}/{current.name}")
+        if upload_warning:
+            warnings.append(upload_warning)
+
+        # The file kept its name, so the browser would happily show the old mix
+        # from cache. The counter is what makes the player fetch it again.
+        version = int(result.get("audio_version", 0)) + 1
+        store.update_job(
+            job_id, status="done", step="done", progress=100, error="",
+            log="Music removed" if not music_id else "New music mixed in",
+            result={
+                "video_url": f"{video_url}{'&' if '?' in video_url else '?'}v={version}",
+                "audio_version": version,
+                "warnings": warnings,
+            },
+        )
+
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
+        _fail(job_id, exc, warnings)
+
+
+def _finished_video(workdir: Path) -> Path | None:
+    videos = [v for v in workdir.glob("*.mp4")
+              if not v.name.startswith("clip_") and v.name != "remix.mp4"]
+    return max(videos, key=lambda p: p.stat().st_mtime) if videos else None
 
 
 # ── per-scene regeneration ────────────────────────────────────────────────────
@@ -971,6 +1114,7 @@ async def make_thumbnails(job_id: str) -> None:
                 size=(fmt["width"], fmt["height"]),
                 provider=provider,
                 out_path=workdir / "thumbs" / f"thumb_{i}.png",
+                on_retry=_retry_note(job_id, f"Thumbnail {i + 1}"),
             )
             if warning:
                 warnings.append(f"Thumbnail {i + 1}: {warning}")
@@ -1226,6 +1370,8 @@ async def run_dub(job_id: str) -> None:
                 spoken, _words = await tts.synthesize(
                     text=text, out_path=voice_dir / f"line_{index:04d}",
                     provider=provider, voice_id=request.get("voice_id"),
+                    on_retry=_retry_note(job_id, f"Line {index + 1}"),
+                    on_wait=_wait_note(job_id, f"Line {index + 1}"),
                 )
             except Exception as exc:  # noqa: BLE001 - a lost line is not a lost video
                 warnings.append(f"Line {index + 1} could not be voiced: {exc}")

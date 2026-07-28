@@ -13,13 +13,14 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import config, pipeline, store
+from . import config, pgstore, pipeline, store
 from .models import (
     BrandKit,
     CreateJobRequest,
     HeroPatch,
     JobPatch,
     ModelSettings,
+    MusicSwap,
     RegenerateRequest,
     RepurposeRequest,
     SceneInsert,
@@ -46,6 +47,9 @@ VIDEO_TYPES = {".mp4": "video/mp4", ".mov": "video/quicktime", ".m4v": "video/x-
 # small Railway container, so jobs queue behind this instead of all starting.
 _job_slots = asyncio.Semaphore(max(1, config.MAX_CONCURRENT_JOBS))
 _running: set[asyncio.Task] = set()
+# Keyed by job id so a job that is waiting on a provider that will never answer
+# can be abandoned from the UI instead of being waited out.
+_tasks_by_job: dict[str, asyncio.Task] = {}
 
 
 async def _ensure_bucket_quietly() -> None:
@@ -109,7 +113,7 @@ async def _read_upload(upload: UploadFile, allowed: dict[str, str]) -> tuple[byt
     return b"".join(chunks), allowed[ext], ext
 
 
-def _launch(coro_factory) -> None:
+def _launch(coro_factory, job_id: str | None = None) -> None:
     async def runner() -> None:
         async with _job_slots:
             await coro_factory()
@@ -117,6 +121,14 @@ def _launch(coro_factory) -> None:
     task = asyncio.create_task(runner())
     _running.add(task)
     task.add_done_callback(_running.discard)
+    if job_id:
+        # A second run for the same job replaces the first in the map; the older
+        # task is already finished by then, because a job only accepts new work
+        # from a settled state.
+        _tasks_by_job[job_id] = task
+        task.add_done_callback(
+            lambda t, jid=job_id: _tasks_by_job.pop(jid, None) if _tasks_by_job.get(jid) is t else None
+        )
 
 
 def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, Any]:
@@ -157,6 +169,16 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
     }
 
 
+def _hero_store() -> dict[str, Any]:
+    if not pgstore.enabled():
+        return {"backend": "sqlite", "ok": True,
+                "note": "Bu konteynerda saqlanadi — deploy qilinganda o'chadi."}
+    ok, detail = pgstore.health()
+    return {"backend": "postgres", "ok": ok,
+            "note": "Postgres — deploydan keyin ham saqlanadi." if ok
+                    else f"Postgres ulanmadi: {detail}"}
+
+
 def _get_job_or_404(job_id: str) -> dict[str, Any]:
     job = store.get_job(job_id)
     if job is None:
@@ -195,6 +217,10 @@ async def health() -> dict[str, Any]:
         "llm": config.llm_ready(),
         "llm_provider": config.llm_provider(),
         "storage": storage.backend(),
+        # Heroes are the one thing a container restart must not lose, so where
+        # they live — and whether that place is answering — is worth reporting.
+        "hero_store": _hero_store(),
+        "tts_rate_limit": config.TTS_RATE_LIMIT,
         "image_providers": {n: config.image_provider_ready(n)
                             for n in ("gemini", "fal", "openai")},
         "tts_providers": {n: config.tts_provider_ready(n)
@@ -474,7 +500,7 @@ async def create_job(request: CreateJobRequest) -> dict[str, Any]:
     })
     _validate(payload)
     job_id = store.create_job(payload)
-    _launch(lambda: pipeline.run_draft(job_id))
+    _launch(lambda: pipeline.run_draft(job_id), job_id)
     return {"id": job_id, "status": "queued"}
 
 
@@ -517,7 +543,7 @@ async def create_job_with_audio(
     }
     _validate(payload)
     job_id = store.create_job(payload)
-    _launch(lambda: pipeline.run_draft(job_id))
+    _launch(lambda: pipeline.run_draft(job_id), job_id)
     return {"id": job_id, "status": "queued"}
 
 
@@ -668,7 +694,7 @@ async def insert_scene(job_id: str, body: SceneInsert) -> dict[str, Any]:
     """Add a scene, then write its prompt, record it and draw it."""
     _editable_job(job_id)
     store.update_job(job_id, status="running", step="add-scene", progress=10)
-    _launch(lambda: pipeline.add_scene(job_id, body.after, body.narration))
+    _launch(lambda: pipeline.add_scene(job_id, body.after, body.narration), job_id)
     return {"id": job_id, "status": "running"}
 
 
@@ -707,7 +733,7 @@ async def regenerate_scene(job_id: str, index: int, body: RegenerateRequest) -> 
     redo_voice = body.voice and not job["request"].get("narration_audio")
     store.update_job(job_id, status="running", step="regenerate", progress=10)
     _launch(lambda: pipeline.regenerate_scene(
-        job_id, index, redo_image=body.image, redo_voice=redo_voice))
+        job_id, index, redo_image=body.image, redo_voice=redo_voice), job_id)
     return {"id": job_id, "status": "running"}
 
 
@@ -729,8 +755,62 @@ async def render_job(job_id: str) -> dict[str, Any]:
     """Finish a reviewed draft, or re-render a finished video after edits."""
     _editable_job(job_id)
     store.update_job(job_id, status="rendering", step="render", progress=74)
-    _launch(lambda: pipeline.run_render(job_id))
+    _launch(lambda: pipeline.run_render(job_id), job_id)
     return {"id": job_id, "status": "rendering"}
+
+
+@app.post("/api/jobs/{job_id}/music", status_code=202)
+async def swap_music(job_id: str, body: MusicSwap) -> dict[str, Any]:
+    """Add, change or remove the music under a finished video.
+
+    Separate from the render endpoint because it is a different size of job:
+    only the audio is rebuilt and the picture is copied through, so a track can
+    be tried, judged and swapped again in seconds.
+    """
+    job = _get_job_or_404(job_id)
+    if job["status"] in _BUSY:
+        raise HTTPException(status_code=409, detail="This job is still working.")
+    if job["status"] != "done":
+        raise HTTPException(
+            status_code=400,
+            detail="Render the video first — music is mixed into a finished file.")
+    if body.music_id and store.get_music_audio(body.music_id) is None:
+        raise HTTPException(status_code=404, detail="That track is not in the library.")
+
+    store.update_job(job_id, status="rendering", step="music", progress=10)
+    _launch(lambda: pipeline.restyle_music(job_id, body.music_id or None, body.music_start),
+            job_id)
+    return {"id": job_id, "status": "rendering"}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> dict[str, Any]:
+    """Abandon a job that is waiting on something that is never going to answer.
+
+    The task is cancelled rather than left to time out, and the row is settled
+    here rather than in the pipeline: `CancelledError` is a `BaseException`, so
+    it flies straight past the handlers that would normally record the outcome.
+    """
+    job = _get_job_or_404(job_id)
+    if job["status"] not in _BUSY:
+        raise HTTPException(status_code=409, detail="This job is not running.")
+
+    task = _tasks_by_job.pop(job_id, None)
+    if task and not task.done():
+        task.cancel()
+
+    scenes = (job.get("result") or {}).get("scenes") or []
+    store.update_job(
+        job_id,
+        status="review" if scenes else "failed",
+        step="review" if scenes else "failed",
+        progress=72 if scenes else job.get("progress", 0),
+        # Scenes are only written between stages, so a cancel during the first
+        # pass has nothing to go back to; one that lands later keeps the draft.
+        error="" if scenes else "Stopped before it finished.",
+        log="Stopped by you.",
+    )
+    return _job_payload(_get_job_or_404(job_id))
 
 
 @app.post("/api/jobs/{job_id}/thumbnails", status_code=202)
@@ -744,7 +824,7 @@ async def make_thumbnails(job_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400,
                             detail=f"No API key configured for the '{provider}' image provider.")
     store.update_job(job_id, status="running", step="thumbnails", progress=10)
-    _launch(lambda: pipeline.make_thumbnails(job_id))
+    _launch(lambda: pipeline.make_thumbnails(job_id), job_id)
     return {"id": job_id, "status": "running"}
 
 
@@ -816,7 +896,7 @@ async def dub_video(
         "video_format": "16:9",
         "auto_render": True,
     })
-    _launch(lambda: pipeline.run_dub(job_id))
+    _launch(lambda: pipeline.run_dub(job_id), job_id)
     return {"id": job_id, "status": "queued"}
 
 

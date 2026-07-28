@@ -134,6 +134,15 @@ class JobPatch(BaseModel):
     music_start: float | None = Field(default=None, ge=0, le=36000)
 
 
+class MusicSwap(BaseModel):
+    """Change the soundtrack of a video that has already been rendered."""
+
+    # An empty id is a real choice, not a missing one: it means take the music
+    # off. That is why this is a plain string rather than an optional field.
+    music_id: str = ""
+    music_start: float = Field(default=0.0, ge=0, le=36000)
+
+
 class CreateJobRequest(BaseModel):
     topic: str = Field(min_length=2, max_length=500)
     # When set, this is used as the narration verbatim and the Director only

@@ -34,6 +34,12 @@ DATA_DIR = Path(_env("DATA_DIR", "./data")).resolve()
 PROJECTS_DIR = DATA_DIR / "projects"
 DB_PATH = DATA_DIR / "app.db"
 
+# Optional Postgres, used for the hero library alone. Railway injects
+# DATABASE_URL when a Postgres service is attached; without it everything stays
+# in SQLite. Heroes are the only uploads a user cannot recreate, so they are the
+# only thing worth keeping off a filesystem that a deploy wipes.
+DATABASE_URL = _env("DATABASE_URL", "").strip()
+
 # Hero photos and music live in SQLite as blobs, not loose files — one database
 # file is the whole library, so a single Railway volume keeps everything.
 STORAGE_BACKEND = _env("STORAGE_BACKEND", "local").lower()  # local | supabase
@@ -101,6 +107,22 @@ SUBTITLE_FONT = _env("SUBTITLE_FONT", "DejaVu Sans")
 MUSIC_VOLUME = float(_env("MUSIC_VOLUME", "0.10"))
 GEMINI_USE_IMAGE_CONFIG = _flag("GEMINI_USE_IMAGE_CONFIG", True)
 IMAGE_CONCURRENCY = _int("IMAGE_CONCURRENCY", 3)
+
+# How long one provider call may take, and how long all of its retries may take
+# together. The second number is the one that matters: three retries behind a
+# generous per-call timeout used to mean a single stalled scene could hold the
+# whole stage for ten minutes with nothing on screen to say so.
+TTS_TIMEOUT = float(_env("TTS_TIMEOUT", "90"))
+TTS_DEADLINE = float(_env("TTS_DEADLINE", "180"))
+
+# Voice keys are commonly sold ten requests to the minute. Pacing ourselves
+# beats being throttled, so the limiter holds calls back rather than spending
+# them on 429s. A 429 that arrives anyway is waited out, not counted as a
+# failure — TTS_RATE_PATIENCE caps how long one line may spend queueing.
+TTS_RATE_LIMIT = _int("TTS_RATE_LIMIT", 10)
+TTS_RATE_PATIENCE = float(_env("TTS_RATE_PATIENCE", "900"))
+IMAGE_TIMEOUT = float(_env("IMAGE_TIMEOUT", "150"))
+IMAGE_DEADLINE = float(_env("IMAGE_DEADLINE", "330"))
 TTS_CONCURRENCY = _int("TTS_CONCURRENCY", 3)
 MAX_CONCURRENT_JOBS = _int("MAX_CONCURRENT_JOBS", 1)
 
