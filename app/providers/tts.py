@@ -152,24 +152,34 @@ async def _gemini(
     if not config.GEMINI_API_KEY:
         raise TTSError("GEMINI_API_KEY is not set.")
 
-    url = f"{config.GEMINI_BASE}/models/{config.model('gemini_tts')}:generateContent"
-    resp = await client.post(
-        url,
-        headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
-        json={
-            "contents": [{"role": "user", "parts": [{"text": text}]}],
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-                "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {
-                            "voiceName": voice_id or config.default_voice("gemini")
-                        }
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": text}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": voice_id or config.default_voice("gemini")
                     }
-                },
+                }
             },
         },
-    )
+    }
+    headers = {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
+
+    async def call(model_name: str) -> httpx.Response:
+        return await client.post(
+            f"{config.GEMINI_BASE}/models/{model_name}:generateContent",
+            headers=headers, json=body,
+        )
+
+    resp = await call(config.model("gemini_tts"))
+    fallback = config.model("gemini_tts_fallback")
+    # The default voice model is a preview build, which a given key may simply
+    # not be granted. Dropping to the settled one beats failing the whole video.
+    if resp.status_code in (400, 403, 404) and fallback \
+            and fallback != config.model("gemini_tts"):
+        resp = await call(fallback)
     if resp.status_code >= 400:
         raise TTSError(f"Gemini TTS error {resp.status_code}: {resp.text[:300]}")
 

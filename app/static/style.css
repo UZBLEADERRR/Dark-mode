@@ -709,7 +709,7 @@ input[type="range"]::-moz-range-thumb {
 .filmstrip::-webkit-scrollbar { height: 5px; }
 .filmstrip::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 9px; }
 .frame {
-  position: relative; flex: 0 0 auto;
+  position: relative; flex: 0 0 auto; cursor: pointer;
   width: 92px; aspect-ratio: 16 / 10;
   border-radius: 9px; overflow: hidden; padding: 0;
   border: 2px solid transparent; background: var(--raised);
@@ -732,6 +732,25 @@ input[type="range"]::-moz-range-thumb {
   font-size: .6rem; font-weight: 700; font-style: normal;
   line-height: 15px; text-align: center;
 }
+
+/* Reordering by dragging is a mouse gesture — on a touch screen the same
+   movement is how the strip is scrolled. These arrows work either way, and say
+   out loud that a scene can be moved at all. */
+.move {
+  position: absolute; inset: auto 0 0 0;
+  display: none; justify-content: space-between;
+  background: linear-gradient(transparent, rgba(0, 0, 0, .8));
+  padding: 12px 2px 2px;
+}
+.frame.on .move { display: flex; }
+.move button {
+  width: 26px; height: 22px; border-radius: 7px;
+  background: rgba(8, 9, 12, .8); color: #fff;
+  font-size: .95rem; line-height: 1;
+  transition: background .16s;
+}
+.move button:hover:not(:disabled) { background: var(--accent); }
+.move button:disabled { opacity: .28; cursor: not-allowed; }
 
 /* inspector */
 .panel {
