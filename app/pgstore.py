@@ -1,15 +1,17 @@
-"""Postgres storage for the hero library.
+"""The Postgres side of storage: connection, dialect, and moving in.
 
-Railway gives a container a fresh filesystem on every deploy, which is fine for
-projects — they are rebuildable — but not for heroes. A hero is a photo the user
-uploaded and cannot regenerate, so it is the one thing here that has to outlive
-the container. Point `DATABASE_URL` at a Postgres instance and heroes move
-there; everything else stays in SQLite beside the render output, where it
-belongs.
+Railway (and any container host) hands the app a fresh filesystem on every
+deploy. Without a database that means every hero, every uploaded sound, every
+brand setting and every project you have ever made disappears the next time the
+service restarts. Point `DATABASE_URL` at Postgres — Supabase is what this is
+written and tested against — and all of it moves there instead.
 
-Only heroes live here on purpose. Jobs carry large log arrays and are written on
-every progress tick, and pushing that across a network round trip would slow the
-render down to no benefit — they die with the container either way.
+This module deliberately holds no table logic. `store.py` owns the SQL, once,
+and runs the same statements against either database; all that lives here is
+what the two engines genuinely disagree about: how a connection is opened, how
+placeholders are spelled, and which column type holds bytes. Keeping it that way
+is the point — two hand-written copies of the same query drift, and the copy
+that drifts is always the one you cannot test locally.
 """
 
 from __future__ import annotations
@@ -19,20 +21,7 @@ from typing import Any, Iterator
 
 from . import config
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS heroes (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    mime        TEXT NOT NULL DEFAULT 'image/png',
-    ext         TEXT NOT NULL DEFAULT '.png',
-    image       BYTEA NOT NULL,
-    created_at  TEXT NOT NULL
-);
-"""
-
-_COLS = "id, name, description, mime, ext, created_at"
-_pool = None
+_pool: Any = None
 _ready = False
 
 
@@ -42,7 +31,6 @@ def enabled() -> bool:
 
 def _driver():
     try:
-        import psycopg  # noqa: F401
         from psycopg.rows import dict_row
 
         return dict_row
@@ -53,101 +41,133 @@ def _driver():
         ) from exc
 
 
-@contextmanager
-def _conn() -> Iterator[Any]:
-    """A pooled connection, with the table created on first use.
+class _Cursor:
+    """A psycopg cursor wearing the small part of the sqlite3 API `store` uses."""
 
-    The pool opens lazily rather than at import. Startup must not depend on a
-    network service being reachable: a database that is briefly down should make
-    the hero library fail, not stop the container from answering its healthcheck.
+    def __init__(self, cursor: Any) -> None:
+        self._cursor = cursor
+
+    def fetchone(self) -> Any:
+        return self._cursor.fetchone()
+
+    def fetchall(self) -> list[Any]:
+        return self._cursor.fetchall()
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._cursor)
+
+    @property
+    def rowcount(self) -> int:
+        return self._cursor.rowcount
+
+
+class Connection:
+    """Makes a psycopg connection answer to the sqlite3 calls `store` makes.
+
+    Only two things are translated. Placeholders: sqlite writes `?`, psycopg
+    writes `%s`. And `%` itself, which psycopg reads as the start of a
+    placeholder — no query here contains one, and this would corrupt it if one
+    ever did, so it is escaped rather than left as a trap.
     """
-    global _pool, _ready
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params: Any = ()) -> _Cursor:
+        return _Cursor(self._conn.execute(translate(sql), tuple(params or ())))
+
+    def executescript(self, script: str) -> None:
+        self._conn.execute(script)
+
+    def commit(self) -> None:
+        pass  # the pool's context manager commits on a clean exit
+
+
+def translate(sql: str) -> str:
+    return sql.replace("%", "%%").replace("?", "%s")
+
+
+def blob() -> str:
+    """The bytes column type, spelled for whichever engine is in use."""
+    return "BYTEA" if enabled() else "BLOB"
+
+
+@contextmanager
+def connect() -> Iterator[Connection]:
+    """A pooled connection. The pool opens lazily, never at import.
+
+    Startup must not depend on a network service answering: a database that is
+    briefly unreachable should make the library fail, not stop the container
+    from passing its healthcheck.
+    """
+    global _pool
 
     dict_row = _driver()
     if _pool is None:
         from psycopg_pool import ConnectionPool
 
         _pool = ConnectionPool(
-            config.DATABASE_URL, min_size=0, max_size=4, timeout=15,
-            kwargs={"row_factory": dict_row}, open=True,
+            config.DATABASE_URL,
+            min_size=0,
+            max_size=6,
+            timeout=20,
+            # Supabase's transaction pooler (port 6543) rejects prepared
+            # statements, and psycopg starts preparing a query on its fifth
+            # run. Every query here is short, so nothing is lost by never
+            # preparing — and with it on, the app works for four requests and
+            # then breaks, which is the worst way for this to fail.
+            kwargs={"row_factory": dict_row, "prepare_threshold": None},
+            open=True,
         )
 
     with _pool.connection() as conn:
-        if not _ready:
-            conn.execute(_SCHEMA)
-            _ready = True
-        yield conn
+        yield Connection(conn)
+
+
+def mark_ready() -> bool:
+    """True the first time it is called, so the schema runs once per process."""
+    global _ready
+    if _ready:
+        return False
+    _ready = True
+    return True
+
+
+def reset() -> None:
+    """Drop the pool — used by tests that switch databases mid-process."""
+    global _pool, _ready
+    if _pool is not None:
+        try:
+            _pool.close()
+        except Exception:  # noqa: BLE001 - closing a broken pool is not an error
+            pass
+    _pool, _ready = None, False
 
 
 def health() -> tuple[bool, str]:
-    """Is the hero database actually reachable? Shown on the settings page."""
+    """Is the database actually reachable? Shown on the settings page."""
     if not enabled():
         return False, "not configured"
     try:
-        with _conn() as conn:
+        with connect() as conn:
             conn.execute("SELECT 1").fetchone()
         return True, "connected"
     except Exception as exc:  # noqa: BLE001 - reported, never raised at the user
-        return False, str(exc)[:200]
+        return False, _readable(exc)
 
 
-# --- heroes ------------------------------------------------------------------
-
-def add_hero(hero_id: str, name: str, description: str, image: bytes,
-             mime: str, ext: str, created_at: str) -> None:
-    with _conn() as conn:
-        conn.execute(
-            "INSERT INTO heroes (id, name, description, mime, ext, image, created_at)"
-            " VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING",
-            (hero_id, name, description, mime, ext, image, created_at),
-        )
-
-
-def list_heroes() -> list[dict[str, Any]]:
-    with _conn() as conn:
-        return conn.execute(
-            f"SELECT {_COLS} FROM heroes ORDER BY created_at DESC").fetchall()
-
-
-def get_heroes(hero_ids: list[str]) -> list[dict[str, Any]]:
-    if not hero_ids:
-        return []
-    with _conn() as conn:
-        rows = conn.execute(
-            f"SELECT {_COLS} FROM heroes WHERE id = ANY(%s)", (list(hero_ids),)).fetchall()
-    by_id = {r["id"]: r for r in rows}
-    return [by_id[h] for h in hero_ids if h in by_id]
-
-
-def get_hero_image(hero_id: str) -> tuple[bytes, str, str] | None:
-    with _conn() as conn:
-        row = conn.execute(
-            "SELECT image, mime, ext FROM heroes WHERE id = %s", (hero_id,)).fetchone()
-    return (bytes(row["image"]), row["mime"], row["ext"]) if row else None
-
-
-def update_hero(hero_id: str, *, name: str | None = None,
-                description: str | None = None) -> bool:
-    fields, values = [], []
-    if name is not None:
-        fields.append("name = %s")
-        values.append(name)
-    if description is not None:
-        fields.append("description = %s")
-        values.append(description)
-    if not fields:
-        return False
-    values.append(hero_id)
-    with _conn() as conn:
-        cur = conn.execute(f"UPDATE heroes SET {', '.join(fields)} WHERE id = %s", values)
-        return cur.rowcount > 0
-
-
-def delete_hero(hero_id: str) -> bool:
-    with _conn() as conn:
-        return conn.execute("DELETE FROM heroes WHERE id = %s", (hero_id,)).rowcount > 0
-
-
-def known_ids() -> set[str]:
-    with _conn() as conn:
-        return {r["id"] for r in conn.execute("SELECT id FROM heroes").fetchall()}
+def _readable(exc: Exception) -> str:
+    """Turn the driver's message into the thing to actually go and fix."""
+    text = str(exc).strip() or exc.__class__.__name__
+    lowered = text.lower()
+    if "password authentication failed" in lowered:
+        return ("Parol noto'g'ri — Supabase'dagi ulanish satrini qayta nusxalang "
+                "(parolda maxsus belgi bo'lsa, u kodlangan bo'lishi kerak).")
+    if "could not translate host name" in lowered or "name or service not known" in lowered:
+        return "Host topilmadi — DATABASE_URL'dagi manzilni tekshiring."
+    if "network is unreachable" in lowered:
+        return ("Manzilga yetib bo'lmadi. Supabase'ning to'g'ridan-to'g'ri ulanishi "
+                "faqat IPv6 — o'rniga Session pooler satrini oling.")
+    if "prepared statement" in lowered:
+        return "Pooler tayyorlangan so'rovlarni qabul qilmadi — ilovani qayta ishga tushiring."
+    return text[:200]

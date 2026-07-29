@@ -1,13 +1,17 @@
-"""Persistence for heroes, music and render jobs.
+"""Persistence for heroes, music, assets, settings and render jobs.
 
 Deliberately synchronous and tiny: every call opens a short-lived connection,
 which keeps it safe to touch from both the request handlers and the background
 worker without sharing connection state across threads.
 
-SQLite by default. When `DATABASE_URL` is set the hero library — and only the
-hero library — moves to Postgres, because a hero is an uploaded photo that
-cannot be regenerated and a container filesystem does not survive a deploy.
-Every caller goes through the same functions either way.
+SQLite by default, beside the render output. Set `DATABASE_URL` and *everything*
+moves to Postgres instead — because a container filesystem does not survive a
+deploy, and losing a hero photo, an uploaded sound, or the half-finished project
+you were going to come back to is not something the user can undo.
+
+There is one set of SQL, not two. `pgstore` translates the handful of things the
+two engines actually spell differently, so a query cannot work locally and then
+quietly misbehave in production: it is the same statement in both places.
 """
 
 from __future__ import annotations
@@ -22,14 +26,15 @@ from typing import Any, Iterator
 
 from . import config, pgstore
 
-_SCHEMA = """
+def _schema_for(blob: str) -> str:
+    return f"""
 CREATE TABLE IF NOT EXISTS heroes (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     mime        TEXT NOT NULL DEFAULT 'image/png',
     ext         TEXT NOT NULL DEFAULT '.png',
-    image       BLOB NOT NULL,
+    image       {blob} NOT NULL,
     created_at  TEXT NOT NULL
 );
 
@@ -41,7 +46,7 @@ CREATE TABLE IF NOT EXISTS music (
     kind        TEXT NOT NULL DEFAULT 'music',
     mime        TEXT NOT NULL DEFAULT 'audio/mpeg',
     ext         TEXT NOT NULL DEFAULT '.mp3',
-    audio       BLOB NOT NULL,
+    audio       {blob} NOT NULL,
     created_at  TEXT NOT NULL
 );
 
@@ -53,13 +58,14 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TEXT NOT NULL
 );
 
--- Stickers, logos and cut-outs dropped onto a scene as an overlay layer.
+-- Stickers, logos, cut-out actors and recorded voice takes: anything dropped
+-- onto a scene as a layer.
 CREATE TABLE IF NOT EXISTS assets (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     mime        TEXT NOT NULL DEFAULT 'image/png',
     ext         TEXT NOT NULL DEFAULT '.png',
-    data        BLOB NOT NULL,
+    data        {blob} NOT NULL,
     created_at  TEXT NOT NULL
 );
 
@@ -69,13 +75,19 @@ CREATE TABLE IF NOT EXISTS jobs (
     step         TEXT NOT NULL DEFAULT '',
     progress     INTEGER NOT NULL DEFAULT 0,
     request      TEXT NOT NULL,
-    result       TEXT NOT NULL DEFAULT '{}',
+    result       TEXT NOT NULL DEFAULT '{{}}',
     logs         TEXT NOT NULL DEFAULT '[]',
     error        TEXT,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS jobs_created_idx ON jobs (created_at DESC);
 """
+
+
+def _schema() -> str:
+    return _schema_for(pgstore.blob())
 
 
 def _now() -> str:
@@ -88,7 +100,7 @@ def _now() -> str:
 
 
 @contextmanager
-def _conn() -> Iterator[sqlite3.Connection]:
+def _sqlite() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(config.DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
@@ -99,48 +111,116 @@ def _conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _prepare(conn: Any) -> None:
+    """Declare the schema once per process, on the first live connection."""
+    if pgstore.mark_ready():
+        conn.executescript(_schema())
+        _migrate_pg(conn)
+
+
+@contextmanager
+def _conn() -> Iterator[Any]:
+    """Whichever database is configured, behind one interface.
+
+    The schema runs on the first Postgres connection of the process rather than
+    at startup: the app has to answer its healthcheck even when the database is
+    having a bad minute, and a table that already exists costs nothing to
+    re-declare.
+    """
+    if not pgstore.enabled():
+        with _sqlite() as conn:
+            yield conn
+        return
+    with pgstore.connect() as conn:
+        _prepare(conn)
+        yield conn
+        conn.commit()
+
+
 def init() -> None:
+    """Prepare storage. Never raises — the container has to boot regardless.
+
+    A database that is having a bad minute must not stop the app from starting:
+    a failed healthcheck rolls the deploy back, and then the outage that would
+    have lasted a minute lasts until someone notices. The local file is always
+    prepared; Postgres prepares itself on its first successful connection.
+    """
     config.ensure_dirs()
-    with _conn() as conn:
-        conn.executescript(_SCHEMA)
-        _migrate(conn)
-    _adopt_local_heroes()
+    with _sqlite() as conn:
+        conn.executescript(_schema_for(blob="BLOB"))
+        _migrate_sqlite(conn)
+    if pgstore.enabled():
+        try:
+            with _conn() as conn:
+                conn.execute("SELECT 1").fetchone()
+        except Exception:  # noqa: BLE001 - reported on the settings page instead
+            return
+        _adopt_local_rows()
 
 
-def _adopt_local_heroes() -> None:
-    """Copy any SQLite heroes into Postgres the first time it is configured.
+# Everything that may already be sitting in a local SQLite file.
+_ADOPTABLE = ("heroes", "music", "assets", "settings", "jobs")
 
-    Someone who has been uploading heroes to a container and then attaches a
-    database should find their library intact, not empty. Inserts ignore rows
-    that are already there, so this is safe to run on every boot, and a database
-    that is unreachable right now leaves the local copies untouched.
+
+def _adopt_local_rows() -> None:
+    """Move what SQLite already holds into Postgres the first time it is set up.
+
+    Someone who has been using the app against a container and then attaches a
+    database should find their library intact, not empty. Inserts skip rows that
+    are already there, so this is safe on every boot; a database that is
+    unreachable right now leaves the local copies exactly where they were.
+
+    Projects are copied too. They are the expensive thing — a project carries the
+    script, the voice-over timings and the scene list that were paid for once —
+    and losing those on the deploy that fixed persistence would be a poor joke.
     """
     if not pgstore.enabled():
         return
     try:
-        existing = pgstore.known_ids()
-        with _conn() as conn:
-            rows = conn.execute(
-                "SELECT id, name, description, mime, ext, image, created_at FROM heroes"
-            ).fetchall()
-        for row in rows:
-            if row["id"] in existing:
-                continue
-            pgstore.add_hero(row["id"], row["name"], row["description"], row["image"],
-                             row["mime"], row["ext"], row["created_at"])
-    except Exception:  # noqa: BLE001 - a hero library is not worth failing startup for
+        for table in _ADOPTABLE:
+            _adopt_table(table)
+    except Exception:  # noqa: BLE001 - a migration is not worth failing startup for
         pass
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
-    """Add columns that arrived after a database was first created.
+def _adopt_table(table: str) -> None:
+    key = "key" if table == "settings" else "id"
+    try:
+        with _sqlite() as local:
+            rows = [dict(r) for r in local.execute(f"SELECT * FROM {table}").fetchall()]
+    except sqlite3.Error:
+        return  # no local database yet, which is the common case
+    if not rows:
+        return
 
-    CREATE TABLE IF NOT EXISTS is a no-op on an existing table, so a new column
-    in the schema above never reaches a database that already has the table.
-    """
+    with pgstore.connect() as conn:
+        _prepare(conn)
+        existing = {r[key] for r in conn.execute(f"SELECT {key} FROM {table}").fetchall()}
+        for row in rows:
+            if row[key] in existing:
+                continue
+            columns = list(row)
+            marks = ",".join("?" for _ in columns)
+            conn.execute(
+                f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({marks})",
+                [row[c] for c in columns],
+            )
+        conn.commit()
+
+
+# Columns that arrived after a database was first created. CREATE TABLE IF NOT
+# EXISTS is a no-op on an existing table, so a new column in the schema above
+# never reaches a database that already has the table.
+
+def _migrate_sqlite(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(music)")}
     if "kind" not in columns:
         conn.execute("ALTER TABLE music ADD COLUMN kind TEXT NOT NULL DEFAULT 'music'")
+
+
+def _migrate_pg(conn: Any) -> None:
+    conn.execute(
+        "ALTER TABLE music ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'music'")
 
 
 def new_id(prefix: str) -> str:
@@ -156,10 +236,6 @@ _HERO_COLS = "id, name, description, mime, ext, created_at"
 
 def add_hero(name: str, description: str, image: bytes, mime: str, ext: str) -> dict[str, Any]:
     hero_id = new_id("hero")
-    if pgstore.enabled():
-        pgstore.add_hero(hero_id, name, description, image, mime, ext, _now())
-        return {"id": hero_id, "name": name, "description": description,
-                "mime": mime, "ext": ext}
     with _conn() as conn:
         conn.execute(
             "INSERT INTO heroes (id, name, description, mime, ext, image, created_at)"
@@ -170,8 +246,6 @@ def add_hero(name: str, description: str, image: bytes, mime: str, ext: str) -> 
 
 
 def list_heroes() -> list[dict[str, Any]]:
-    if pgstore.enabled():
-        return pgstore.list_heroes()
     with _conn() as conn:
         rows = conn.execute(
             f"SELECT {_HERO_COLS} FROM heroes ORDER BY created_at DESC"
@@ -182,8 +256,6 @@ def list_heroes() -> list[dict[str, Any]]:
 def get_heroes(hero_ids: list[str]) -> list[dict[str, Any]]:
     if not hero_ids:
         return []
-    if pgstore.enabled():
-        return pgstore.get_heroes(hero_ids)
     placeholders = ",".join("?" for _ in hero_ids)
     with _conn() as conn:
         rows = conn.execute(
@@ -194,18 +266,16 @@ def get_heroes(hero_ids: list[str]) -> list[dict[str, Any]]:
 
 
 def get_hero_image(hero_id: str) -> tuple[bytes, str, str] | None:
-    if pgstore.enabled():
-        return pgstore.get_hero_image(hero_id)
     with _conn() as conn:
         row = conn.execute(
             "SELECT image, mime, ext FROM heroes WHERE id = ?", (hero_id,)
         ).fetchone()
-    return (row["image"], row["mime"], row["ext"]) if row else None
+    # Postgres hands bytes back as a memoryview; everything downstream wants
+    # real bytes, and bytes() on bytes is free.
+    return (bytes(row["image"]), row["mime"], row["ext"]) if row else None
 
 
 def update_hero(hero_id: str, *, name: str | None = None, description: str | None = None) -> bool:
-    if pgstore.enabled():
-        return pgstore.update_hero(hero_id, name=name, description=description)
     fields, values = [], []
     if name is not None:
         fields.append("name = ?")
@@ -222,8 +292,6 @@ def update_hero(hero_id: str, *, name: str | None = None, description: str | Non
 
 
 def delete_hero(hero_id: str) -> bool:
-    if pgstore.enabled():
-        return pgstore.delete_hero(hero_id)
     with _conn() as conn:
         return conn.execute("DELETE FROM heroes WHERE id = ?", (hero_id,)).rowcount > 0
 
@@ -261,7 +329,7 @@ def get_music_audio(music_id: str) -> tuple[bytes, str, str] | None:
         row = conn.execute(
             "SELECT audio, mime, ext FROM music WHERE id = ?", (music_id,)
         ).fetchone()
-    return (row["audio"], row["mime"], row["ext"]) if row else None
+    return (bytes(row["audio"]), row["mime"], row["ext"]) if row else None
 
 
 def delete_music(music_id: str) -> bool:
@@ -320,7 +388,7 @@ def get_asset(asset_id: str) -> tuple[bytes, str, str] | None:
         row = conn.execute(
             "SELECT data, mime, ext FROM assets WHERE id = ?", (asset_id,)
         ).fetchone()
-    return (row["data"], row["mime"], row["ext"]) if row else None
+    return (bytes(row["data"]), row["mime"], row["ext"]) if row else None
 
 
 def delete_asset(asset_id: str) -> bool:
@@ -478,7 +546,7 @@ def recover_jobs() -> list[str]:
     return resumable
 
 
-def _append_log(conn: sqlite3.Connection, job_id: str, message: str) -> None:
+def _append_log(conn: Any, job_id: str, message: str) -> None:
     row = conn.execute("SELECT logs FROM jobs WHERE id=?", (job_id,)).fetchone()
     if row is None:
         return

@@ -83,3 +83,50 @@ async def publish(local_path: Path, remote_path: str) -> tuple[str, str | None]:
         return await upload(local_path, remote_path), None
     except Exception as exc:  # noqa: BLE001 - the local file is still downloadable
         return local_url, f"Supabase upload failed, serving from this container instead: {exc}"
+
+
+# --- keeping the work in progress ---------------------------------------------
+# A finished video is uploaded because it is the deliverable. Everything made on
+# the way there — every scene picture, every line of voice-over — is uploaded for
+# a different reason: it was paid for. A container that restarts halfway through
+# a fifty-scene project used to come back with the scene list intact and every
+# picture gone, which is the most expensive way for a render to fail.
+
+def key_for(local_path: Path, root: Path) -> str | None:
+    """The remote name for a project file, derived from where it sits locally."""
+    try:
+        return Path(local_path).resolve().relative_to(Path(root).resolve()).as_posix()
+    except (ValueError, OSError):
+        return None
+
+
+async def mirror(local_path: Path, remote_path: str) -> bool:
+    """Best-effort copy to object storage. Never raises: the file is still here."""
+    if backend() != "supabase" or not local_path.exists():
+        return False
+    try:
+        await upload(local_path, remote_path)
+        return True
+    except Exception:  # noqa: BLE001 - a failed mirror is not a failed render
+        return False
+
+
+async def fetch(remote_path: str, local_path: Path) -> bool:
+    """Pull a file back down. Used when a redeploy left the disk empty."""
+    if backend() != "supabase":
+        return False
+    url = f"{config.SUPABASE_URL}/storage/v1/object/{config.SUPABASE_BUCKET}/{remote_path}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=20.0)) as client:
+            resp = await client.get(url, headers=_headers())
+            if resp.status_code >= 400:
+                return False
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            # Written beside the target and moved into place, so a download that
+            # dies halfway cannot leave a truncated image to be served as real.
+            partial = local_path.with_name(local_path.name + ".part")
+            partial.write_bytes(resp.content)
+            partial.replace(local_path)
+            return True
+    except Exception:  # noqa: BLE001 - the caller reports a plain 404
+        return False

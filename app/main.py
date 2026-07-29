@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="AI Video Studio", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Sarideo", version="2.0.0", lifespan=lifespan)
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -266,14 +266,30 @@ def _apply_shots(scene: dict[str, Any], incoming: list[dict[str, Any]]) -> None:
     scene["needs_image"] = any(s["needs_image"] for s in cleaned)
 
 
-def _hero_store() -> dict[str, Any]:
+def _database() -> dict[str, Any]:
+    """What is holding the library, and whether it will still be there tomorrow."""
+    files = storage.backend()
     if not pgstore.enabled():
-        return {"backend": "sqlite", "ok": True,
-                "note": "Bu konteynerda saqlanadi — deploy qilinganda o'chadi."}
+        return {
+            "backend": "sqlite", "ok": True, "durable": False, "files": files,
+            "note": "Hamma narsa shu konteynerda — deploy qilinsa o'chadi. "
+                    "Saqlanishi uchun DATABASE_URL'ni Supabase'ga ulang.",
+        }
     ok, detail = pgstore.health()
-    return {"backend": "postgres", "ok": ok,
-            "note": "Postgres — deploydan keyin ham saqlanadi." if ok
-                    else f"Postgres ulanmadi: {detail}"}
+    if not ok:
+        return {"backend": "postgres", "ok": False, "durable": False, "files": files,
+                "note": f"Bazaga ulanmadi: {detail}"}
+    if files != "supabase":
+        # Half a setup is worth naming: the rows are safe and the pictures are
+        # not, which looks like it works right up until the container restarts.
+        return {
+            "backend": "postgres", "ok": True, "durable": False, "files": files,
+            "note": "Baza saqlanadi, ammo rasm va ovoz fayllari konteynerda. "
+                    "STORAGE_BACKEND=supabase qo'ying — shunda yarim tayyor "
+                    "loyihalar ham to'liq saqlanadi.",
+        }
+    return {"backend": "postgres", "ok": True, "durable": True, "files": files,
+            "note": "Hamma narsa saqlanadi — herolar, loyihalar, rasm va ovozlar."}
 
 
 def _get_job_or_404(job_id: str) -> dict[str, Any]:
@@ -316,7 +332,7 @@ async def health() -> dict[str, Any]:
         "storage": storage.backend(),
         # Heroes are the one thing a container restart must not lose, so where
         # they live — and whether that place is answering — is worth reporting.
-        "hero_store": _hero_store(),
+        "database": _database(),
         # The pacing that applies to the provider actually configured — a number
         # that belongs to some other provider's key would only mislead.
         "tts_rate_limit": config.tts_rate_limit(config.TTS_PROVIDER),
@@ -1201,7 +1217,12 @@ async def download(job_id: str) -> FileResponse:
 async def project_file(path: str) -> FileResponse:
     target = _safe_child(config.PROJECTS_DIR, path)
     if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found.")
+        # The database remembers a project across a redeploy, but the disk it
+        # was rendered on is gone. If the file was mirrored to object storage,
+        # pull it back rather than showing a hole — and keep the copy, so the
+        # render that follows finds it already there.
+        if not await storage.fetch(path, target):
+            raise HTTPException(status_code=404, detail="File not found.")
     media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
     return FileResponse(target, media_type=media_type)
 

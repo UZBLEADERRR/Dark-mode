@@ -1,4 +1,4 @@
-/* AI Video Studio — frontend.
+/* Sarideo — frontend.
    Write a topic or a script, watch it build, edit the scenes, publish. */
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -421,11 +421,11 @@ async function loadHealth() {
     ['transkripsiya', h.transcription],
     ...Object.entries(h.image_providers).map(([n, v]) => [`rasm — ${n}`, v]),
     ...Object.entries(h.tts_providers).map(([n, v]) => [`ovoz — ${n}`, v]),
-    [`saqlash — ${h.storage}`, true],
-    // Worth its own row: heroes are the only uploads that cannot be recreated,
-    // so whether they outlive a deploy is something you want to know before it
-    // happens rather than after.
-    [`hero bazasi — ${h.hero_store?.backend || 'sqlite'}`, h.hero_store?.ok !== false],
+    [`fayllar — ${h.storage}`, true],
+    // Worth its own row, and worth being strict about: whether your work
+    // outlives a deploy is something to learn before it happens, not after.
+    [`baza — ${h.database?.backend || 'sqlite'}`, h.database?.ok !== false],
+    ['deploydan keyin saqlanadi', h.database?.durable === true],
     [h.tts_rate_limit
       ? `ovoz limiti — ${h.tts_rate_limit}/daqiqa`
       : 'ovoz limiti — cheklanmagan', true],
@@ -433,7 +433,7 @@ async function loadHealth() {
   $('#health-list').innerHTML = checks.map(([label, ok]) =>
     `<div class="row"><span>${esc(label)}</span><span class="tag ${ok ? 'done' : 'failed'}">${ok ? 'bor' : 'yo‘q'}</span></div>`
   ).join('')
-    + (h.hero_store?.note ? `<p class="note">${esc(h.hero_store.note)}</p>` : '')
+    + (h.database?.note ? `<p class="note">${esc(h.database.note)}</p>` : '')
     + Object.entries(h.models || {}).map(([stage, model]) =>
     `<div class="row"><span>${esc({ text: 'skript modeli', image: 'rasm modeli', tts: 'ovoz modeli' }[stage] || stage)}</span>
       <span class="model">${esc(model)}</span></div>`).join('');
@@ -1626,7 +1626,7 @@ function syncEditor(job) {
     return;
   }
 
-  $('#editor-title').textContent = `Studio · ${job.scenes.length} sahna`;
+  $('#editor-title').textContent = `Sarideo · ${job.scenes.length} sahna`;
   $('#editor-note').textContent = job.status === 'review'
     ? 'Rasm ustidan sudrab joylashtiring. O‘zgarishlar o‘zi saqlanadi.'
     : 'Video tayyor. O‘zgartirsangiz qayta render qiling.';
