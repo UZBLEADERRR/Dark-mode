@@ -64,7 +64,10 @@ async def _ensure_bucket_quietly() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.init()
-    store.reset_stale_jobs()
+    # A render is server-side work: closing the browser never stopped it, and now
+    # neither does the container being replaced under it. Anything interrupted
+    # mid-render is picked straight back up, from the scenes already on disk.
+    resumable = store.recover_jobs()
     # Model and voice choices made in the UI are stored, not exported to the
     # environment, so they have to be loaded back before the first request.
     config.set_model_overrides(store.get_setting(MODELS_KEY) or {})
@@ -77,6 +80,14 @@ async def lifespan(app: FastAPI):
         task = asyncio.create_task(_ensure_bucket_quietly())
         _running.add(task)
         task.add_done_callback(_running.discard)
+
+    # Launched after the app is ready to serve, not before: a resumed render is
+    # ordinary queued work and must never sit between the process starting and
+    # the platform's healthcheck being answered.
+    for job_id in resumable:
+        store.update_job(job_id, status="rendering", step="render", progress=74,
+                         log="Resuming the render after a restart")
+        _launch(lambda jid=job_id: pipeline.run_render(jid), job_id)
     yield
 
 
