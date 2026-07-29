@@ -35,41 +35,124 @@ def _headers(content_type: str | None = None) -> dict[str, str]:
     return headers
 
 
-async def ensure_bucket() -> None:
-    """Create the public bucket once; an existing bucket is not an error."""
+# What the last attempt to provision the bucket found. A bucket that is not
+# there is not a small problem — every picture and every voice clip goes past it
+# — so the answer is remembered and reported rather than being swallowed by the
+# background task that asked.
+_bucket: dict[str, object] = {"ready": False, "problem": ""}
+
+
+def bucket_problem() -> str:
+    """Why object storage is not usable, in words, or "" when it is fine."""
+    return str(_bucket["problem"]) if backend() == "supabase" else ""
+
+
+def _bucket_missing(status: int, body: str) -> bool:
+    """True when the server is saying the bucket itself does not exist."""
+    low = body.lower()
+    return status == 404 or "nosuchbucket" in low or "bucket not found" in low
+
+
+def _why(status: int, body: str) -> str:
+    """A refusal, said in a way that names the thing to go and change."""
+    low = body.lower()
+    if status in (401, 403) or "row-level security" in low or "unauthorized" in low:
+        return ("SUPABASE_SERVICE_KEY bucket yaratishga ruxsat bermadi — bu "
+                "odatda anon (publishable) kalit qo'yilganini bildiradi. "
+                "Supabase → Project Settings → API → service_role kalitini oling, "
+                "yoki Storage bo'limida "
+                f"«{config.SUPABASE_BUCKET}» nomli public bucket'ni qo'lda yarating.")
+    if "invalid" in low and "name" in low:
+        return (f"«{config.SUPABASE_BUCKET}» bucket nomi qabul qilinmadi — "
+                "SUPABASE_BUCKET'ni faqat kichik harf va chiziqchadan tuzing.")
+    return f"Bucket yaratilmadi ({status}): {body[:200]}"
+
+
+async def _bucket_exists(client: httpx.AsyncClient) -> bool:
+    """Ask the server directly. Creation being refused is not the same as the
+    bucket being absent: a key that may write objects but may not create buckets
+    hits an existing bucket perfectly well."""
+    try:
+        resp = await client.get(
+            f"{config.SUPABASE_URL}/storage/v1/bucket/{config.SUPABASE_BUCKET}",
+            headers=_headers())
+        return resp.status_code < 400
+    except Exception:  # noqa: BLE001 - treated as "cannot confirm"
+        return False
+
+
+async def ensure_bucket(*, force: bool = False) -> bool:
+    """Create the public bucket once. Returns True when it is usable.
+
+    Never raises: a bucket that cannot be made is a configuration problem to
+    report on the settings page, not a reason for the render to stop — the
+    database keeps the files in the meantime.
+    """
     if backend() != "supabase":
-        return
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{config.SUPABASE_URL}/storage/v1/bucket",
-            headers=_headers("application/json"),
-            json={
-                "name": config.SUPABASE_BUCKET,
-                "id": config.SUPABASE_BUCKET,
-                "public": True,
-                "file_size_limit": 1024 * 1024 * 1024,
-            },
-        )
-        if resp.status_code >= 400 and resp.status_code not in (400, 409):
-            raise StorageError(f"Could not create bucket: {resp.status_code} {resp.text[:200]}")
+        return False
+    if _bucket["ready"] and not force:
+        return True
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{config.SUPABASE_URL}/storage/v1/bucket",
+                headers=_headers("application/json"),
+                json={
+                    "name": config.SUPABASE_BUCKET,
+                    "id": config.SUPABASE_BUCKET,
+                    "public": True,
+                    "file_size_limit": 1024 * 1024 * 1024,
+                },
+            )
+            body = resp.text or ""
+            if resp.status_code < 400 or "already exists" in body.lower():
+                _bucket.update(ready=True, problem="")
+                return True
+            # Refused. The bucket may still be there and writable, so look
+            # before deciding that nothing can be saved.
+            if await _bucket_exists(client):
+                _bucket.update(ready=True, problem="")
+                return True
+            _bucket.update(ready=False, problem=_why(resp.status_code, body))
+            return False
+    except Exception as exc:  # noqa: BLE001 - reported, never fatal
+        _bucket.update(ready=False, problem=f"Supabase Storage javob bermadi: {exc}")
+        return False
 
 
 async def upload(local_path: Path, remote_path: str) -> str:
-    """Upload a file and return a URL the browser can download from."""
+    """Upload a file and return a URL the browser can download from.
+
+    A missing bucket is fixed here rather than reported: provisioning happens in
+    the background at startup, and if that ever loses its race — or the bucket is
+    deleted while the app is running — every upload after it would otherwise fail
+    with "Bucket not found" until somebody redeployed.
+    """
     if backend() != "supabase":
         raise StorageError("Supabase storage is not configured.")
 
     content_type = mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
     url = f"{config.SUPABASE_URL}/storage/v1/object/{config.SUPABASE_BUCKET}/{remote_path}"
+    payload = local_path.read_bytes()
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(900.0, connect=30.0)) as client:
-        resp = await client.post(
-            url,
-            headers={**_headers(content_type), "x-upsert": "true"},
-            content=local_path.read_bytes(),
-        )
+        async def send() -> httpx.Response:
+            return await client.post(
+                url,
+                headers={**_headers(content_type), "x-upsert": "true"},
+                content=payload,
+            )
+
+        resp = await send()
+        if resp.status_code >= 400 and _bucket_missing(resp.status_code, resp.text or ""):
+            if await ensure_bucket(force=True):
+                resp = await send()
         if resp.status_code >= 400:
-            raise StorageError(f"Upload failed {resp.status_code}: {resp.text[:300]}")
+            body = resp.text or ""
+            if _bucket_missing(resp.status_code, body) and _bucket["problem"]:
+                raise StorageError(str(_bucket["problem"]))
+            raise StorageError(f"Upload failed {resp.status_code}: {body[:300]}")
+        _bucket.update(ready=True, problem="")
 
     return f"{config.SUPABASE_URL}/storage/v1/object/public/{config.SUPABASE_BUCKET}/{remote_path}"
 
@@ -82,7 +165,9 @@ async def publish(local_path: Path, remote_path: str) -> tuple[str, str | None]:
     try:
         return await upload(local_path, remote_path), None
     except Exception as exc:  # noqa: BLE001 - the local file is still downloadable
-        return local_url, f"Supabase upload failed, serving from this container instead: {exc}"
+        return local_url, (f"Supabase Storage qabul qilmadi: {exc} — video hozir "
+                           "yuklab olinadi, lekin keyingi deploygacha. Yuqoridagi "
+                           "sababni to'g'rilab, «Render»ni qayta bosing.")
 
 
 # --- keeping the work in progress ---------------------------------------------

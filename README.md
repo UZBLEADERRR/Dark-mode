@@ -220,7 +220,14 @@ postgresql://postgres.abcdefghijklm:PAROL@aws-0-eu-central-1.pooler.supabase.com
 - **Project URL** → `SUPABASE_URL`
 - **service_role** kaliti (`anon` emas!) → `SUPABASE_SERVICE_KEY`
 
-Bucket'ni qo'lda yaratish shart emas — ilova ishga tushganda o'zi yaratadi.
+Bucket'ni qo'lda yaratish shart emas — ilova ishga tushganda o'zi yaratadi, va
+keyin ham bucket topilmasa birinchi yuklashda qayta yaratadi.
+
+`anon` kalit qo'yilsa bucket yaratilmaydi (Supabase RLS ruxsat bermaydi). U
+holda **Sozlamalar** sahifasida sababi yozib turadi, rasm va ovozlar esa bazaga
+saqlanadi — ya'ni hech narsa yo'qolmaydi, lekin tayyor video faqat shu
+konteynerda qoladi. Tuzatish: `service_role` kalitini qo'ying, yoki Supabase →
+**Storage** → **New bucket** da `videos` nomli **public** bucket yarating.
 
 ### 4. Railway'ga to'rtta o'zgaruvchi qo'ying
 
