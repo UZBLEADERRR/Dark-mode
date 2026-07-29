@@ -77,7 +77,16 @@
 
   <!-- ══ Tahrirlash ═════════════════════════════════════════════════ -->
   <section class="view" id="view-edit">
-    <div class="projects" id="jobs-list"></div>
+    <!-- Collapsed by default once there is something open below it: the strip
+         is a way back to another project, not the thing you came here for. -->
+    <div class="projects-wrap shut" id="projects-wrap">
+      <button class="projects-head" id="projects-toggle" aria-expanded="false">
+        <span id="projects-label">Loyihalar</span>
+        <em id="projects-count"></em>
+        <i class="chev" aria-hidden="true"></i>
+      </button>
+      <div class="projects" id="jobs-list"></div>
+    </div>
 
     <section class="stage hidden" id="stage"></section>
 

@@ -175,6 +175,10 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "thumbnails": result.get("thumbnails") or [],
         "transcript": result.get("transcript") or [],
         "scenes": [pipeline.public_scene(job["id"], s) for s in scenes] if with_scenes else None,
+        # What is still missing, so a job that stopped halfway can say how far
+        # it got rather than only that it failed.
+        "progress_detail": pipeline.unfinished(
+            scenes, uploaded_audio=bool(request.get("narration_audio"))) if scenes else None,
         "warnings": result.get("warnings") or [],
         "logs": job.get("logs", [])[-40:],
         "created_at": job.get("created_at"),
@@ -1041,6 +1045,19 @@ async def render_job(job_id: str) -> dict[str, Any]:
     store.update_job(job_id, status="rendering", step="render", progress=74)
     _launch(lambda: pipeline.run_render(job_id), job_id)
     return {"id": job_id, "status": "rendering"}
+
+
+@app.post("/api/jobs/{job_id}/resume", status_code=202)
+async def resume_job(job_id: str) -> dict[str, Any]:
+    """Carry on from where a run stopped, paying only for what is missing."""
+    job = _get_job_or_404(job_id)
+    if job["status"] in _BUSY:
+        raise HTTPException(status_code=409, detail="Bu loyiha allaqachon ishlayapti.")
+
+    store.update_job(job_id, status="running", step="resume", error="",
+                     log="Davom ettirilmoqda")
+    _launch(lambda: pipeline.resume_job(job_id), job_id)
+    return {"id": job_id, "status": "running"}
 
 
 @app.post("/api/jobs/{job_id}/music", status_code=202)
