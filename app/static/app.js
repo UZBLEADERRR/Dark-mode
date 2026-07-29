@@ -1289,6 +1289,9 @@ function announce(job) {
 function watch(jobId, { reveal = false } = {}) {
   state.activeId = jobId;
   remember(jobId);
+  // Opening a project is the moment the strip stops being what you want on
+  // screen — unless you have said otherwise, in which case it is left alone.
+  autoProjects();
   askToNotify();
   drawDock();
   state.drawn = null;
@@ -1400,6 +1403,38 @@ function drawStage(job) {
   if (job.status === 'failed' && job.error) p.push(`<p class="msg err">${esc(job.error)}</p>`);
   (job.warnings || []).forEach((w) => p.push(`<p class="msg warn">${esc(w)}</p>`));
 
+  // What has actually been made so far. While it is running this is the honest
+  // answer to "is it working?", and after it stops it is the answer to "was any
+  // of that worth keeping?" — which used to be invisible either way.
+  const made = (job.scenes || []).filter((s) => s.image_url || s.audio_url);
+  const left = job.progress_detail;
+  if (made.length && job.status !== 'done') {
+    const ready = made.filter((s) => s.image_url).length;
+    p.push(`<div class="made">
+      <div class="made-head">
+        <span>Tayyor bo‘lganlari · ${ready}/${left?.scenes_total || made.length}</span>
+        ${left?.left ? `<em>${left.left} ta qoldi</em>` : ''}
+      </div>
+      <div class="made-strip">${made.map((s) => `
+        <figure${s.image_url ? '' : ' class="soundonly"'}>
+          ${s.image_url
+            ? `<img src="${esc(s.image_url)}" alt="Sahna ${s.index + 1}" loading="lazy" />`
+            : '<span class="wave">♪</span>'}
+          <figcaption>${s.index + 1}</figcaption>
+          ${s.audio_url ? `<button class="hear" data-hear="${esc(s.audio_url)}"
+            aria-label="Sahna ${s.index + 1} ovozini eshitish">▶</button>` : ''}
+        </figure>`).join('')}</div>
+    </div>`);
+  }
+
+  // A run that stopped with work banked can be carried on instead of redone.
+  if (!busy && left?.left && job.status !== 'done') {
+    p.push(`<div class="acts">
+      <button class="btn primary" data-resume="${esc(job.id)}">Davom ettirish</button>
+      <small class="note">Tayyor bo‘lganlari qayta yaratilmaydi.</small>
+    </div>`);
+  }
+
   if (job.status === 'done' && job.video_url) {
     p.push(`<video controls playsinline preload="metadata" src="${esc(job.video_url)}"></video>
       <div class="acts">
@@ -1431,6 +1466,22 @@ function drawStage(job) {
   $('#stage').innerHTML = p.join('');
   $$('#stage [data-go]').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
   $$('#stage [data-stop]').forEach((b) => b.addEventListener('click', () => stopJob(b.dataset.stop, b)));
+  $$('#stage [data-resume]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await api(`/api/jobs/${b.dataset.resume}/resume`, { method: 'POST' });
+      toast('Davom etmoqda — tayyorlari saqlanadi');
+      watch(b.dataset.resume);
+    } catch (err) { b.disabled = false; toast(err.message); }
+  }));
+  $$('#stage [data-hear]').forEach((b) => b.addEventListener('click', () => {
+    // One preview at a time: several scenes playing over each other tells you
+    // nothing about any of them.
+    if (state.preview) { state.preview.pause(); state.preview = null; }
+    const audio = new Audio(b.dataset.hear);
+    state.preview = audio;
+    audio.play().catch(() => toast('Brauzer ovozni to‘sdi'));
+  }));
 
   // The log grows downwards, so without this the newest line is the one you
   // cannot see — which is the whole reason for watching it.
@@ -2832,8 +2883,60 @@ async function loadJobs() {
     loadJobs();
   }));
 
+  autoProjects();
+  syncProjectsHead();
   drawReady(done);
 }
+
+// The strip used to hold the top of the screen open whatever you were doing.
+// It is a way back to another project, so it folds — and it names what is
+// behind the fold, because a closed drawer you cannot label is just a mystery.
+const SHUT_KEY = 'studio.projects.shut';
+
+function syncProjectsHead() {
+  const wrap = $('#projects-wrap');
+  if (!wrap) return;
+  const open = state.jobs.find((j) => j.id === state.activeId);
+  const busy = state.jobs.filter((j) => BUSY.includes(j.status)).length;
+
+  $('#projects-label').textContent = wrap.classList.contains('shut') && open
+    ? (open.title || open.topic || 'Loyiha')
+    : 'Loyihalar';
+  const count = state.jobs.length;
+  $('#projects-count').textContent = busy
+    ? `${count} · ${busy} ishlayapti`
+    : (count ? String(count) : '');
+  $('#projects-toggle').setAttribute('aria-expanded', String(!wrap.classList.contains('shut')));
+}
+
+function setProjectsShut(shut, remember = true) {
+  const wrap = $('#projects-wrap');
+  if (!wrap) return;
+  wrap.classList.toggle('shut', shut);
+  if (remember) {
+    try { localStorage.setItem(SHUT_KEY, shut ? '1' : '0'); } catch (e) { /* private mode */ }
+  }
+  syncProjectsHead();
+}
+
+function projectsChoice() {
+  try { return localStorage.getItem(SHUT_KEY); } catch (e) { return null; }
+}
+
+/** The default, applied only while the user has not expressed one.
+ *
+ * Folded when a project is open, because then the strip is a way back to
+ * something else rather than the thing you are looking at; open when there is
+ * nothing below it, because then it is the whole screen's content. The markup
+ * starts folded so a page that opens straight into a project never flashes it.
+ */
+function autoProjects() {
+  if (projectsChoice() !== null) return;
+  setProjectsShut(Boolean(state.activeId), false);
+}
+
+$('#projects-toggle')?.addEventListener('click', () =>
+  setProjectsShut(!$('#projects-wrap').classList.contains('shut')));
 
 // Older jobs stored one flat metadata pack; newer ones store a pack per
 // platform. Normalise so the gallery renders both.
@@ -3060,6 +3163,9 @@ function drawReady(done) {
 (async function boot() {
   try {
     await loadHealth();
+    // Before the jobs land, so the strip is never briefly the wrong shape.
+    const shut = projectsChoice();
+    if (shut !== null) setProjectsShut(shut === '1', false);
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
     await Promise.all([loadBrand(), loadModels()]);
     applyBrandToComposer();

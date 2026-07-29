@@ -345,6 +345,19 @@ def _save_scenes(job_id: str, scenes: list[dict], **extra: Any) -> None:
     store.update_job(job_id, result={"scenes": scenes, **extra})
 
 
+def _checkpoint(job_id: str, scenes: list[dict]) -> None:
+    """Write the scene list down the moment one more piece of it is finished.
+
+    Saving only at the end of a stage was costing two different things. A crash
+    at scene forty threw away thirty-nine pictures that were sitting on disk,
+    because nothing in the database pointed at them. And the browser had nothing
+    to show while it waited — a fifty-scene draft was a progress bar and a
+    promise. One row write per finished asset buys both: the work is banked, and
+    it appears as it is made.
+    """
+    store.update_job(job_id, result={"scenes": scenes})
+
+
 def _media_paths(scenes: list[dict]) -> list[Path]:
     out: list[Path] = []
     for scene in scenes:
@@ -520,6 +533,7 @@ async def _voice_scenes(
         scene["needs_voice"] = False
         async with lock:
             done += 1
+            _checkpoint(job_id, scenes)
             _progress(job_id, "voice", base_progress + int(span * done / max(len(targets), 1)),
                       f"Voice-over {done}/{len(targets)}")
 
@@ -536,6 +550,7 @@ async def _voice_scenes(
         scene["needs_voice"] = False
         async with lock:
             done += 1
+            _checkpoint(job_id, scenes)
             _progress(job_id, "voice", base_progress + int(span * done / max(len(targets), 1)),
                       f"Voice-over {done}/{len(targets)}")
 
@@ -574,21 +589,37 @@ async def _voice_scenes(
     return warnings
 
 
-def _picture_work(targets: list[dict], only_stale: bool = False) -> list[tuple[dict, dict | None]]:
-    """Every picture that needs drawing, as (scene, shot) — shot None if unsplit."""
+def _picture_work(targets: list[dict], only_stale: bool = False,
+                  missing_only: bool = False) -> list[tuple[dict, dict | None]]:
+    """Every picture that needs drawing, as (scene, shot) — shot None if unsplit.
+
+    `only_stale` covers both senses of "needs drawing": never made, and made
+    before an edit. `missing_only` narrows it to the first, which is what
+    carrying on from a stopped run means — redrawing an edited scene is what
+    Render is for, and doing it inside a resume would spend money the user did
+    not ask to spend.
+    """
     work: list[tuple[dict, dict | None]] = []
     for scene in targets:
         holders = scene.get("shots") or []
         if not holders:
-            if not only_stale or scene.get("needs_image") or not scene.get("image_path"):
+            if _needs_drawing(scene, only_stale, missing_only):
                 work.append((scene, None))
             continue
         for shot in holders:
             # Re-rendering after an edit should redraw the shot that changed,
             # not every shot in the scene it happens to sit in.
-            if not only_stale or shot.get("needs_image") or not shot.get("image_path"):
+            if _needs_drawing(shot, only_stale, missing_only):
                 work.append((scene, shot))
     return work
+
+
+def _needs_drawing(holder: dict, only_stale: bool, missing_only: bool) -> bool:
+    if missing_only:
+        return not holder.get("image_path")
+    if not only_stale:
+        return True
+    return bool(holder.get("needs_image")) or not holder.get("image_path")
 
 
 def _wants_picture(scene: dict) -> bool:
@@ -608,6 +639,7 @@ async def _render_images(
     base_progress: int = 48,
     span: int = 24,
     only_stale: bool = False,
+    missing_only: bool = False,
 ) -> list[str]:
     image_dir = workdir / "images"
     warnings: list[str] = []
@@ -616,7 +648,7 @@ async def _render_images(
     # A split scene needs a picture per shot, not per scene, so the unit of work
     # here is a shot. `None` stands for a scene that was never split and keeps
     # its picture on the scene itself.
-    work = _picture_work(targets, only_stale=only_stale)
+    work = _picture_work(targets, only_stale=only_stale, missing_only=missing_only)
     total = max(len(work), 1)
 
     async def one(scene: dict, shot: dict | None) -> None:
@@ -652,6 +684,7 @@ async def _render_images(
             done += 1
             if warning:
                 warnings.append(f"{label}: {warning}")
+            _checkpoint(job_id, scenes)
             _progress(job_id, "images", base_progress + int(span * done / total),
                       f"Scene image {done}/{total}")
 
@@ -1114,6 +1147,128 @@ def _finished_video(workdir: Path) -> Path | None:
 
 
 # ── per-scene regeneration ────────────────────────────────────────────────────
+
+def unfinished(scenes: list[dict], *, uploaded_audio: bool = False) -> dict[str, int]:
+    """How much of a draft was never made. Counted in pictures, not scenes.
+
+    *Missing* means there is no picture or no recording at all — the run stopped
+    before making it. That is a different thing from *stale*, which is a scene
+    whose prompt was edited after it was drawn: stale work exists and is what
+    Render redoes. Only missing work is worth offering to carry on, and telling
+    the user "six left" about a finished draft they had merely edited would be
+    a lie in the direction that costs money.
+
+    A scene split into three shots owes three pictures. Reporting it as one
+    would make a job that is 40% done look 80% done at exactly the moment
+    somebody is deciding whether to continue it.
+    """
+    holders = [(s, h) for s in scenes for h in ((s.get("shots") or []) or [s])]
+    missing_pictures = sum(1 for _s, h in holders if not h.get("image_path"))
+    stale_pictures = sum(
+        1 for _s, h in holders if h.get("image_path") and h.get("needs_image"))
+    missing_voices = 0 if uploaded_audio else sum(
+        1 for s in scenes if not s.get("audio_path"))
+    stale_voices = 0 if uploaded_audio else sum(
+        1 for s in scenes if s.get("audio_path") and s.get("needs_voice"))
+    return {
+        "images_left": missing_pictures,
+        "voices_left": missing_voices,
+        "images_stale": stale_pictures,
+        "voices_stale": stale_voices,
+        "images_total": len(holders),
+        "scenes_total": len(scenes),
+        "left": missing_pictures + missing_voices,
+    }
+
+
+async def resume_job(job_id: str) -> None:
+    """Carry on from wherever a draft stopped, paying only for what is missing.
+
+    A failed run used to be a dead end: the scenes, the voice-over and the
+    pictures were all still there, and the only way forward was to start the
+    whole thing again. This finishes the gaps instead. A job that never got as
+    far as a scene list has nothing to carry on from and starts over.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    request = job["request"]
+    scenes = _load_scenes(job)
+    if not scenes:
+        await run_draft(job_id)
+        return
+
+    warnings: list[str] = list(job.get("result", {}).get("warnings") or [])
+    uploaded_audio = request.get("narration_audio")
+
+    try:
+        # The files may have been on a container that no longer exists.
+        recovered = await restore_media(scenes)
+        if recovered:
+            _note(job_id, f"{recovered} ta tayyor fayl saqlangan nusxadan qaytarildi")
+
+        # Anything the disk cannot show has to be made again, whatever the row
+        # says — a path pointing at a file that is not there is not progress.
+        for scene in scenes:
+            for holder in [scene] + list(scene.get("shots") or []):
+                if holder.get("image_path") and not Path(holder["image_path"]).exists():
+                    holder["image_path"] = None
+                    holder["needs_image"] = True
+            if scene.get("audio_path") and not Path(scene["audio_path"]).exists():
+                scene["audio_path"] = None
+                scene["needs_voice"] = True
+
+        left = unfinished(scenes, uploaded_audio=bool(uploaded_audio))
+        workdir = workdir_for(job_id)
+        fmt = config.FORMATS.get(request.get("video_format", "16:9"), config.FORMATS["16:9"])
+        language = request.get("language", "en")
+        heroes = store.get_heroes(request.get("hero_ids") or [])
+        hero_paths = _materialize_heroes(workdir, [h["id"] for h in heroes])
+
+        if left["voices_left"] and not uploaded_audio:
+            _progress(job_id, "voice", 30,
+                      f"Davom etmoqda — {left['voices_left']} ta ovoz qoldi")
+            warnings += await _voice_scenes(
+                scenes=scenes,
+                targets=[s for s in scenes if not s.get("audio_path")],
+                workdir=workdir,
+                provider=(request.get("tts_provider") or config.TTS_PROVIDER).lower(),
+                voice_id=request.get("voice_id"), language=language, job_id=job_id,
+                strict=False,
+            )
+            _save_scenes(job_id, scenes)
+            await keep_media(scenes)
+
+        if left["images_left"]:
+            _progress(job_id, "images", 55,
+                      f"Davom etmoqda — {left['images_left']} ta rasm qoldi")
+            warnings += await _render_images(
+                scenes=scenes, targets=scenes, workdir=workdir, hero_paths=hero_paths,
+                provider=(request.get("image_provider") or config.IMAGE_PROVIDER).lower(),
+                aspect=fmt["aspect"], size=(fmt["width"], fmt["height"]), job_id=job_id,
+                missing_only=True,
+            )
+
+        _save_scenes(job_id, scenes, warnings=warnings)
+        await keep_media(scenes)
+
+        still = unfinished(scenes, uploaded_audio=bool(uploaded_audio))
+        if still["left"]:
+            # Some gaps do not close on a retry — a prompt the provider refuses,
+            # a line it will not read. Say so plainly and leave the rest usable.
+            _progress(job_id, "review", 72,
+                      f"{still['left']} ta qism baribir tayyor bo'lmadi — "
+                      "qolganini tahrirlab yoki qayta urinib ko'ring",
+                      status="review")
+            return
+
+        _progress(job_id, "review", 72, "Hammasi tayyor — Render bosing", status="review")
+        if request.get("auto_render", True):
+            await run_render(job_id)
+
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
+        _fail(job_id, exc, warnings)
+
 
 async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_voice: bool,
                            redo_all_voices: bool = False) -> None:
