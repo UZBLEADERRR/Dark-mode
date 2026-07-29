@@ -118,6 +118,7 @@ async def direct_script(
     tone: str,
     video_format: str,
     heroes: list[dict],
+    action: str = "",
 ) -> dict:
     scene_count = max(3, min(config.MAX_SCENES, round(target_seconds / config.SECONDS_PER_SCENE)))
     per_scene = target_seconds / scene_count
@@ -125,6 +126,11 @@ async def direct_script(
     fmt = config.FORMATS.get(video_format, config.FORMATS["16:9"])
 
     cast = describe_cast(heroes)
+
+    action_block = f"""
+WHAT MUST HAPPEN (the user's own words — follow this, do not replace it)
+{action.strip()}
+""" if action.strip() else ""
 
     user = f"""TOPIC
 {topic}
@@ -139,7 +145,7 @@ SPEC
 
 CAST (recurring characters the studio already has reference photos for)
 {cast}
-
+{action_block}
 Write the full script now. Write ALL narration and on-screen text in {lang_name}.
 Write the `visual` field in English regardless of narration language — it feeds an
 image generator. Return exactly {scene_count} scenes."""

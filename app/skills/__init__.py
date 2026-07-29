@@ -4,6 +4,7 @@
                   (or storyboards narration the user already recorded)
     imagesmith -> turns each scene into an image-generation prompt
     subtitler  -> turns word timings into readable, well-broken caption lines
+    choreographer -> stages a cartoon: who is on screen, where, and how they move
     publisher  -> title, description, tags, thumbnail prompt, music mood
     translator -> re-voices a script in another language, to the same length
 """
@@ -13,6 +14,7 @@ from .director import (
     segment_existing_narration,
     segment_written_script,
 )
+from .choreographer import stage_scenes
 from .imagesmith import build_image_prompts
 from .publisher import build_publish_pack
 from .subtitler import build_captions
@@ -23,6 +25,7 @@ __all__ = [
     "segment_existing_narration",
     "segment_written_script",
     "build_image_prompts",
+    "stage_scenes",
     "build_captions",
     "build_publish_pack",
     "translate_lines",

@@ -177,6 +177,13 @@ class CreateJobRequest(BaseModel):
     # dynamic and fast split longer lines across two to four, which costs that
     # many more images to generate.
     shot_pace: Literal["steady", "dynamic", "fast"] = "steady"
+    # What happens on screen, in the user's own words. The Director is told to
+    # follow it; leaving it empty is the old behaviour, where the topic alone
+    # decides everything.
+    action: str | None = Field(default=None, max_length=4000)
+    # Cartoon mode: characters are cut out of their backgrounds and walked
+    # across them, and the agents decide who moves where in each scene.
+    animate_actors: bool = False
     # False stops after the draft so scenes can be reviewed and edited first.
     auto_render: bool = True
 

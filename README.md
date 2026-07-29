@@ -33,6 +33,7 @@ katagini olib tashlang — u holda hammasi bir yo'la tugaydi.
 | `director` | Mavzuni sahna-ba-sahna skriptga aylantiradi (yoki tayyor ovozni sahnalarga bo'ladi) |
 | `translator` | Matnni boshqa tilga, aytilish uzunligini saqlagan holda o'giradi |
 | `imagesmith` | Har bir sahnani rasm generatori tushunadigan promptga aylantiradi |
+| `choreographer` | Multfilmni sahnalashtiradi: kim ekranda, qayerda, qanday harakat qiladi |
 | `subtitler` | Subtitr qatorlarini qayerda bo'lishni hal qiladi |
 | `publisher` | YouTube sarlavha, tavsif, teglar, chapterlar, thumbnail prompt |
 
@@ -115,6 +116,37 @@ Muhimi: vaqtlar **yozuvingizdan** qayta o'lchanadi. Ya'ni sahna uzunligi,
 subtitr so'zlari va undan keyingi hamma sahnalar sizning aytganingizga moslanadi
 — hayvon ovozi, qichqiriq, sun'iy ovoz umuman o'qiy olmaydigan narsalar uchun
 aynan shu kerak.
+
+## Multfilm rejimi
+
+Yaratish sahifasida ikkita narsa bor:
+
+- **«Nima bo'lsin»** — sahnada nima sodir bo'lishini o'z so'zingiz bilan
+  yozasiz. Mavzu — video *nima haqida*; bu esa tomoshabin *nimani ko'radi*.
+  Masalan: «Tarzan daraxt ostida turadi, chapdan dinozavr keladi, Tarzan o'ngga
+  qochadi».
+- **«Multfilm»** katagi — qahramonlar fondan kesilib, sahna ustida
+  harakatlanadi.
+
+Yoqsangiz nima bo'ladi:
+
+1. Har bir qahramon **bir marta** tekis magenta fon ustida chiziladi va fon
+   kesib tashlanadi. Ellik sahnali multfilm to'rt qahramonning to'rtta rasmiga
+   tushadi, ellik rasmga emas.
+2. **Xoreograf** agenti har sahnani sahnalashtiradi: kim ekranda, qayerda
+   turadi, qanday harakat qiladi, qachon kiradi.
+3. Sahnaning rasm prompti **fon promptiga** aylanadi — qahramonlarsiz. Bu
+   muhim: aks holda qahramon ikki marta ko'rinardi, biri fonga chizilgan, biri
+   ustida yurgan.
+4. Aktyorlar qatlam sifatida sahna ustiga qo'yiladi va **fon qimirlamaydi** —
+   siz aytganday, fon turadi, qahramon ko'chadi.
+
+Kamera harakati ham o'chiriladi: yurayotgan qahramon ostida sekin zoom bo'lsa,
+u yerga emas, shishaga sirg'alayotganday ko'rinadi.
+
+Agar biror qahramonning foni kesilmasa — aniq aytiladi, va qolgani oddiy
+rejimda davom etadi. Tahrirlashda har bir aktyorni qo'lda ham surib, harakatini
+almashtirib chiqishingiz mumkin.
 
 ## Ma'lumotlar qayerda
 

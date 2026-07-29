@@ -1324,3 +1324,10 @@ input[type="range"]::-moz-range-thumb {
   color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums;
 }
 #rec-play { width: 100%; margin-bottom: 8px; }
+
+/* The action brief sits under the topic and is plainly secondary to it: what
+   the video is about comes first, what happens in it second. */
+.prompt.sub textarea { font-size: .88rem; }
+.prompt.sub { margin-top: -4px; }
+.note.bad { color: var(--accent); }
+#animate-row { margin-top: 2px; }

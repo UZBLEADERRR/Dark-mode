@@ -72,6 +72,10 @@ DEFAULTS: dict = {
     "rotate": 0.0,
     "opacity": 1.0,
     "font": "",
+    # Set when the Choreographer placed this layer, and to which character. It
+    # is what lets a re-staging replace its own work without touching a sticker
+    # the user put there by hand.
+    "actor_of": "",
 }
 
 _NUMERIC = {
@@ -124,6 +128,7 @@ def normalize(raw: dict, index: int) -> dict | None:
     layer["text"] = str(layer["text"])[:180]
     layer["asset_id"] = str(layer["asset_id"]) if layer["asset_id"] else None
     layer["font"] = str(layer.get("font") or "").strip()
+    layer["actor_of"] = str(layer.get("actor_of") or "").strip()
 
     if kind == "text" and not layer["text"].strip():
         return None

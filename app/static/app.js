@@ -336,7 +336,7 @@ function drawSummary() {
     ['format', `${state.format} · ${language}`],
     ['length', scriptMode || uploading ? null : durationLabel(Number($('#duration').value))],
     ['style', styleOn ? styleOn.textContent : 'o‘z uslubim'],
-    ['cast', heroes ? `${heroes} hero` : null],
+    ['cast', heroes ? `${heroes} hero${$('#animate_actors').checked ? ' · multfilm' : ''}` : null],
     ['voice', voiceName],
     ['music', music.value ? music.selectedOptions[0].text : null],
     ['subtitle', $('#burn_subtitles').checked
@@ -459,7 +459,7 @@ async function loadHeroes() {
     const input = $('input', chip);
     input.addEventListener('change', () => {
       chip.classList.toggle('on', input.checked);
-      drawSummary();
+      syncAnimate();
     });
   });
 
@@ -1170,6 +1170,10 @@ $$('#mode-tabs button').forEach((b) => b.addEventListener('click', () => {
   const dub = state.mode === 'dub';
   $('#script-box').classList.toggle('hidden', !script);
   $('#dub-box').classList.toggle('hidden', !dub);
+  // Dubbing has no picture to stage and no script to direct.
+  $('#action-box').classList.toggle('hidden', dub);
+  $('#animate-row').classList.toggle('hidden', dub);
+  $('#animate-note').classList.toggle('hidden', dub);
   // Dubbing replaces the voice on a picture that already exists, so there is no
   // topic to write and nothing for the AI to imagine.
   $('.composer .prompt').classList.toggle('hidden', dub);
@@ -1200,6 +1204,32 @@ $('#topic').addEventListener('input', (e) => {
   e.target.style.height = 'auto';
   e.target.style.height = `${Math.min(e.target.scrollHeight, 220)}px`;
 });
+
+/** Cartoon mode only works with characters, so it says so rather than failing.
+ *
+ * The check is against what is actually ticked in the cast picker, live: a
+ * warning that appears after you have already pressed the button and waited two
+ * minutes for a script is not a warning, it is a bill.
+ */
+function syncAnimate() {
+  const on = $('#animate_actors').checked;
+  const cast = $$('#hero-picker input:checked').length;
+  const note = $('#animate-note');
+  note.classList.toggle('hidden', !on);
+  if (!on) { drawSummary(); return; }
+  if (!cast) {
+    note.className = 'note bad';
+    note.textContent = 'Buning uchun kamida bitta qahramon tanlang — «Herolar» bo‘limidan.';
+  } else {
+    note.className = 'note';
+    note.textContent = `${cast} ta qahramon fondan kesiladi va sahna ustida `
+      + 'harakatlanadi. Fon esa ularsiz, alohida chiziladi.';
+  }
+  drawSummary();
+}
+
+$('#animate_actors').addEventListener('change', syncAnimate);
+$('#action').addEventListener('input', drawSummary);
 
 $('#use_upload').addEventListener('change', (e) => {
   const up = e.target.checked;
@@ -1287,6 +1317,8 @@ $('#submit-btn').addEventListener('click', async () => {
     shot_pace: state.pace,
     auto_hook: $('#auto_hook').checked,
     brand_logo: $('#brand_logo').checked,
+    action: $('#action').value.trim(),
+    animate_actors: $('#animate_actors').checked,
     auto_render: !$('#review_first').checked,
   };
 

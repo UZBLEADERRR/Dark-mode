@@ -562,6 +562,135 @@ def voice_for(scene: dict, cast: dict[str, dict[str, str]],
     return entry["provider"] or default_provider, entry["voice_id"], entry["name"]
 
 
+# ── cartoon staging ───────────────────────────────────────────────────────────
+
+async def _cut_out_hero(hero: dict, workdir: Path, provider: str,
+                        job_id: str) -> str | None:
+    """Draw a character full-length on a flat key colour and lift it off.
+
+    Done once per character per project, not once per scene: the whole idea of a
+    cut-out is that the same drawing is reused, which is what makes a fifty-scene
+    cartoon cost four pictures of its cast rather than fifty.
+    """
+    folder = workdir / "cutouts"
+    folder.mkdir(parents=True, exist_ok=True)
+    source = folder / f"{hero['id']}-src.png"
+    keyed = folder / f"{hero['id']}.png"
+
+    refs: list[Path] = []
+    blob = store.get_hero_image(hero["id"])
+    if blob is not None:
+        ref = folder / f"{hero['id']}-ref{blob[2] or '.png'}"
+        ref.write_bytes(blob[0])
+        refs = [ref]
+
+    who = f"{hero.get('name', 'the character')}, {hero.get('description', '')}".strip(", ")
+    path, warning = await images.generate_image(
+        prompt=f"{who}. {images.CUTOUT_INSTRUCTION}",
+        negative_prompt=images.CUTOUT_NEGATIVE,
+        reference_paths=refs, aspect="1:1", size=(1024, 1024),
+        provider=provider, out_path=source, attempts=2,
+        on_retry=_retry_note(job_id, f"{hero.get('name', 'Actor')} cut-out"),
+    )
+    if warning:
+        return None
+    try:
+        await video.cut_out(path, keyed)
+    except video.RenderError:
+        return None
+    if not await video.has_alpha(keyed):
+        # The key found nothing, or ate the character. Either way what is left is
+        # not a cut-out, and laying it over a background would paste a rectangle.
+        return None
+
+    asset = store.add_asset(hero.get("name") or "Aktyor", keyed.read_bytes(),
+                            "image/png", ".png")
+    return asset["id"]
+
+
+async def stage_cartoon(job_id: str, scenes: list[dict], heroes: list[dict], *,
+                        workdir: Path, provider: str, action: str, language: str,
+                        video_format: str) -> list[str]:
+    """Cut the cast out, stage every scene, and hang the actors on them.
+
+    Two things change per scene. The image prompt becomes a *background* prompt,
+    because a character painted into the scenery would then also walk across it —
+    the same person twice. And an overlay layer is added per actor, carrying the
+    move the Choreographer chose.
+    """
+    warnings: list[str] = []
+    if not heroes:
+        return ["Multfilm rejimi uchun kamida bitta qahramon kerak."]
+
+    _progress(job_id, "cast", 30, f"{len(heroes)} qahramon fondan kesilmoqda")
+    cut_ids = await _gather_limited(
+        [_cut_out_hero(h, workdir, provider, job_id) for h in heroes], 2)
+    cutouts = {h["id"]: asset for h, asset in zip(heroes, cut_ids) if asset}
+
+    for hero, asset in zip(heroes, cut_ids):
+        if not asset:
+            warnings.append(
+                f"{hero.get('name', 'Qahramon')} fondan ajratilmadi — u sahnada "
+                "harakatlanmaydi.")
+    if not cutouts:
+        return warnings + ["Hech bir qahramon kesib olinmadi — oddiy rejimda davom etildi."]
+
+    _progress(job_id, "staging", 34, "Sahnalar sahnalashtirilmoqda")
+    staged = await skills.stage_scenes(
+        scenes=scenes, heroes=[h for h in heroes if h["id"] in cutouts],
+        action=action, language=language, video_format=video_format,
+    )
+
+    placed = 0
+    for scene, plan in zip(scenes, staged or []):
+        if plan.get("background"):
+            # The background carries the whole picture now, so the negative
+            # prompt has to keep people out of it as well as the instruction.
+            scene["image_prompt"] = plan["background"]
+            scene["negative_prompt"] = (
+                (scene.get("negative_prompt", "") + ", " if scene.get("negative_prompt") else "")
+                + "people, person, character, figure, human, silhouette, crowd")
+            scene["needs_image"] = True
+            for shot in scene.get("shots") or []:
+                shot["prompt"] = plan["background"]
+                shot["needs_image"] = True
+
+        actors = plan.get("actors") or []
+        if actors:
+            # The background holds still under a moving character. A slow zoom
+            # over the scenery is what sells a still picture as a shot; under a
+            # cut-out that is walking it fights the movement, and the character
+            # reads as sliding on glass rather than crossing the ground.
+            scene["motion"] = "still"
+            for shot in scene.get("shots") or []:
+                shot["motion"] = "still"
+
+        layers = [l for l in (scene.get("overlays") or []) if not l.get("actor_of")]
+        for i, actor in enumerate(actors):
+            asset_id = cutouts.get(actor["hero_id"])
+            if not asset_id:
+                continue
+            layers.append({
+                "id": f"act{scene['index']}_{i}",
+                "type": "image",
+                "asset_id": asset_id,
+                "x": actor["x"], "y": actor["y"], "size": actor["size"],
+                "start": actor["enters_at"], "end": 0.0,   # 0 = to the scene's end
+                "anim": actor["move"], "opacity": 1.0, "rotate": 0.0,
+                # Marks the layer as the Choreographer's, so re-staging replaces
+                # its own work and leaves anything the user added alone.
+                "actor_of": actor["hero_id"],
+            })
+            placed += 1
+        scene["overlays"] = ov.normalize_all(layers)
+
+    if placed:
+        _note(job_id, f"{placed} ta aktyor sahnalarga joylandi")
+    else:
+        warnings.append("Sahnalarga aktyor joylanmadi.")
+    return warnings
+
+
 # ── stages ────────────────────────────────────────────────────────────────────
 
 async def _voice_scenes(
@@ -910,6 +1039,7 @@ async def run_draft(job_id: str) -> None:
                     topic=request["topic"], target_seconds=int(request.get("target_seconds", 180)),
                     language=language, tone=request.get("tone", "cinematic documentary"),
                     video_format=request.get("video_format", "16:9"), heroes=heroes,
+                    action=request.get("action") or "",
                 )
             scenes = script["scenes"]
             _progress(job_id, "script", 20, f"{len(scenes)} scenes ready")
@@ -940,6 +1070,17 @@ async def run_draft(job_id: str) -> None:
             title=script.get("title", request["topic"]),
         )
         scenes = _ensure_sids(prompt_pack["scenes"])
+
+        # --- cartoon staging --------------------------------------------------
+        # Before the prompts are used, not after: the picture that gets drawn for
+        # a staged scene is a background, and asking for one that already has the
+        # characters in it would put every one of them on screen twice.
+        if request.get("animate_actors") and heroes:
+            warnings += await stage_cartoon(
+                job_id, scenes, heroes, workdir=workdir, provider=image_provider,
+                action=request.get("action") or "", language=language,
+                video_format=request.get("video_format", "16:9"),
+            )
         # Whatever the Imagesmith returned, every shot ends up with a prompt of
         # its own. A model that answers per scene rather than per shot would
         # otherwise draw the same still two or three times and the cuts would
