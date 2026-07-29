@@ -55,10 +55,19 @@ _tasks_by_job: dict[str, asyncio.Task] = {}
 
 
 async def _ensure_bucket_quietly() -> None:
+    """Provision the bucket without being able to stop the server starting.
+
+    Quiet about succeeding, never about failing: a bucket that was not created
+    means every picture and every voice clip goes to the database instead, and
+    the finished video has nowhere to live at all. That used to be swallowed
+    here, and the first anyone heard of it was "Bucket not found" on a render
+    that had already been paid for.
+    """
     try:
-        await storage.ensure_bucket()
-    except Exception:  # noqa: BLE001 - remote storage is optional
-        pass
+        if not await storage.ensure_bucket():
+            print(f"[sarideo] Supabase Storage: {storage.bucket_problem()}", flush=True)
+    except Exception as exc:  # noqa: BLE001 - remote storage is optional
+        print(f"[sarideo] Supabase Storage tekshirilmadi: {exc}", flush=True)
 
 
 @asynccontextmanager
@@ -305,6 +314,15 @@ def _database() -> dict[str, Any]:
                     "STORAGE_BACKEND=supabase qo'ying — shunda yarim tayyor "
                     "loyihalar ham to'liq saqlanadi.",
         }
+    trouble = storage.bucket_problem()
+    if trouble:
+        # The bucket is configured and not working. Rows and media still go to
+        # the database, so nothing made is lost — but the finished video has
+        # nowhere permanent to sit, and that is worth saying out loud.
+        return {"backend": "postgres", "ok": True, "durable": False, "files": files,
+                "bucket": trouble,
+                "note": f"Rasm va ovozlar bazaga saqlanmoqda. Bucket ishlamayapti: "
+                        f"{trouble}"}
     return {"backend": "postgres", "ok": True, "durable": True, "files": files,
             "note": "Hamma narsa saqlanadi — herolar, loyihalar, rasm va ovozlar."}
 
