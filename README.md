@@ -411,6 +411,14 @@ app/
   ettiriladi. Ketma-ket 2 marta uzilsa qo'lda render qilish uchun qoldiriladi
   (cheksiz qayta urinish halqasining oldini oladi). Hech narsa saqlanmagan job
   esa avvalgidek xato beradi.
+- **ElevenLabs'da sahnalar to'plamlab o'qiladi.** Bir nechta sahna bitta so'rovda
+  yuboriladi, keyin yozuv **har qator tugagan aniq harf o'rnida** kesiladi —
+  ElevenLabs har bir harf uchun vaqt qaytaradi, shuning uchun taxmin yo'q.
+  58 sahnalik video ~5 ta so'rovga tushadi, va diktor gaplar orasida ohangni
+  saqlaydi (har nuqtada qaytadan boshlamaydi). Javob biz yuborgan matnga mos
+  kelmasa kesilmaydi — o'sha to'plam avvalgidek qator-qator o'qiladi.
+  Gemini va OpenAI vaqt qaytarmaydi, shuning uchun ular avvalgidek qoladi.
+  `TTS_BATCH=false` bilan o'chiriladi.
 - Ovoz so'rovlari **har provayder uchun alohida** cheklanadi: Gemini daqiqasiga
   10 ta (bepul tarif shunday sotiladi), ElevenLabs va OpenAI esa cheklanmaydi —
   ular bir vaqtda nechta so'rov ketishini cheklaydi, nechta boshlanishini emas.

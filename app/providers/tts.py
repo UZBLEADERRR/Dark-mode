@@ -329,3 +329,211 @@ async def synthesize(
 
 def available_providers() -> list[str]:
     return [p for p in ("elevenlabs", "openai", "gemini") if config.tts_provider_ready(p)]
+
+
+# --- reading a whole passage at once -----------------------------------------
+
+# What separates one scene's line from the next inside a batched request. A
+# blank line is read as a paragraph break, which is the pause a scene change
+# wants anyway, and it gives the splitter an unambiguous place to cut.
+BATCH_SEPARATOR = "\n\n"
+
+
+def batches(lines: list[str], *, max_chars: int, max_lines: int) -> list[list[int]]:
+    """Group line indexes into requests that stay under the provider's limits.
+
+    Returned as indexes rather than text so the caller can map results back to
+    whatever the lines belonged to. A single line longer than the cap gets a
+    request of its own — clipping it would lose words.
+    """
+    groups: list[list[int]] = []
+    current: list[int] = []
+    size = 0
+    for i, line in enumerate(lines):
+        cost = len(line) + len(BATCH_SEPARATOR)
+        if current and (size + cost > max_chars or len(current) >= max_lines):
+            groups.append(current)
+            current, size = [], 0
+        current.append(i)
+        size += cost
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _cut_points(lines: list[str], characters: list[str],
+                ends: list[float]) -> list[float] | None:
+    """Where each line finishes, in seconds. None when the timings do not line up.
+
+    The provider echoes back one entry per character it actually spoke, so the
+    end of line *i* is the timing of the last character of that line in the
+    joined text. If the echo is not the text we sent — a provider that
+    normalises numbers, say — the arithmetic is meaningless and the caller falls
+    back to reading each line on its own rather than cutting in the wrong place.
+    """
+    joined = BATCH_SEPARATOR.join(lines)
+    if len(characters) != len(joined) or len(ends) != len(characters):
+        return None
+    if "".join(characters) != joined:
+        return None
+
+    cuts: list[float] = []
+    cursor = 0
+    for line in lines:
+        cursor += len(line)
+        cuts.append(float(ends[max(0, cursor - 1)]))
+        cursor += len(BATCH_SEPARATOR)
+    return cuts
+
+
+def _words_in_span(characters: list[str], starts: list[float], ends: list[float],
+                   first: int, last: int, offset: float) -> list[dict]:
+    """Word timings for one line, rebased so the line starts at zero."""
+    words = _words_from_chars(characters[first:last], starts[first:last], ends[first:last])
+    return [{**w, "start": max(0.0, w["start"] - offset), "end": max(0.0, w["end"] - offset)}
+            for w in words]
+
+
+async def _elevenlabs_batch(
+    client: httpx.AsyncClient, lines: list[str], voice_id: str | None
+) -> tuple[bytes, list[str], list[float], list[float]] | None:
+    """Speak several lines in one request. None when the response cannot be split."""
+    voice = voice_id or config.default_voice("elevenlabs")
+    resp = await client.post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice}/with-timestamps",
+        headers={"xi-api-key": config.ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+        json={
+            "text": BATCH_SEPARATOR.join(lines),
+            "model_id": config.model("elevenlabs_tts"),
+            "output_format": "mp3_44100_128",
+            "voice_settings": {"stability": 0.45, "similarity_boost": 0.8, "style": 0.15},
+        },
+    )
+    _raise_for_status(resp, "ElevenLabs")
+
+    payload = resp.json()
+    audio_b64 = payload.get("audio_base64")
+    if not audio_b64:
+        raise TTSError("ElevenLabs returned no audio.")
+
+    # `alignment` echoes the text we sent; `normalized_alignment` echoes what the
+    # model decided to say instead. Only the first can be mapped back to our
+    # line boundaries, so a response carrying only the second is not splittable.
+    align = payload.get("alignment") or {}
+    characters = align.get("characters") or []
+    starts = align.get("character_start_times_seconds") or []
+    ends = align.get("character_end_times_seconds") or []
+    if not characters or len(starts) != len(characters):
+        return None
+    return base64.b64decode(audio_b64), characters, starts, ends
+
+
+def can_batch(provider: str | None = None) -> bool:
+    """Only a provider that times every character can be cut back apart."""
+    provider = (provider or config.TTS_PROVIDER).lower()
+    return bool(config.TTS_BATCH and provider == "elevenlabs" and config.ELEVENLABS_API_KEY)
+
+
+async def synthesize_many(
+    *,
+    lines: list[str],
+    out_paths: list[Path],
+    provider: str | None = None,
+    voice_id: str | None = None,
+    on_retry: Callable[[int, Exception], None] | None = None,
+    on_wait: Callable[[float, str], None] | None = None,
+    on_done: Callable[[int], None] | None = None,
+) -> list[tuple[Path, list[dict]]]:
+    """Speak many lines, in as few requests as the provider allows.
+
+    Where a provider times every character — only ElevenLabs today — a group of
+    lines is read as one passage and cut back apart at the exact moment each line
+    ends. That is worth doing for two reasons: fifty-eight requests become three,
+    which matters when the key is metered by the minute; and the narrator keeps
+    its intonation across sentences instead of starting afresh at every full
+    stop, which is the difference between a reading and a list.
+
+    Anything that cannot be cut confidently falls back to one request per line,
+    so the result is always the same shape: a file and its word timings, per line.
+    """
+    from ..render import video          # local: only the batched path needs it
+
+    provider = (provider or config.TTS_PROVIDER).lower()
+    results: list[tuple[Path, list[dict]] | None] = [None] * len(lines)
+
+    async def one(i: int) -> None:
+        results[i] = await synthesize(
+            text=lines[i], out_path=out_paths[i], provider=provider,
+            voice_id=voice_id, on_retry=on_retry, on_wait=on_wait,
+        )
+        if on_done:
+            on_done(1)
+
+    if not can_batch(provider) or len(lines) < 2:
+        await asyncio.gather(*(one(i) for i in range(len(lines))))
+        return [r for r in results if r is not None]
+
+    gate = limiter(provider)
+    timeout = httpx.Timeout(config.TTS_TIMEOUT * 3, connect=20.0)
+
+    for group in batches(lines, max_chars=config.TTS_BATCH_CHARS,
+                         max_lines=config.TTS_BATCH_LINES):
+        if len(group) < 2:
+            await one(group[0])
+            continue
+
+        chunk = [lines[i] for i in group]
+        spoken = None
+        try:
+            await gate.acquire(
+                on_wait=(lambda d: on_wait(d, "queued behind the rate limit"))
+                if on_wait else None)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                spoken = await _elevenlabs_batch(client, chunk, voice_id)
+        except RateLimited as exc:
+            gate.penalise(exc.retry_after)
+            if on_wait:
+                on_wait(exc.retry_after, "rate limited by the provider")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one line at a time still works
+            if on_retry:
+                on_retry(1, exc)
+
+        cuts = None
+        if spoken is not None:
+            audio, characters, starts, ends = spoken
+            cuts = _cut_points(chunk, characters, ends)
+
+        if cuts is None:
+            # Either the request failed or the echo did not match what we sent.
+            # Cutting on a guess would put the picture on the wrong words, so
+            # this group is simply read line by line instead.
+            await asyncio.gather(*(one(i) for i in group))
+            continue
+
+        whole = out_paths[group[0]].with_name(f"batch_{group[0]:04d}.mp3")
+        whole.parent.mkdir(parents=True, exist_ok=True)
+        whole.write_bytes(audio)
+
+        start = 0.0
+        cursor = 0
+        for offset, index in enumerate(group):
+            end = cuts[offset]
+            target = out_paths[index].with_suffix(".mp3")
+            await video.slice_audio(whole, target, start, end)
+            last = cursor + len(chunk[offset])
+            results[index] = (
+                target,
+                _words_in_span(characters, starts, ends, cursor, last, start),
+            )
+            cursor = last + len(BATCH_SEPARATOR)
+            start = end
+            if on_done:
+                on_done(1)
+        whole.unlink(missing_ok=True)
+
+    missing = [i for i, r in enumerate(results) if r is None]
+    if missing:
+        await asyncio.gather(*(one(i) for i in missing))
+    return [r for r in results if r is not None]

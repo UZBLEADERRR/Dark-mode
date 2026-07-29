@@ -468,6 +468,51 @@ async def _voice_scenes(
             _progress(job_id, "voice", base_progress + int(span * done / max(len(targets), 1)),
                       f"Voice-over {done}/{len(targets)}")
 
+    async def finish(scene: dict, path: Path, provider_words: list[dict]) -> None:
+        """Turn a finished recording into the timings the timeline needs."""
+        nonlocal done
+        raw_duration = await video.probe_duration(path)
+        scene["audio_path"] = str(path)
+        scene["audio_duration"] = raw_duration + video.SCENE_GAP
+        scene["words"] = await align.words_for(
+            audio_path=path, text=scene["narration"], duration=raw_duration,
+            provider=align_provider, language=language, provider_words=provider_words,
+        )
+        scene["needs_voice"] = False
+        async with lock:
+            done += 1
+            _progress(job_id, "voice", base_progress + int(span * done / max(len(targets), 1)),
+                      f"Voice-over {done}/{len(targets)}")
+
+    if targets and tts.can_batch(provider) and len(targets) > 1:
+        # Read as passages rather than a line at a time: far fewer requests, and
+        # the narrator carries its intonation across the sentences instead of
+        # restarting at each one. The recording is cut back into scenes at the
+        # exact character the provider timed, so nothing is estimated.
+        _note(job_id, f"Reading {len(targets)} lines in "
+                      f"{len(tts.batches([t['narration'] for t in targets], max_chars=config.TTS_BATCH_CHARS, max_lines=config.TTS_BATCH_LINES))} passage(s)")
+        try:
+            spoken = await tts.synthesize_many(
+                lines=[t["narration"] for t in targets],
+                out_paths=[audio_dir / f"scene_{t['sid']}" for t in targets],
+                provider=provider, voice_id=voice_id,
+                on_retry=_retry_note(job_id, "Voice-over"),
+                on_wait=_wait_note(job_id, "Voice-over"),
+            )
+        except Exception as exc:  # noqa: BLE001 - handled per scene below
+            if strict:
+                raise
+            spoken = []
+            warnings.append(f"Voice-over failed: {_short(exc)}")
+
+        for scene, result in zip(targets, spoken):
+            await finish(scene, *result)
+        for scene in targets[len(spoken):]:
+            scene["needs_voice"] = True
+            warnings.append(f"Scene {scene['index'] + 1} has no voice-over yet")
+        _recompute_starts(scenes)
+        return warnings
+
     if targets:
         await _gather_limited([one(scene) for scene in targets], config.TTS_CONCURRENCY)
     _recompute_starts(scenes)
