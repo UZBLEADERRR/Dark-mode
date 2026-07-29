@@ -178,14 +178,9 @@ async def list_voices(provider: str) -> dict:
             return {"provider": provider, "voices": [], "default": "",
                     "error": "ELEVENLABS_API_KEY yo'q"}
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-                resp = await client.get(
-                    "https://api.elevenlabs.io/v1/voices",
-                    headers={"xi-api-key": config.ELEVENLABS_API_KEY},
-                )
-                resp.raise_for_status()
+            entries, source = await _elevenlabs_voices()
             voices = []
-            for entry in resp.json().get("voices", []):
+            for entry in entries:
                 labels = entry.get("labels") or {}
                 tone = ", ".join(
                     str(labels[k]) for k in ("accent", "age", "description", "use_case")
@@ -199,12 +194,76 @@ async def list_voices(provider: str) -> dict:
                     # Their own sample costs nothing to play, unlike synthesising one.
                     "preview_url": entry.get("preview_url") or "",
                 })
-            return {"provider": provider, "voices": [v for v in voices if v["id"]],
-                    "default": config.default_voice("elevenlabs")}
+            kept = [v for v in voices if v["id"]]
+            out = {"provider": provider, "voices": kept,
+                   "default": config.default_voice("elevenlabs"), "source": source}
+            if not kept:
+                out["error"] = (
+                    "Kalit ishladi, lekin bitta ham ovoz qaytmadi — "
+                    "API kalitiga 'voices_read' ruxsatini bering."
+                )
+            return out
         except Exception as exc:  # noqa: BLE001
-            return {"provider": provider, "voices": [], "default": "", "error": str(exc)[:200]}
+            return {"provider": provider, "voices": [], "default": "",
+                    "error": _readable(exc)}
 
     return {"provider": provider, "voices": [], "default": ""}
+
+
+def _readable(exc: Exception) -> str:
+    """Say what actually went wrong, in words that suggest a next step."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code == 401:
+            return "ElevenLabs kalitni qabul qilmadi (401) — kalitni tekshiring."
+        if code == 403:
+            return ("Kalitda yetarli ruxsat yo'q (403) — "
+                    "'voices_read' va 'text_to_speech' ni yoqing.")
+        if code == 429:
+            return "ElevenLabs hozir band (429) — bir ozdan keyin urinib ko'ring."
+        return f"ElevenLabs {code}: {exc.response.text[:160]}"
+    return str(exc)[:200] or exc.__class__.__name__
+
+
+async def _elevenlabs_voices() -> tuple[list[dict], str]:
+    """Every voice the key can reach, newest API first.
+
+    v2 is the listing endpoint now: it pages, and it is the only one that returns
+    voices shared into the account from the Voice Library. v1 is kept as a
+    fallback for keys or deployments where v2 is not available, because losing
+    the whole picker is a far worse outcome than an older shape.
+    """
+    headers = {"xi-api-key": config.ELEVENLABS_API_KEY}
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            found: list[dict] = []
+            page: str | None = None
+            for _ in range(10):        # 1000 voices is far past anyone's library
+                params = {"page_size": 100}
+                if page:
+                    params["next_page_token"] = page
+                resp = await client.get("https://api.elevenlabs.io/v2/voices",
+                                        headers=headers, params=params)
+                resp.raise_for_status()
+                body = resp.json()
+                found += body.get("voices") or []
+                page = body.get("next_page_token")
+                if not page or not body.get("has_more"):
+                    break
+            if found:
+                return found, "v2"
+        except httpx.HTTPStatusError as exc:
+            # A key problem will repeat on v1, so report it rather than
+            # retrying and returning the same failure under another name.
+            if exc.response.status_code in (401, 403):
+                raise
+        except Exception:  # noqa: BLE001 - fall through to v1
+            pass
+
+        resp = await client.get("https://api.elevenlabs.io/v1/voices",
+                                headers=headers, params={"show_legacy": "true"})
+        resp.raise_for_status()
+        return resp.json().get("voices") or [], "v1"
 
 
 def _preview_path(provider: str, voice_id: str, language: str) -> Path:

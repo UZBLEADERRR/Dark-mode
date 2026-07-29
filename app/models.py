@@ -132,6 +132,10 @@ class JobPatch(BaseModel):
     burn_subtitles: bool | None = None
     music_id: str | None = None
     music_start: float | None = Field(default=None, ge=0, le=36000)
+    # Changing either marks every scene for re-recording, because the narrator
+    # belongs to the video and not to any one line of it.
+    voice_id: str | None = None
+    tts_provider: str | None = None
 
 
 class MusicSwap(BaseModel):
@@ -220,6 +224,13 @@ class ScenePatch(BaseModel):
 class RegenerateRequest(BaseModel):
     image: bool = True
     voice: bool = False
+    # Re-recording is the moment you discover the voice was wrong, so the voice
+    # can be changed here. Both apply to the whole video rather than this scene
+    # alone: one narrator who changes halfway through is a defect, not a feature.
+    voice_id: str | None = None
+    tts_provider: str | None = None
+    # Re-record every scene with the new voice, not just this one.
+    all_scenes: bool = False
 
 
 class HeroPatch(BaseModel):

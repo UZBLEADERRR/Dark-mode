@@ -149,13 +149,16 @@ async function copyText(text, button) {
 // scene and repurposing a video do not each grow their own panel.
 let modalResolve = null;
 
-function ask({ title, html, ok = 'Qo‘shish' }) {
+function ask({ title, html, ok = 'Qo‘shish', onOpen = null }) {
   $('#modal-title').textContent = title;
   $('#modal-body').innerHTML = html;
   $('#modal-ok').textContent = ok;
   $('#modal').classList.remove('hidden');
   const first = $('#modal-body textarea, #modal-body input, #modal-body select');
   first?.focus();
+  // Run after the markup is in the document, so a dialog that has to fetch its
+  // own contents can wire itself up without the caller reaching in from outside.
+  onOpen?.();
   return new Promise((resolve) => { modalResolve = resolve; });
 }
 
@@ -964,6 +967,37 @@ async function loadVoices() {
   if (state.brand) drawBrand();
 }
 
+// The composer's voice loader writes into fixed ids; this one fills the copy
+// living inside the re-record dialog, which can be open at the same time.
+async function fillRevoice(provider, wanted) {
+  const select = $('#revoice-voice');
+  const hint = $('#revoice-hint');
+  if (!select) return;
+  const load = async () => {
+    const chosen = $('#revoice-provider').value;
+    select.innerHTML = '<option value="">yuklanmoqda…</option>';
+    try {
+      const data = await api(`/api/voices?provider=${encodeURIComponent(chosen)}`);
+      select.innerHTML = `<option value="">standart — ${esc(data.default || '?')}</option>` +
+        (data.voices || []).map((v) => {
+          const about = [v.hint, v.tone].filter(Boolean).join(' · ');
+          return `<option value="${esc(v.id)}">${esc(v.label)}${about ? ` — ${esc(about)}` : ''}</option>`;
+        }).join('');
+      if (wanted && (data.voices || []).some((v) => v.id === wanted)) select.value = wanted;
+      hint.textContent = data.error || (data.voices || []).length
+        ? (data.error || `${data.voices.length} ta ovoz — ▶ bosib eshiting.`)
+        : 'Bu provayder uchun ovoz ro’yxati yo’q.';
+    } catch (e) {
+      select.innerHTML = '<option value="">standart ovoz</option>';
+      hint.textContent = e.message;
+    }
+  };
+  $('#revoice-provider').addEventListener('change', () => { wanted = ''; load(); });
+  $('#revoice-hear').addEventListener('click', () =>
+    playVoiceSample($('#revoice-provider').value, select.value, $('#revoice-hear')));
+  await load();
+}
+
 let voiceAudio = null;
 async function playVoiceSample(provider, voiceId, button) {
   if (!voiceId) { toast('Avval ovozni tanlang'); return; }
@@ -977,8 +1011,16 @@ async function playVoiceSample(provider, voiceId, button) {
     voiceAudio.addEventListener('ended', () => button?.classList.remove('busy'), { once: true });
   } catch {
     button?.classList.remove('busy');
-    // The endpoint answers with the reason when synthesis fails.
-    toast('Namuna eshittirilmadi — kalitni tekshiring');
+    // The endpoint answers with the actual reason; a generic "check your key"
+    // is useless when the real problem is a missing permission or a busy
+    // provider, so go and read it.
+    try {
+      const resp = await fetch(voiceAudio.src);
+      const why = resp.ok ? '' : (await resp.json().catch(() => ({}))).error;
+      toast(why || 'Namuna eshittirilmadi');
+    } catch {
+      toast('Namuna eshittirilmadi');
+    }
   }
 }
 
@@ -2292,7 +2334,44 @@ function drawScenePanel() {
   });
 
   $('[data-a="image"]', host).addEventListener('click', () => regen({ image: true, voice: false }));
-  $('[data-a="voice"]', host)?.addEventListener('click', () => regen({ image: false, voice: true }));
+
+  // Re-recording is when you notice the voice was wrong, so the voice can be
+  // chosen here rather than only at creation. It belongs to the whole video, so
+  // the dialog says so and offers to re-record everything in one go.
+  $('[data-a="voice"]', host)?.addEventListener('click', async () => {
+    const providers = Object.entries(state.health?.tts_providers || {})
+      .filter(([, ready]) => ready).map(([name]) => name);
+    const current = ED.job.tts_provider || state.health?.defaults?.tts_provider || '';
+
+    const answer = await ask({
+      title: 'Ovozni qayta yozish',
+      ok: 'Qayta yozish',
+      html: `<label class="f"><span>Provayder</span>
+          <select name="tts_provider" id="revoice-provider">${providers.map((p) =>
+            `<option value="${esc(p)}"${p === current ? ' selected' : ''}>${esc(p)}</option>`).join('')}
+          </select></label>
+        <div class="f"><span>Ovoz</span>
+          <div class="voice-pick">
+            <select name="voice_id" id="revoice-voice"><option value="">yuklanmoqda…</option></select>
+            <button type="button" class="hear" id="revoice-hear" aria-label="Namunani eshitish">▶</button>
+          </div>
+          <small id="revoice-hint"></small>
+        </div>
+        <label class="sw"><input type="checkbox" name="all_scenes" /><i></i>
+          <span>Barcha sahnalarni qayta yozish</span></label>
+        <small class="note">Ovoz butun videoga tegishli — o‘zgartirsangiz qolgan
+          sahnalar ham render paytida qayta yoziladi.</small>`,
+      onOpen: () => fillRevoice(current, ED.job.voice_id || ''),
+    });
+    if (!answer) return;
+    regen({
+      image: false,
+      voice: true,
+      tts_provider: answer.tts_provider || null,
+      voice_id: answer.voice_id || null,
+      all_scenes: !!answer.all_scenes,
+    });
+  });
   $('[data-a="upload"] input', host).addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;

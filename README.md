@@ -82,6 +82,10 @@ ikkinchi marta bepul.
 
 ElevenLabs ulasangiz o'z akkountingizdagi va Voice Library'dan qo'shgan barcha
 ovozlaringiz ro'yxatda chiqadi — Voice ID ni qo'lda ko'chirish shart emas.
+Ro'yxat `/v2/voices` dan sahifalab olinadi (Voice Library'dan qo'shilganlar faqat
+shu yerda ko'rinadi); v2 ishlamasa `/v1/voices` ga tushadi. Ro'yxat bo'sh chiqsa
+yoki kalit rad etilsa, aniq sabab yoziladi — 401, 403 (ruxsat yetmaydi) va 429
+har biri o'z xabari bilan.
 Namunasi ham ElevenLabs'ning o'z sample'idan olinadi, ya'ni **kredit
 sarflanmaydi**. API kalitiga `text_to_speech` va `voices_read` ruxsati kerak.
 
@@ -391,6 +395,12 @@ app/
   uni qaytadan urinib ko'radi. Rasm chiqmasa gradient qo'yiladi.
 - Jarayon 45 soniyadan ortiq jim qolsa progress kartasida "To'xtatish" tugmasi
   chiqadi. To'xtatilgan job tayyor sahnalari bilan tahrirlash bo'limida qoladi.
+- **Ovozni keyin ham almashtirsa bo'ladi.** Sahna panelidagi «Ovozni qayta
+  yozish» endi provayder va ovozni tanlashni so'raydi, namunasini ▶ bilan shu
+  yerda eshitasiz. Ovoz butun videoga tegishli, shuning uchun o'zgartirsangiz
+  qolgan sahnalar ham belgilanadi va render paytida qayta yoziladi — yoki
+  «Barcha sahnalarni qayta yozish» bilan darhol. `PATCH /api/jobs/{id}` ham
+  `voice_id` / `tts_provider` ni qabul qiladi.
 - **Telefonni o'chirsangiz ham ishlayveradi.** Render serverda ketadi — brauzer
   faqat holatni ko'rsatadi. Ilovani yopsangiz ham to'xtamaydi; qaytib
   kirganingizda o'zingiz kuzatayotgan job avtomatik ochiladi (u tugab bo'lgan
