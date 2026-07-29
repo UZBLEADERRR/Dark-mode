@@ -1258,8 +1258,16 @@ async def run_draft(job_id: str) -> None:
 
 # ── stage 2: render ───────────────────────────────────────────────────────────
 
-async def run_render(job_id: str) -> None:
-    """Captions, scene clips, cross-fades, audio mix, MP4."""
+async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
+    """Captions, scene clips, cross-fades, audio mix, MP4.
+
+    `may_rebuild` is consent to spend. Pressing Render means "assemble what is
+    there", and it used to mean "and quietly re-record anything you cannot find"
+    — so a render that failed, on a container that then restarted with an empty
+    disk, re-recorded every line and redrew every picture before failing again.
+    Round and round, paying each time. Only an explicit «Davom ettirish» buys
+    new assets now; Render alone stops and says what is missing.
+    """
     job = store.get_job(job_id)
     if job is None:
         return
@@ -1267,6 +1275,9 @@ async def run_render(job_id: str) -> None:
     warnings: list[str] = list(job.get("result", {}).get("warnings") or [])
 
     try:
+        # Marked before anything can fail, so a failure always knows it happened
+        # in the render rather than in the draft.
+        store.update_job(job_id, step="render")
         scenes = _load_scenes(job)
         if not scenes:
             raise PipelineError("This job has no scenes to render.")
@@ -1288,15 +1299,18 @@ async def run_render(job_id: str) -> None:
         # ffmpeg as a filename. Checked here and not only on resume, because the
         # render is where a missing file actually breaks something.
         lost = forget_missing(scenes)
+        if lost and not may_rebuild:
+            # Stop rather than spend — and leave the rows exactly as they were.
+            # Writing the cleared paths down would turn "this file is missing"
+            # into "this asset is stale", and a stale asset is what Render
+            # rebuilds without being asked. The refusal would then hold for one
+            # attempt and pay on the next, which is the loop this is here to end.
+            raise PipelineError(
+                f"{lost} ta rasm/ovoz fayli topilmadi — ular saqlanmagan yoki "
+                "konteyner bilan o'chgan. «Davom ettirish» bosing: faqat "
+                "yo'qolganlari qayta yaratiladi, qolgani qayta to'lanmaydi.")
         if lost:
             _note(job_id, f"{lost} ta fayl topilmadi — o'shalar qayta yaratiladi")
-            if storage.backend() != "supabase":
-                # Naming the cause where it bites. Without object storage this
-                # happens on every redeploy, and paying for the voice-over twice
-                # is a poor way to find that out.
-                warnings.append(
-                    "Fayllar konteyner bilan o'chgan va qaytadan yaratilmoqda. "
-                    "Buning oldini olish uchun STORAGE_BACKEND=supabase qo'ying.")
             _save_scenes(job_id, scenes)
 
         # Any scene edited since the last render still needs its asset built.
@@ -1583,6 +1597,12 @@ def unfinished(scenes: list[dict], *, uploaded_audio: bool = False) -> dict[str,
     }
 
 
+# Steps that only happen after the draft was reviewed. A job that broke in one
+# of them was on its way to a finished video, and carrying on means finishing —
+# not stopping at a review the user already did.
+RENDER_STEPS = {"render", "captions", "clips", "assemble", "thumbnails", "publish"}
+
+
 async def resume_job(job_id: str) -> None:
     """Carry on from wherever a draft stopped, paying only for what is missing.
 
@@ -1659,9 +1679,16 @@ async def resume_job(job_id: str) -> None:
         # The failure that sent somebody here is over. Left in place, the card
         # keeps showing the red ffmpeg dump above a project that is now fine.
         store.update_job(job_id, error="")
+        # Finish it if that is plainly what was being asked for. Dropping a
+        # project back to "press Render" when Render is exactly what it was
+        # doing when it broke is one button too many.
+        was_rendering = ((job.get("result") or {}).get("failed_at") or
+                         job.get("step") or "") in RENDER_STEPS
+        if request.get("auto_render", True) or was_rendering:
+            _progress(job_id, "render", 74, "Render davom etmoqda", status="rendering")
+            await run_render(job_id, may_rebuild=True)
+            return
         _progress(job_id, "review", 72, "Hammasi tayyor — Render bosing", status="review")
-        if request.get("auto_render", True):
-            await run_render(job_id)
 
     except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
         _fail(job_id, exc, warnings)
@@ -2227,9 +2254,17 @@ async def run_dub(job_id: str) -> None:
 
 def _fail(job_id: str, exc: Exception, warnings: list[str]) -> None:
     detail = str(exc) or exc.__class__.__name__
+    job = store.get_job(job_id) or {}
     store.update_job(
         job_id, status="failed", step="failed", error=detail, log=f"Failed: {detail}",
-        result={"traceback": traceback.format_exc()[-4000:], "warnings": warnings},
+        result={
+            "traceback": traceback.format_exc()[-4000:],
+            "warnings": warnings,
+            # Which stage it broke in. `step` is about to become "failed", and
+            # without this nothing downstream can tell a draft that never got
+            # going from a render that was one encode away from finishing.
+            "failed_at": job.get("step") or "",
+        },
     )
 
 
