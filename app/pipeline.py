@@ -150,6 +150,59 @@ def replace_scene_image(job_id: str, index: int, data: bytes) -> dict | None:
     return scene
 
 
+async def replace_scene_voice(job_id: str, index: int, data: bytes, suffix: str,
+                              language: str = "") -> dict | None:
+    """Use a recording of your own for one scene, in place of the generated one.
+
+    This is the whole of "let me do the animal noises myself": you say the line,
+    and the scene takes your timing rather than the synthesizer's. Everything
+    downstream is measured from the file, so the picture, the captions and every
+    scene after it move to fit what you actually said — the same way they would
+    for a machine-read line.
+
+    Kept in the pipeline rather than the HTTP layer because it is not a file
+    swap: the duration has to be probed and the words re-aligned, or the
+    captions would run to the length of a recording that no longer exists.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return None
+    scenes = _load_scenes(job)
+    scene = next((s for s in scenes if s["index"] == index), None)
+    if scene is None:
+        return None
+
+    workdir = workdir_for(job_id)
+    # A new name each time. Browsers cache an audio URL hard, and a re-recorded
+    # take that plays back as the old one is worse than no preview at all.
+    take = int(scene.get("voice_version", 0)) + 1
+    target = workdir / "audio" / f"scene_{scene['sid']}_take{take}{suffix or '.webm'}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+
+    duration = await video.probe_duration(target)
+    if duration <= 0.05:
+        raise PipelineError("Yozuv bo'sh chiqdi — mikrofonni tekshirib qayta urinib ko'ring.")
+
+    scene["audio_path"] = str(target)
+    scene["audio_duration"] = duration + video.SCENE_GAP
+    scene["voice_version"] = take
+    scene["needs_voice"] = False
+    # Own recording, own timings: the words are re-aligned against this take, so
+    # the captions follow the voice rather than the text they were written from.
+    scene["words"] = await align.words_for(
+        audio_path=target, text=scene["narration"], duration=duration,
+        provider=config.ALIGN_PROVIDER,
+        language=language or job["request"].get("language", "en"),
+        provider_words=[],
+    )
+    _recompute_starts(scenes)
+    _save_scenes(job_id, scenes)
+    await keep_media([scene])
+    _note(job_id, f"Scene {index + 1}: o'z ovozingiz bilan almashtirildi")
+    return scene
+
+
 def _materialize_assets(workdir: Path, scenes: list[dict]) -> dict[str, Path]:
     """Overlay pictures live in the database; ffmpeg needs real files."""
     wanted = {
@@ -429,6 +482,7 @@ def public_scene(job_id: str, scene: dict) -> dict:
         "transition": scene.get("transition") or "",
         "on_screen_text": scene.get("on_screen_text", ""),
         "hero_ids": scene.get("hero_ids", []),
+        "speaker": scene.get("speaker") or "",
         "overlays": scene.get("overlays") or [],
         "sfx_id": scene.get("sfx_id") or "",
         "sfx_volume": round(float(scene.get("sfx_volume") or 1.0), 2),
@@ -438,7 +492,9 @@ def public_scene(job_id: str, scene: dict) -> dict:
         "image_url": _file_url(scene.get("image_path"), scene.get("image_version", 0)),
         # The editor plays this to preview the scene with its captions and
         # layers running in step, which is why the word timings ride along.
-        "audio_url": _file_url(scene.get("audio_path")),
+        # Versioned like the picture is: a re-recorded take must not play back
+        # as the one the browser already cached.
+        "audio_url": _file_url(scene.get("audio_path"), scene.get("voice_version", 0)),
         "words": scene.get("words") or [],
         "needs_image": bool(scene.get("needs_image")),
         "needs_voice": bool(scene.get("needs_voice")),
@@ -469,6 +525,43 @@ def public_shot(job_id: str, scene: dict, shot: dict, position: int) -> dict:
     }
 
 
+# ── who says the line ─────────────────────────────────────────────────────────
+
+def cast_voices(hero_ids: list[str] | None = None) -> dict[str, dict[str, str]]:
+    """Every character that has been given a voice, keyed by hero id.
+
+    Looked up once per stage rather than per scene: a fifty-scene cartoon with
+    four characters would otherwise make fifty database round trips to learn the
+    same four answers.
+    """
+    heroes = store.list_heroes() if hero_ids is None else store.get_heroes(hero_ids)
+    return {
+        h["id"]: {"voice_id": h.get("voice_id") or "",
+                  "provider": (h.get("tts_provider") or "").lower(),
+                  "name": h.get("name", "")}
+        for h in heroes
+        if h.get("voice_id")
+    }
+
+
+def voice_for(scene: dict, cast: dict[str, dict[str, str]],
+              default_provider: str, default_voice: str | None) -> tuple[str, str | None, str]:
+    """Which provider and voice read this scene, and whose voice it is.
+
+    A scene names its speaker; a speaker with a voice of its own uses it. Anything
+    else — no speaker, an unknown one, a character nobody gave a voice — is the
+    narrator, which is exactly how every video worked before characters could
+    speak. A character with a voice but no provider of its own borrows the
+    project's, so picking an ElevenLabs voice does not also mean re-picking
+    ElevenLabs on every character.
+    """
+    speaker = str(scene.get("speaker") or "")
+    entry = cast.get(speaker)
+    if not entry:
+        return default_provider, default_voice, ""
+    return entry["provider"] or default_provider, entry["voice_id"], entry["name"]
+
+
 # ── stages ────────────────────────────────────────────────────────────────────
 
 async def _voice_scenes(
@@ -492,28 +585,30 @@ async def _voice_scenes(
     outcome than finishing with one gap the render stage can try again.
     """
     audio_dir = workdir / "audio"
-    align_provider = config.resolve_align_provider(provider)
     warnings: list[str] = []
     done = 0
     lock = asyncio.Lock()
+    cast = cast_voices()
 
     async def one(scene: dict) -> None:
         nonlocal done
+        say_with, say_as, who = voice_for(scene, cast, provider, voice_id)
+        label = f"Scene {scene['index'] + 1}" + (f" ({who})" if who else "")
         try:
             path, provider_words = await tts.synthesize(
                 text=scene["narration"],
                 out_path=audio_dir / f"scene_{scene['sid']}",
-                provider=provider,
-                voice_id=voice_id,
-                on_retry=_retry_note(job_id, f"Scene {scene['index'] + 1} voice-over"),
-                on_wait=_wait_note(job_id, f"Scene {scene['index'] + 1} voice-over"),
+                provider=say_with,
+                voice_id=say_as,
+                on_retry=_retry_note(job_id, f"{label} voice-over"),
+                on_wait=_wait_note(job_id, f"{label} voice-over"),
             )
             raw_duration = await video.probe_duration(path)
             words = await align.words_for(
                 audio_path=path,
                 text=scene["narration"],
                 duration=raw_duration,
-                provider=align_provider,
+                provider=config.resolve_align_provider(say_with),
                 language=language,
                 provider_words=provider_words,
             )
@@ -523,8 +618,8 @@ async def _voice_scenes(
             scene["needs_voice"] = True
             async with lock:
                 done += 1
-                warnings.append(f"Scene {scene['index'] + 1} has no voice-over yet: {_short(exc)}")
-                _note(job_id, f"Scene {scene['index'] + 1} voice-over failed — carrying on")
+                warnings.append(f"{label} has no voice-over yet: {_short(exc)}")
+                _note(job_id, f"{label} voice-over failed — carrying on")
             return
 
         scene["audio_path"] = str(path)
@@ -537,7 +632,8 @@ async def _voice_scenes(
             _progress(job_id, "voice", base_progress + int(span * done / max(len(targets), 1)),
                       f"Voice-over {done}/{len(targets)}")
 
-    async def finish(scene: dict, path: Path, provider_words: list[dict]) -> None:
+    async def finish(scene: dict, path: Path, provider_words: list[dict],
+                     said_with: str) -> None:
         """Turn a finished recording into the timings the timeline needs."""
         nonlocal done
         raw_duration = await video.probe_duration(path)
@@ -545,7 +641,8 @@ async def _voice_scenes(
         scene["audio_duration"] = raw_duration + video.SCENE_GAP
         scene["words"] = await align.words_for(
             audio_path=path, text=scene["narration"], duration=raw_duration,
-            provider=align_provider, language=language, provider_words=provider_words,
+            provider=config.resolve_align_provider(said_with), language=language,
+            provider_words=provider_words,
         )
         scene["needs_voice"] = False
         async with lock:
@@ -554,18 +651,15 @@ async def _voice_scenes(
             _progress(job_id, "voice", base_progress + int(span * done / max(len(targets), 1)),
                       f"Voice-over {done}/{len(targets)}")
 
-    if targets and tts.can_batch(provider) and len(targets) > 1:
-        # Read as passages rather than a line at a time: far fewer requests, and
-        # the narrator carries its intonation across the sentences instead of
-        # restarting at each one. The recording is cut back into scenes at the
-        # exact character the provider timed, so nothing is estimated.
-        _note(job_id, f"Reading {len(targets)} lines in "
-                      f"{len(tts.batches([t['narration'] for t in targets], max_chars=config.TTS_BATCH_CHARS, max_lines=config.TTS_BATCH_LINES))} passage(s)")
+    async def read_together(group: list[dict], said_with: str, said_as: str | None) -> None:
+        """Read one voice's lines as passages instead of one at a time."""
+        _note(job_id, f"Reading {len(group)} lines in "
+                      f"{len(tts.batches([g['narration'] for g in group], max_chars=config.TTS_BATCH_CHARS, max_lines=config.TTS_BATCH_LINES))} passage(s)")
         try:
             spoken = await tts.synthesize_many(
-                lines=[t["narration"] for t in targets],
-                out_paths=[audio_dir / f"scene_{t['sid']}" for t in targets],
-                provider=provider, voice_id=voice_id,
+                lines=[g["narration"] for g in group],
+                out_paths=[audio_dir / f"scene_{g['sid']}" for g in group],
+                provider=said_with, voice_id=said_as,
                 on_retry=_retry_note(job_id, "Voice-over"),
                 on_wait=_wait_note(job_id, "Voice-over"),
             )
@@ -575,16 +669,33 @@ async def _voice_scenes(
             spoken = []
             warnings.append(f"Voice-over failed: {_short(exc)}")
 
-        for scene, result in zip(targets, spoken):
-            await finish(scene, *result)
-        for scene in targets[len(spoken):]:
+        for scene, result in zip(group, spoken):
+            await finish(scene, *result, said_with)
+        for scene in group[len(spoken):]:
             scene["needs_voice"] = True
             warnings.append(f"Scene {scene['index'] + 1} has no voice-over yet")
-        _recompute_starts(scenes)
-        return warnings
 
-    if targets:
-        await _gather_limited([one(scene) for scene in targets], config.TTS_CONCURRENCY)
+    # Batching reads several lines in one request, so it can only ever group
+    # lines that are read by the same voice. A cartoon with four characters is
+    # therefore four passages rather than one — still far fewer requests than
+    # one per scene, and nobody ends up speaking in somebody else's voice.
+    groups: dict[tuple[str, str | None], list[dict]] = {}
+    alone: list[dict] = []
+    for scene in targets:
+        say_with, say_as, _who = voice_for(scene, cast, provider, voice_id)
+        if tts.can_batch(say_with):
+            groups.setdefault((say_with, say_as), []).append(scene)
+        else:
+            alone.append(scene)
+
+    for (say_with, say_as), group in groups.items():
+        if len(group) > 1:
+            await read_together(group, say_with, say_as)
+        else:
+            alone.extend(group)
+
+    if alone:
+        await _gather_limited([one(scene) for scene in alone], config.TTS_CONCURRENCY)
     _recompute_starts(scenes)
     return warnings
 

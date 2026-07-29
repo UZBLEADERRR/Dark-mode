@@ -89,6 +89,33 @@ har biri o'z xabari bilan.
 Namunasi ham ElevenLabs'ning o'z sample'idan olinadi, ya'ni **kredit
 sarflanmaydi**. API kalitiga `text_to_speech` va `voices_read` ruxsati kerak.
 
+### Har qahramonga o'z ovozi
+
+**Kutubxona → Herolar** da har bir qahramon kartochkasi ostida ovoz tugmasi bor.
+Ovoz bersangiz — o'sha qahramon **o'z gaplarini o'zi aytadi**: Direktor unga
+dialog yozadi va ovoz bosqichi o'sha qatorni shu ovozda yozadi. Ovoz
+bermasangiz uni diktor o'qiydi, ya'ni hech narsa o'zgarmaydi.
+
+Tahrirlashda har sahnada **«Kim gapiradi»** degan tanlov chiqadi — Diktor yoki
+ovozi bor qahramonlardan biri. Ovozsiz qahramonlar u yerda ko'rinmaydi: ularni
+baribir diktor o'qigan bo'lardi, ya'ni hech narsani o'zgartirmaydigan tanlov
+bo'lardi.
+
+Bir necha ovoz bo'lsa ham so'rovlar baribir guruhlanadi: har ovoz o'z
+qatorlarini bitta so'rovda o'qiydi. To'rt qahramonli multfilm — sahna soniga
+qarab emas, **to'rtta so'rov**.
+
+### O'z ovozingizni yozish
+
+Sahna panelida **🎙 O'zim aytaman** tugmasi. Mikrofonga yozasiz, eshitib
+ko'rasiz, yoqmasa qaytadan yozasiz. «Ishlatish» bosilgach o'sha sahnaning ovozi
+sizniki bo'ladi.
+
+Muhimi: vaqtlar **yozuvingizdan** qayta o'lchanadi. Ya'ni sahna uzunligi,
+subtitr so'zlari va undan keyingi hamma sahnalar sizning aytganingizga moslanadi
+— hayvon ovozi, qichqiriq, sun'iy ovoz umuman o'qiy olmaydigan narsalar uchun
+aynan shu kerak.
+
 ## Ma'lumotlar qayerda
 
 Ikki xil narsa saqlanadi va ikkovi ikki joyda turadi:

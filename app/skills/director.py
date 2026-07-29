@@ -12,6 +12,34 @@ import math
 from .. import config
 from .llm import call_json
 
+def describe_cast(heroes: list[dict]) -> str:
+    """The cast list the model is given — and, crucially, who can speak.
+
+    A character only gets its own line when somebody has actually chosen a voice
+    for it. Saying so here rather than filtering afterwards is what stops the
+    model writing dialogue for a character that would then be read by the
+    narrator anyway, in a voice that belongs to nobody in the story.
+    """
+    if not heroes:
+        return "(no recurring characters — build the visuals from places, objects and action)"
+    lines = []
+    for h in heroes:
+        line = f"- id: {h['id']} | name: {h['name']}"
+        if h.get("description"):
+            line += f" | {h['description']}"
+        line += " | HAS ITS OWN VOICE — may speak" if h.get("voice_id") else " | no voice — narrator only"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def pick_speaker(raw: object, heroes: list[dict]) -> str:
+    """Accept a cast line only from a character that can actually say it."""
+    wanted = str(raw or "").strip()
+    if not wanted:
+        return ""
+    return wanted if any(h["id"] == wanted and h.get("voice_id") for h in heroes) else ""
+
+
 MOTIONS = [
     "zoom_in",
     "zoom_out",
@@ -42,6 +70,11 @@ Rules that matter:
   "text on screen saying X" as the visual.
 - `hero_ids` lists which of the supplied characters physically appear in that shot.
   Leave it empty for landscapes, objects, or abstract beats. Only use ids you were given.
+- `speaker` is who says that line. Leave it empty and the narrator reads it, which is
+  right for most videos. Set it to a character id ONLY when that character has its own
+  voice (the cast list says so) and the line is that character speaking for itself —
+  then write the narration as the words they actually say, not as narration about them.
+  Never put a character's id there if the cast list does not mark it as having a voice.
 - `motion` is the camera move. Prefer zoom_in for reveals and tension, zoom_out for
   context and endings, pans for landscapes and for following an action.
 - `on_screen_text` is an optional 1-4 word title card for that scene. Use it sparingly,
@@ -61,12 +94,14 @@ SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["narration", "visual", "motion", "hero_ids", "on_screen_text"],
+                "required": ["narration", "visual", "motion", "hero_ids", "speaker",
+                             "on_screen_text"],
                 "properties": {
                     "narration": {"type": "string"},
                     "visual": {"type": "string"},
                     "motion": {"type": "string", "enum": MOTIONS},
                     "hero_ids": {"type": "array", "items": {"type": "string"}},
+                    "speaker": {"type": "string"},
                     "on_screen_text": {"type": "string"},
                 },
             },
@@ -89,14 +124,7 @@ async def direct_script(
     lang_name = config.LANGUAGES.get(language, language)
     fmt = config.FORMATS.get(video_format, config.FORMATS["16:9"])
 
-    if heroes:
-        cast = "\n".join(
-            f"- id: {h['id']} | name: {h['name']}"
-            + (f" | {h['description']}" if h.get("description") else "")
-            for h in heroes
-        )
-    else:
-        cast = "(no recurring characters — build the visuals from places, objects and action)"
+    cast = describe_cast(heroes)
 
     user = f"""TOPIC
 {topic}
@@ -132,6 +160,7 @@ image generator. Return exactly {scene_count} scenes."""
                 "visual": (raw.get("visual") or narration)[:600],
                 "motion": motion,
                 "hero_ids": [h for h in (raw.get("hero_ids") or []) if h in known_ids],
+                "speaker": pick_speaker(raw.get("speaker"), heroes),
                 "on_screen_text": (raw.get("on_screen_text") or "").strip()[:60],
             }
         )
@@ -160,6 +189,9 @@ Rules:
   must reproduce the transcript exactly, with no words added, removed or respelled.
 - `visual` describes what a single still image shows for that beat, in English.
 - `hero_ids` lists which supplied characters appear in the shot; empty is fine.
+- `speaker` is who says the line: empty for the narrator, or a character id when the
+  cast list marks that character as having its own voice and the line is that
+  character speaking. Never invent an id.
 - Vary `motion` between neighbouring scenes.
 - `on_screen_text` is optional and rare — a 1-4 word title card.
 """
@@ -175,12 +207,14 @@ SEGMENT_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["narration", "visual", "motion", "hero_ids", "on_screen_text"],
+                "required": ["narration", "visual", "motion", "hero_ids", "speaker",
+                             "on_screen_text"],
                 "properties": {
                     "narration": {"type": "string"},
                     "visual": {"type": "string"},
                     "motion": {"type": "string", "enum": MOTIONS},
                     "hero_ids": {"type": "array", "items": {"type": "string"}},
+                    "speaker": {"type": "string"},
                     "on_screen_text": {"type": "string"},
                 },
             },
@@ -202,14 +236,7 @@ async def segment_existing_narration(
     scene_count = max(3, min(config.MAX_SCENES, round(duration / config.SECONDS_PER_SCENE)))
     fmt = config.FORMATS.get(video_format, config.FORMATS["16:9"])
 
-    if heroes:
-        cast = "\n".join(
-            f"- id: {h['id']} | name: {h['name']}"
-            + (f" | {h['description']}" if h.get("description") else "")
-            for h in heroes
-        )
-    else:
-        cast = "(no recurring characters)"
+    cast = describe_cast(heroes)
 
     user = f"""TOPIC / CONTEXT
 {topic}
@@ -244,6 +271,7 @@ Cut this into scenes now."""
                 "visual": (raw.get("visual") or narration)[:600],
                 "motion": motion,
                 "hero_ids": [h for h in (raw.get("hero_ids") or []) if h in known_ids],
+                "speaker": pick_speaker(raw.get("speaker"), heroes),
                 "on_screen_text": (raw.get("on_screen_text") or "").strip()[:60],
             }
         )
@@ -270,14 +298,7 @@ async def segment_written_script(
     fmt = config.FORMATS.get(video_format, config.FORMATS["16:9"])
     lang_name = config.LANGUAGES.get(language, language)
 
-    if heroes:
-        cast = "\n".join(
-            f"- id: {h['id']} | name: {h['name']}"
-            + (f" | {h['description']}" if h.get("description") else "")
-            for h in heroes
-        )
-    else:
-        cast = "(no recurring characters)"
+    cast = describe_cast(heroes)
 
     user = f"""CONTEXT
 {topic or "(none given — the script speaks for itself)"}
@@ -313,6 +334,7 @@ though the narration is in {lang_name}."""
                 "visual": (raw.get("visual") or narration)[:600],
                 "motion": motion,
                 "hero_ids": [h for h in (raw.get("hero_ids") or []) if h in known_ids],
+                "speaker": pick_speaker(raw.get("speaker"), heroes),
                 "on_screen_text": (raw.get("on_screen_text") or "").strip()[:60],
             }
         )

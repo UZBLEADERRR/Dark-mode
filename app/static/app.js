@@ -469,6 +469,9 @@ async function loadHeroes() {
           <img src="${esc(h.url)}" alt="${esc(h.name)}" loading="lazy" />
           <button class="x" data-del-hero="${esc(h.id)}" aria-label="O‘chirish">×</button>
           <b>${esc(h.name)}</b>
+          <button class="voice-tag${h.voice_id ? ' on' : ''}" data-hero-voice="${esc(h.id)}">
+            ${h.voice_id ? esc(voiceName(h)) : 'ovoz bermang'}
+          </button>
         </div>`).join('')
     : '<p class="empty">Hali hero yo‘q.</p>';
 
@@ -477,6 +480,93 @@ async function loadHeroes() {
     await api(`/api/heroes/${b.dataset.delHero}`, { method: 'DELETE' });
     loadHeroes();
   }));
+  $$('[data-hero-voice]').forEach((b) =>
+    b.addEventListener('click', () => giveVoice(b.dataset.heroVoice)));
+}
+
+/** What to call a character's voice when all we have is its id. */
+function voiceName(hero) {
+  const known = (state.voices || []).find((v) => v.id === hero.voice_id);
+  return known ? known.label : hero.voice_id;
+}
+
+/** Give a character a voice of its own — or take it away again.
+ *
+ * A character with a voice speaks its own lines: the Director writes dialogue
+ * for it and the voice stage records that line in this voice instead of the
+ * narrator's. That is the whole of what makes a cartoon a cartoon rather than
+ * a slideshow with someone explaining it.
+ */
+async function giveVoice(heroId) {
+  const hero = (state.heroes || []).find((h) => h.id === heroId);
+  if (!hero) return;
+  const providers = Object.entries(state.health?.tts_providers || {})
+    .filter(([, ready]) => ready).map(([name]) => name);
+  if (!providers.length) { toast('Avval ovoz provayderiga kalit qo‘ying'); return; }
+
+  const answer = await ask({
+    title: `${hero.name} — ovozi`,
+    ok: 'Saqlash',
+    html: `
+      <p class="hint">Ovoz berilgan qahramon o‘z gaplarini o‘zi aytadi.
+        Ovozsiz qoldirsangiz uni diktor o‘qiydi.</p>
+      <label class="f"><span>Provayder</span>
+        <select name="tts_provider" id="hv-provider">
+          ${providers.map((p) => `<option value="${esc(p)}"${
+            p === (hero.tts_provider || $('#tts_provider').value) ? ' selected' : ''
+          }>${esc(p)}</option>`).join('')}
+        </select></label>
+      <label class="f"><span>Ovoz</span>
+        <span class="voice-row">
+          <select name="voice_id" id="hv-voice"><option value="">yuklanmoqda…</option></select>
+          <button type="button" class="btn ghost sm" id="hv-play" aria-label="Namunasini eshitish">▶</button>
+        </span></label>
+      <p class="voice-hint" id="hv-hint"></p>`,
+    onOpen: () => {
+      const load = async () => {
+        const provider = $('#hv-provider').value;
+        const select = $('#hv-voice');
+        select.innerHTML = '<option value="">yuklanmoqda…</option>';
+        try {
+          const data = await api(`/api/voices?provider=${encodeURIComponent(provider)}`);
+          select.innerHTML = '<option value="">— ovoz bermang (diktor o‘qiydi) —</option>' +
+            (data.voices || []).map((v) => {
+              const about = [v.hint, v.tone].filter(Boolean).join(' · ');
+              return `<option value="${esc(v.id)}">${esc(v.label)}${
+                about ? ` — ${esc(about)}` : ''}</option>`;
+            }).join('');
+          if (hero.voice_id && (data.voices || []).some((v) => v.id === hero.voice_id)) {
+            select.value = hero.voice_id;
+          }
+          if (data.error || !(data.voices || []).length) {
+            voiceTrouble($('#hv-hint'), provider,
+                         data.error || 'Bu provayder uchun ovoz ro’yxati yo’q.');
+          } else {
+            $('#hv-hint').className = 'voice-hint';
+            $('#hv-hint').textContent = `${data.voices.length} ta ovoz — ▶ bosib eshiting.`;
+          }
+        } catch (e) {
+          voiceTrouble($('#hv-hint'), provider, e.message);
+        }
+      };
+      $('#hv-provider').addEventListener('change', load);
+      $('#hv-play').addEventListener('click', () =>
+        playVoiceSample($('#hv-provider').value, $('#hv-voice').value, $('#hv-play')));
+      load();
+    },
+  });
+  if (!answer) return;
+
+  await api(`/api/heroes/${heroId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      voice_id: answer.voice_id || '',
+      tts_provider: answer.voice_id ? answer.tts_provider : '',
+    }),
+  });
+  await loadHeroes();
+  toast(answer.voice_id ? `${hero.name} endi o‘zi gapiradi` : `${hero.name} — diktor o‘qiydi`);
 }
 
 // ── overlay assets ────────────────────────────────────────────────
@@ -1632,6 +1722,7 @@ async function flush() {
           transition: s.transition || '',
           on_screen_text: s.on_screen_text || '',
           hero_ids: s.hero_ids || [],
+          speaker: s.speaker || '',
           overlays: s.overlays || [],
           sfx_id: s.sfx_id || '',
           sfx_volume: s.sfx_volume ?? 1,
@@ -2384,6 +2475,130 @@ function wireShots(host, s) {
   }));
 }
 
+/** Who says this scene's line: the narrator, or a character with its own voice.
+ *
+ * Only characters that have been given a voice are offered. A character with no
+ * voice would be read by the narrator anyway, so listing it would be a choice
+ * that changes nothing — and the picker is silent entirely until at least one
+ * character can speak, because until then there is nothing to choose between.
+ */
+function speakerPicker(s) {
+  const talkers = (state.heroes || []).filter((h) => h.voice_id);
+  if (!talkers.length || ED.job.uses_uploaded_audio) return '';
+  return `<label class="f"><span>Kim gapiradi</span>
+    <select data-k="speaker">
+      <option value="">Diktor</option>
+      ${talkers.map((h) => `<option value="${esc(h.id)}"${
+        h.id === (s.speaker || '') ? ' selected' : ''}>${esc(h.name)}</option>`).join('')}
+    </select>
+    <small>Ovoz berilgan qahramonlar shu yerda chiqadi — Kutubxona → Herolar.</small></label>`;
+}
+
+// The browser writes whichever of these it can; the server accepts all of them,
+// and ffmpeg reads all of them. Ordered by how widely they are supported.
+const TAKE_TYPES = ['audio/webm', 'audio/ogg', 'audio/mp4'];
+const TAKE_EXT = { 'audio/webm': '.webm', 'audio/ogg': '.ogg', 'audio/mp4': '.m4a' };
+
+/** Record a scene's line yourself.
+ *
+ * Some lines are not readable by a synthesizer at all — an animal, a shout, a
+ * voice you are doing. The take replaces that scene's audio and the timeline is
+ * re-measured from it, so the picture and the captions follow what you actually
+ * said rather than what was written.
+ */
+async function recordScene(s) {
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    toast('Bu brauzer mikrofonni qo‘llab-quvvatlamaydi');
+    return;
+  }
+
+  let stream = null;
+  let recorder = null;
+  let chunks = [];
+  let started = 0;
+  let take = null;
+  let timer = null;
+
+  const stop = () => {
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    stream?.getTracks().forEach((t) => t.stop());
+    stream = null;
+    clearInterval(timer);
+  };
+
+  const answer = await ask({
+    title: `${s.index + 1}-sahna — o‘z ovozingiz`,
+    ok: 'Ishlatish',
+    html: `
+      <p class="hint">${esc(s.narration)}</p>
+      <div class="rec">
+        <button type="button" class="rec-btn" id="rec-go">Yozishni boshlash</button>
+        <span class="rec-time" id="rec-time">0.0s</span>
+      </div>
+      <audio id="rec-play" controls class="hidden"></audio>
+      <p class="voice-hint" id="rec-hint">Mikrofonga ruxsat so‘raladi. Yozib bo‘lgach
+        eshitib ko‘ring — yoqmasa qaytadan yozing.</p>`,
+    onOpen: () => {
+      $('#rec-go').addEventListener('click', async () => {
+        if (recorder && recorder.state === 'recording') {
+          stop();
+          $('#rec-go').textContent = 'Qaytadan yozish';
+          $('#rec-go').classList.remove('live');
+          return;
+        }
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (e) {
+          $('#rec-hint').className = 'voice-hint bad';
+          $('#rec-hint').textContent = 'Mikrofonga ruxsat berilmadi.';
+          return;
+        }
+        const type = TAKE_TYPES.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+        recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+        chunks = [];
+        recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+        recorder.onstop = () => {
+          take = new Blob(chunks, { type: recorder.mimeType || type || 'audio/webm' });
+          const player = $('#rec-play');
+          player.src = URL.createObjectURL(take);
+          player.classList.remove('hidden');
+          $('#rec-hint').className = 'voice-hint';
+          $('#rec-hint').textContent =
+            `${(take.size / 1024).toFixed(0)} KB yozildi — «Ishlatish» bosing.`;
+        };
+        recorder.start();
+        started = Date.now();
+        $('#rec-go').textContent = 'To‘xtatish';
+        $('#rec-go').classList.add('live');
+        clearInterval(timer);
+        timer = setInterval(() => {
+          $('#rec-time').textContent = `${((Date.now() - started) / 1000).toFixed(1)}s`;
+        }, 100);
+      });
+    },
+  });
+
+  stop();
+  if (!answer) return;
+  if (!take || !take.size) { toast('Hech narsa yozilmadi'); return; }
+
+  const ext = TAKE_EXT[(take.type || '').split(';')[0]] || '.webm';
+  const body = new FormData();
+  body.append('audio', new File([take], `take${ext}`, { type: take.type }));
+  try {
+    const updated = await api(
+      `/api/jobs/${ED.job.id}/scenes/${s.index}/voice`, { method: 'POST', body });
+    // The take's length is almost never the synthesizer's, so every scene after
+    // this one has moved. Reload rather than patch the one scene.
+    Object.assign(s, updated);
+    state.drawn = null;
+    await tick();
+    toast('Ovoz almashtirildi — vaqtlar qayta hisoblandi');
+  } catch (err) {
+    editorError(err.message);
+  }
+}
+
 function drawScenePanel() {
   const s = scene();
   const host = $('#tab-scene');
@@ -2410,6 +2625,8 @@ function drawScenePanel() {
     <label class="f"><span>Ekran yozuvi — sahna boshida chiqadi</span>
       <input data-k="on_screen_text" value="${esc(s.on_screen_text || '')}" placeholder="ixtiyoriy" /></label>
 
+    ${speakerPicker(s)}
+
     ${heroes.length ? `<div class="f"><span>Bu sahnadagi herolar</span>
       <div class="cast-strip small" id="scene-heroes">${heroes.map((h) => `
         <label class="hero-chip${(s.hero_ids || []).includes(h.id) ? ' on' : ''}" title="${esc(h.name)}">
@@ -2430,6 +2647,7 @@ function drawScenePanel() {
     <div class="sc-acts">
       <button class="btn" data-a="image">Rasmni qayta yaratish</button>
       ${ED.job.uses_uploaded_audio ? '' : '<button class="btn" data-a="voice">Ovozni qayta yozish</button>'}
+      ${ED.job.uses_uploaded_audio ? '' : '<button class="btn" data-a="record">🎙 O‘zim aytaman</button>'}
       <label class="btn" data-a="upload">O‘z rasmim<input type="file" accept="image/*" hidden /></label>
       ${ED.scenes.length > 1 ? '<button class="btn ghost" data-a="drop-scene">Sahnani o‘chirish</button>' : ''}
     </div>`;
@@ -2437,6 +2655,9 @@ function drawScenePanel() {
   wire(host, s, (key) => {
     if (['motion_strength', 'sfx_id', 'sfx_volume', 'sfx_offset'].includes(key)) drawScenePanel();
     if (key === 'sfx_id') drawFilmstrip();
+    // A different speaker means a different recording, and the filmstrip shows
+    // which scenes are waiting for one.
+    if (key === 'speaker') { s.needs_voice = true; drawFilmstrip(); }
     touch();
   });
   wireShots(host, s);
@@ -2481,6 +2702,8 @@ function drawScenePanel() {
   });
 
   $('[data-a="image"]', host).addEventListener('click', () => regen({ image: true, voice: false }));
+
+  $('[data-a="record"]', host)?.addEventListener('click', () => recordScene(s));
 
   // Re-recording is when you notice the voice was wrong, so the voice can be
   // chosen here rather than only at creation. It belongs to the whole video, so

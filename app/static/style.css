@@ -1285,3 +1285,42 @@ input[type="range"]::-moz-range-thumb {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* A character's voice, shown on its library card. Grey when the narrator reads
+   it, lit when it speaks for itself — the distinction is the whole feature. */
+.voice-tag {
+  width: 100%; margin-top: 4px; padding: 3px 7px;
+  border-radius: 7px; border: 1px solid var(--line);
+  background: var(--surface-2); color: var(--faint);
+  font-size: .66rem; line-height: 1.5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.voice-tag.on { color: var(--accent); border-color: var(--accent); }
+.voice-tag:hover { border-color: var(--line-2); }
+
+.voice-row { display: flex; gap: 7px; align-items: center; }
+.voice-row select { flex: 1; min-width: 0; }
+
+/* Recording your own line. The button is the control and the state: nothing
+   about "press again to stop" needs explaining if it says so. */
+.rec { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+.rec-btn {
+  flex: 1; padding: 12px 14px; border-radius: 11px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  color: var(--text); font-size: .85rem; font-weight: 550;
+}
+.rec-btn.live {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent); color: var(--accent);
+}
+.rec-btn.live::before {
+  content: ''; display: inline-block; vertical-align: middle;
+  width: 8px; height: 8px; margin-right: 8px; border-radius: 50%;
+  background: var(--accent); animation: pulse 1.1s ease-in-out infinite;
+}
+@keyframes pulse { 50% { opacity: .25; } }
+.rec-time {
+  flex: 0 0 auto; min-width: 48px; text-align: right;
+  color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums;
+}
+#rec-play { width: 100%; margin-bottom: 8px; }

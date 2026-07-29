@@ -26,16 +26,21 @@ from typing import Any, Iterator
 
 from . import config, pgstore
 
+
 def _schema_for(blob: str) -> str:
     return f"""
+-- A hero is a character: a photo, a description, and — once it starts
+-- speaking for itself — a voice of its own.
 CREATE TABLE IF NOT EXISTS heroes (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    mime        TEXT NOT NULL DEFAULT 'image/png',
-    ext         TEXT NOT NULL DEFAULT '.png',
-    image       {blob} NOT NULL,
-    created_at  TEXT NOT NULL
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    mime         TEXT NOT NULL DEFAULT 'image/png',
+    ext          TEXT NOT NULL DEFAULT '.png',
+    image        {blob} NOT NULL,
+    voice_id     TEXT NOT NULL DEFAULT '',
+    tts_provider TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL
 );
 
 -- `kind` separates a background bed ('music') from a one-shot sting ('sfx');
@@ -212,15 +217,23 @@ def _adopt_table(table: str) -> None:
 # EXISTS is a no-op on an existing table, so a new column in the schema above
 # never reaches a database that already has the table.
 
+_ADDED_COLUMNS = (
+    ("music", "kind", "TEXT NOT NULL DEFAULT 'music'"),
+    ("heroes", "voice_id", "TEXT NOT NULL DEFAULT ''"),
+    ("heroes", "tts_provider", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
 def _migrate_sqlite(conn: sqlite3.Connection) -> None:
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(music)")}
-    if "kind" not in columns:
-        conn.execute("ALTER TABLE music ADD COLUMN kind TEXT NOT NULL DEFAULT 'music'")
+    for table, column, spec in _ADDED_COLUMNS:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
 
 
 def _migrate_pg(conn: Any) -> None:
-    conn.execute(
-        "ALTER TABLE music ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'music'")
+    for table, column, spec in _ADDED_COLUMNS:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {spec}")
 
 
 def new_id(prefix: str) -> str:
@@ -231,18 +244,20 @@ def new_id(prefix: str) -> str:
 # Metadata queries deliberately never SELECT * — the blob column would then ride
 # along on every list call.
 
-_HERO_COLS = "id, name, description, mime, ext, created_at"
+_HERO_COLS = "id, name, description, mime, ext, voice_id, tts_provider, created_at"
 
 
-def add_hero(name: str, description: str, image: bytes, mime: str, ext: str) -> dict[str, Any]:
+def add_hero(name: str, description: str, image: bytes, mime: str, ext: str,
+             voice_id: str = "", tts_provider: str = "") -> dict[str, Any]:
     hero_id = new_id("hero")
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO heroes (id, name, description, mime, ext, image, created_at)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (hero_id, name, description, mime, ext, image, _now()),
+            "INSERT INTO heroes (id, name, description, mime, ext, image, voice_id,"
+            " tts_provider, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (hero_id, name, description, mime, ext, image, voice_id, tts_provider, _now()),
         )
-    return {"id": hero_id, "name": name, "description": description, "mime": mime, "ext": ext}
+    return {"id": hero_id, "name": name, "description": description, "mime": mime,
+            "ext": ext, "voice_id": voice_id, "tts_provider": tts_provider}
 
 
 def list_heroes() -> list[dict[str, Any]]:
@@ -275,14 +290,14 @@ def get_hero_image(hero_id: str) -> tuple[bytes, str, str] | None:
     return (bytes(row["image"]), row["mime"], row["ext"]) if row else None
 
 
-def update_hero(hero_id: str, *, name: str | None = None, description: str | None = None) -> bool:
+def update_hero(hero_id: str, *, name: str | None = None, description: str | None = None,
+                voice_id: str | None = None, tts_provider: str | None = None) -> bool:
     fields, values = [], []
-    if name is not None:
-        fields.append("name = ?")
-        values.append(name)
-    if description is not None:
-        fields.append("description = ?")
-        values.append(description)
+    for column, value in (("name", name), ("description", description),
+                          ("voice_id", voice_id), ("tts_provider", tts_provider)):
+        if value is not None:
+            fields.append(f"{column} = ?")
+            values.append(value)
     if not fields:
         return False
     values.append(hero_id)

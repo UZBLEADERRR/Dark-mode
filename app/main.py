@@ -400,6 +400,10 @@ def _hero_out(hero: dict[str, Any]) -> dict[str, Any]:
         "id": hero["id"],
         "name": hero["name"],
         "description": hero.get("description", ""),
+        # A character that has been given a voice speaks its own lines; one that
+        # has not is read by the narrator, which is how it has always worked.
+        "voice_id": hero.get("voice_id") or "",
+        "tts_provider": hero.get("tts_provider") or "",
         "url": f"/api/heroes/{hero['id']}/image",
     }
 
@@ -413,19 +417,23 @@ async def list_heroes() -> list[dict[str, Any]]:
 async def create_hero(
     name: str = Form(...),
     description: str = Form(""),
+    voice_id: str = Form(""),
+    tts_provider: str = Form(""),
     image: UploadFile = File(...),
 ) -> dict[str, Any]:
     name = name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="A hero needs a name.")
     data, mime, ext = await _read_upload(image, IMAGE_TYPES)
-    hero = store.add_hero(name, description.strip(), data, mime, ext)
+    hero = store.add_hero(name, description.strip(), data, mime, ext,
+                          voice_id.strip(), tts_provider.strip().lower())
     return _hero_out(hero)
 
 
 @app.patch("/api/heroes/{hero_id}")
 async def edit_hero(hero_id: str, patch: HeroPatch) -> dict[str, bool]:
-    if not store.update_hero(hero_id, name=patch.name, description=patch.description):
+    if not store.update_hero(hero_id, name=patch.name, description=patch.description,
+                             voice_id=patch.voice_id, tts_provider=patch.tts_provider):
         raise HTTPException(status_code=404, detail="Hero not found, or nothing to change.")
     return {"updated": True}
 
@@ -952,6 +960,16 @@ async def edit_scene(job_id: str, index: int, patch: ScenePatch) -> dict[str, An
             for shot in scene.get("shots") or []:
                 shot["needs_image"] = True
 
+    if patch.speaker is not None:
+        chosen = patch.speaker.strip()
+        if chosen and not store.get_heroes([chosen]):
+            raise HTTPException(status_code=400, detail="Bunday qahramon yo'q.")
+        if chosen != (scene.get("speaker") or ""):
+            scene["speaker"] = chosen
+            # A different voice means a different recording, and the timings
+            # that follow from it — the picture is untouched.
+            scene["needs_voice"] = True
+
     if patch.shots is not None:
         _apply_shots(scene, [s.model_dump() for s in patch.shots])
 
@@ -1033,6 +1051,26 @@ async def upload_scene_image(
     _editable_job(job_id)
     data, _mime, _ext = await _read_upload(image, IMAGE_TYPES)
     scene = pipeline.replace_scene_image(job_id, index, data)
+    if scene is None:
+        raise HTTPException(status_code=404, detail=f"Scene {index} does not exist.")
+    return pipeline.public_scene(job_id, scene)
+
+
+@app.post("/api/jobs/{job_id}/scenes/{index}/voice")
+async def upload_scene_voice(
+    job_id: str, index: int, audio: UploadFile = File(...)
+) -> dict[str, Any]:
+    """Say a scene's line yourself, in place of the synthesized reading."""
+    _editable_job(job_id)
+    data, _mime, ext = await _read_upload(audio, AUDIO_TYPES)
+    try:
+        scene = await pipeline.replace_scene_voice(job_id, index, data, ext)
+    except pipeline.PipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except video.RenderError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bu audio o'qilmadi — boshqa formatda urinib ko'ring ({exc})") from exc
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Scene {index} does not exist.")
     return pipeline.public_scene(job_id, scene)
