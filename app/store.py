@@ -158,7 +158,11 @@ def init() -> None:
         try:
             with _conn() as conn:
                 conn.execute("SELECT 1").fetchone()
-        except Exception:  # noqa: BLE001 - reported on the settings page instead
+        except Exception as exc:  # noqa: BLE001 - reported, never fatal
+            # Said once, at the top of the log, in the words that name the fix.
+            # The stack trace that used to appear here said "Network is
+            # unreachable" and nothing about which setting was wrong.
+            print(f"[sarideo] Bazaga ulanmadi: {pgstore.explain(exc)}", flush=True)
             return
         _adopt_local_rows()
 

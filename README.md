@@ -184,8 +184,15 @@ postgresql://postgres.abcdefghijklm:PAROL@aws-0-eu-central-1.pooler.supabase.com
 ```
 
 > **Nega pooler?** «Direct connection» (`db.xxx.supabase.co:5432`) endi faqat
-> IPv6 orqali ishlaydi va Railway'dan unga yetib bo'lmaydi — «Network is
-> unreachable» xatosi aynan shundan chiqadi. Pooler IPv4'da ham ishlaydi.
+> IPv6 orqali ishlaydi va Railway'dan unga yetib bo'lmaydi. Logda shunday
+> chiqadi:
+>
+> ```
+> connection to server at "2406:da1a:...", port 5432 failed: Network is unreachable
+> ```
+>
+> Manzil `2406:` yoki `2a05:` bilan boshlansa — bu IPv6, ya'ni pooler emas,
+> to'g'ridan-to'g'ri ulanish. Pooler IPv4'da ham ishlaydi.
 >
 > Parolda `@ : / ? # &` kabi belgi bo'lsa, uni URL-kodlash kerak (`@` → `%40`).
 > Eng osoni — parolni faqat harf va raqamdan qilish.
