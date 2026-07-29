@@ -50,6 +50,20 @@
           placeholder="Videoning to'liq matnini shu yerga yozing. AI matningizni so'zma-so'z saqlaydi — faqat sahnalarga bo'lib, har biriga rasm yaratadi."></textarea>
       </div>
 
+      <!-- What happens on screen, in your own words. Separate from the topic on
+           purpose: the topic is what the video is about, this is what the
+           viewer watches happen. -->
+      <div class="prompt sub" id="action-box">
+        <textarea id="action" rows="3" maxlength="4000"
+          placeholder="Nima bo'lsin — masalan: Tarzan daraxt ostida turadi, chapdan dinozavr kelib qoladi, Tarzan o'ngga qochadi…"></textarea>
+      </div>
+
+      <label class="sw" id="animate-row">
+        <input type="checkbox" id="animate_actors" /><i></i>
+        <span>Multfilm — qahramonlar fondan kesilib, sahna ustida harakatlansin</span>
+      </label>
+      <p class="note" id="animate-note"></p>
+
       <!-- Dubbing keeps someone else's picture and replaces only the voice, so
            it needs a file rather than a topic. -->
       <div class="drop hidden" id="dub-box">
