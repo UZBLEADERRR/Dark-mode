@@ -130,16 +130,26 @@ Yaratish sahifasida ikkita narsa bor:
 
 Yoqsangiz nima bo'ladi:
 
-1. Har bir qahramon **bir marta** tekis magenta fon ustida chiziladi va fon
-   kesib tashlanadi. Ellik sahnali multfilm to'rt qahramonning to'rtta rasmiga
-   tushadi, ellik rasmga emas.
-2. **Xoreograf** agenti har sahnani sahnalashtiradi: kim ekranda, qayerda
-   turadi, qanday harakat qiladi, qachon kiradi.
-3. Sahnaning rasm prompti **fon promptiga** aylanadi — qahramonlarsiz. Bu
-   muhim: aks holda qahramon ikki marta ko'rinardi, biri fonga chizilgan, biri
-   ustida yurgan.
-4. Aktyorlar qatlam sifatida sahna ustiga qo'yiladi va **fon qimirlamaydi** —
-   siz aytganday, fon turadi, qahramon ko'chadi.
+1. Har bir qahramon **har bir holati uchun bir marta** chiziladi: turgan
+   holati, qo'rqqan holati, yugurayotgan holati. Bir xil holat necha sahnada
+   takrorlansa ham bitta rasm. Ya'ni ellik sahnali multfilm sahna soniga emas,
+   **holatlar soniga** qarab to'lanadi.
+2. Fon kesib tashlanadi. Kesish rangga qarab emas — **kadr chetidan ichkariga
+   qarab** ishlaydi: fon gradient bo'lsa ham, teksturali bo'lsa ham, oq studiya
+   foni bo'lsa ham ketadi. Qahramonning ichidagi fon rangidagi kiyim esa
+   tegilmaydi, chunki u chetga ulanmagan.
+3. **Xoreograf** agenti har sahnani sahnalashtiradi: kim ekranda, qanday
+   holatda, qayerda turadi, qanday harakat qiladi, qachon kiradi.
+4. Sahnaning rasm prompti **fon promptiga** aylanadi — qahramonlarsiz, va
+   qahramon suratlari ham fonga **berilmaydi**. Ikkovi ham shart: prompt tozalab
+   qo'yilib, surat berilsa, model o'sha suratni fonga chizib qo'yadi.
+5. Aktyorlar qatlam sifatida sahna ustiga qo'yiladi va **fon qimirlamaydi** —
+   fon turadi, qahramon ko'chadi.
+
+**Gaplashishi uchun** qahramonlarga ovoz bering (Kutubxona → Herolar). Ovozi
+bor qahramon bo'lsa, Direktor unga **dialog** yozadi — «Tarzan ikkilandi» emas,
+Tarzanning o'z gapi. Hech kimga ovoz berilmagan bo'lsa, ilova buni boshida
+aytadi va hammasini diktor o'qiydi.
 
 Kamera harakati ham o'chiriladi: yurayotgan qahramon ostida sekin zoom bo'lsa,
 u yerga emas, shishaga sirg'alayotganday ko'rinadi.
