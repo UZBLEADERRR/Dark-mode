@@ -716,6 +716,52 @@ input[type="range"]::-moz-range-thumb {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--warn); box-shadow: 0 0 0 2px rgba(0, 0, 0, .55);
 }
+/* How many pictures cover this one line. Bottom-left, away from the layer
+   count top-right, so a scene with both stays readable at thumbnail size. */
+.frame .cuts {
+  position: absolute; left: 4px; bottom: 4px;
+  min-width: 15px; height: 15px; padding: 0 4px; border-radius: 99px;
+  background: rgba(0, 0, 0, .68); color: #fff;
+  font-size: .6rem; font-weight: 700; font-style: normal; text-decoration: none;
+  line-height: 15px; text-align: center;
+}
+.frame .cuts::before { content: '▦ '; opacity: .75; }
+
+/* ── the shot strip inside the scene panel ─────────────────────── */
+.shots { gap: 8px; }
+.shot-strip { display: flex; gap: 6px; align-items: stretch; }
+.shot-tab {
+  position: relative; flex: 1 1 0; min-width: 0; aspect-ratio: 16 / 9;
+  border-radius: 8px; overflow: hidden; background: var(--raised);
+  border: 2px solid transparent; padding: 0; cursor: pointer;
+  transition: border-color .15s;
+}
+.shot-tab.on { border-color: var(--accent); }
+.shot-tab img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shot-blank { display: block; width: 100%; height: 100%; background: var(--line); }
+.shot-tab b {
+  position: absolute; left: 4px; top: 3px;
+  font-size: .62rem; color: #fff; text-shadow: 0 1px 3px rgba(0, 0, 0, .9);
+}
+.shot-tab em {
+  position: absolute; right: 4px; bottom: 3px;
+  font-size: .58rem; font-style: normal; color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .9); font-variant-numeric: tabular-nums;
+}
+.shot-add {
+  flex: 0 0 auto; width: 38px; border-radius: 8px;
+  background: var(--raised); color: var(--muted);
+  border: 1px dashed var(--line-2); font-size: 1.1rem; cursor: pointer;
+}
+.shot-add:hover { color: var(--text); border-color: var(--accent); }
+
+/* The share each shot gets of the line, as the proportions they really are. */
+.shot-bar { display: flex; gap: 2px; height: 4px; }
+.shot-bar i { border-radius: 99px; background: var(--line-2); }
+.shot-bar i.on { background: var(--accent); }
+
+.sc-acts.tight { margin-top: 2px; }
+
 .frame-add {
   flex: 0 0 auto; width: 44px;
   border: 1px dashed var(--line-2); border-radius: 9px;

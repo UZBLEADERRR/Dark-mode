@@ -8,6 +8,7 @@ the reference characters so the generator preserves their faces.
 from __future__ import annotations
 
 from .. import config
+from ..render import shots
 from .llm import call_json
 
 SYSTEM = """You are the Imagesmith skill of an automated video studio.
@@ -17,7 +18,11 @@ in one video must look like it came from the same camera, the same colourist and
 same shoot. That consistency matters more than any single striking frame.
 
 Rules:
-- Write one prompt per scene, in English, 25-60 words.
+- Write one prompt per shot, in English, 25-60 words.
+- Some scenes are covered by more than one shot. Those shots are consecutive
+  seconds of the same moment, not different moments: keep the place, the people,
+  the light and the time of day identical, and change only where the camera is.
+  A wide, then a medium, then a detail of the same thing.
 - Structure each prompt as: subject and action, then setting, then framing, then
   lighting, then the shared style suffix. Reach for camera and lens language only
   when the requested art direction is photographic — describing a flat 2D
@@ -43,9 +48,10 @@ SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["index", "prompt", "negative_prompt"],
+                "required": ["index", "shot", "prompt", "negative_prompt"],
                 "properties": {
                     "index": {"type": "integer"},
+                    "shot": {"type": "integer"},
                     "prompt": {"type": "string"},
                     "negative_prompt": {"type": "string"},
                 },
@@ -73,6 +79,7 @@ async def build_image_prompts(
     heroes_by_id = {h["id"]: h for h in heroes}
 
     lines = []
+    wanted = 0
     for scene in scenes:
         cast = ", ".join(
             heroes_by_id[h]["name"] for h in scene.get("hero_ids", []) if h in heroes_by_id
@@ -83,6 +90,14 @@ async def build_image_prompts(
             f"      characters in shot: {cast or 'none'}\n"
             f"      camera move: {scene['motion']}"
         )
+        # A split scene asks for one prompt per shot, each with the framing it
+        # has already been assigned, so the model varies distance rather than
+        # inventing a different moment for every cut.
+        cuts = scene.get("shots") or []
+        wanted += len(cuts) or 1
+        for j, cut in enumerate(cuts):
+            lines.append(
+                f"      shot {j}: {shots.FRAMINGS[j % len(shots.FRAMINGS)]}")
 
     cast_block = (
         "\n".join(
@@ -108,23 +123,39 @@ SCENES
 
 First write a one-sentence `style_bible` that every prompt will end with — the shared
 film stock, colour palette, and lighting language for this video. Then write one prompt
-per scene, appending that style bible to each. Return exactly {len(scenes)} prompts with
-matching `index` values."""
+per shot, appending that style bible to each.
+
+Return exactly {wanted} prompts. Set `index` to the scene number and `shot` to the shot
+number given above — a scene listed without shots has one prompt with `shot` 0."""
 
     data = await call_json(SYSTEM, user, SCHEMA)
 
     style_bible = (data.get("style_bible") or art_style).strip()
-    by_index = {int(p["index"]): p for p in data.get("prompts", []) if "index" in p}
+    by_key: dict[tuple[int, int], dict] = {}
+    for entry in data.get("prompts", []):
+        if "index" not in entry:
+            continue
+        try:
+            by_key[(int(entry["index"]), int(entry.get("shot", 0)))] = entry
+        except (TypeError, ValueError):
+            continue
 
-    for scene in scenes:
-        entry = by_index.get(scene["index"], {})
+    def dress(entry: dict, fallback_visual: str) -> tuple[str, str]:
         prompt = (entry.get("prompt") or "").strip()
         if not prompt:
-            prompt = f"{scene['visual']}. {style_bible}"
+            prompt = f"{fallback_visual}. {style_bible}"
         elif style_bible.lower() not in prompt.lower():
             prompt = f"{prompt} {style_bible}"
-        scene["image_prompt"] = prompt
-        negative = (entry.get("negative_prompt") or "").strip()
-        scene["negative_prompt"] = negative or DEFAULT_NEGATIVE
+        return prompt, (entry.get("negative_prompt") or "").strip() or DEFAULT_NEGATIVE
+
+    for scene in scenes:
+        # The scene keeps a prompt of its own whatever happens: it is the
+        # thumbnail, and the starting point for any shot added by hand later.
+        scene["image_prompt"], scene["negative_prompt"] = dress(
+            by_key.get((scene["index"], 0), {}), scene["visual"])
+        for j, cut in enumerate(scene.get("shots") or []):
+            framing = shots.FRAMINGS[j % len(shots.FRAMINGS)]
+            cut["prompt"], cut["negative_prompt"] = dress(
+                by_key.get((scene["index"], j), {}), f"{scene['visual']}, {framing}")
 
     return {"style_bible": style_bible, "scenes": scenes}

@@ -26,10 +26,12 @@ from .models import (
     SceneInsert,
     SceneOrder,
     ScenePatch,
+    ShotIn,
     TranslateRequest,
 )
 from .providers import catalog, storage, tts
 from .render import kenburns, overlays as ov
+from .render import shots
 from .render import subtitles as subs
 from .render import video
 
@@ -169,6 +171,90 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
     }
 
 
+def _apply_shots(scene: dict[str, Any], incoming: list[dict[str, Any]]) -> None:
+    """Replace a scene's shot list, keeping the pictures already drawn.
+
+    Shots are matched by `sid`, which the editor sends back untouched. That is
+    what lets someone reorder three shots, or change the fourth's camera move,
+    without the first three being redrawn — only a shot whose prompt actually
+    changed, or one that is new, is marked for the image stage.
+    """
+    previous = {s.get("sid"): s for s in (scene.get("shots") or []) if s.get("sid")}
+    # Everything this scene already has a picture for, keyed by the prompt that
+    # drew it. Used when a shot arrives without an id — which is what happens
+    # the first time a scene is split, since its one picture never had a shot
+    # id to send back. Matching on the prompt is the honest rule either way: the
+    # same words drew it, so redrawing would land in the same place.
+    by_prompt: dict[str, dict[str, Any]] = {}
+    for holder in [scene, *(scene.get("shots") or [])]:
+        key = (holder.get("prompt") or holder.get("image_prompt") or "").strip()
+        if key and holder.get("image_path"):
+            by_prompt.setdefault(key, holder)
+
+    if len(incoming) < 2:
+        # One shot is not a split scene: collapse back to the plain form rather
+        # than leaving a single-item list behind for everything else to special-case.
+        if incoming:
+            only = shots.normalize(incoming[0], 0) or {}
+            prompt = only.get("prompt", "").strip()
+            if prompt and prompt != scene.get("image_prompt"):
+                scene["image_prompt"] = prompt
+                scene["needs_image"] = True
+            if only.get("motion") in kenburns.MOTIONS:
+                scene["motion"] = only["motion"]
+            scene["motion_strength"] = only.get("motion_strength", 1.0)
+        scene["shots"] = []
+        return
+
+    cleaned: list[dict[str, Any]] = []
+    for i, raw in enumerate(incoming[:shots.MAX_PER_SCENE]):
+        shot = shots.normalize(raw, i)
+        if shot is None:
+            continue
+        if shot.get("motion") not in kenburns.MOTIONS:
+            shot["motion"] = shots.MOTION_CYCLE[i % len(shots.MOTION_CYCLE)]
+        if shot["transition"] and shot["transition"] not in video.TRANSITION_CHOICES:
+            shot["transition"] = ""
+
+        old = previous.get(shot.get("sid"))
+        if old is None:
+            # No id to match on, so fall back to the prompt. Claimed as it is
+            # used, so two shots asking for the same picture do not both take
+            # the one file and then fight over it at render time.
+            match = by_prompt.pop(shot["prompt"], None)
+            if match is not None:
+                old = {
+                    "image_path": match.get("image_path"),
+                    "image_version": match.get("image_version", 0),
+                    "negative_prompt": match.get("negative_prompt")
+                                       or scene.get("negative_prompt", ""),
+                    "prompt": shot["prompt"],
+                    "needs_image": bool(match.get("needs_image")),
+                }
+        if old is None:
+            # A brand new shot starts from the scene's own look, so it is a
+            # variation on what is already there rather than an empty frame.
+            shot.setdefault("prompt", "")
+            if not shot["prompt"]:
+                framing = shots.FRAMINGS[i % len(shots.FRAMINGS)]
+                shot["prompt"] = f"{scene.get('image_prompt', '')} {framing}".strip()
+            shot["negative_prompt"] = scene.get("negative_prompt", "")
+            shot["needs_image"] = True
+        else:
+            shot["image_path"] = old.get("image_path")
+            shot["image_version"] = old.get("image_version", 0)
+            shot["negative_prompt"] = old.get("negative_prompt") or scene.get("negative_prompt", "")
+            if not shot["prompt"]:
+                shot["prompt"] = old.get("prompt", "")
+            shot["needs_image"] = bool(
+                old.get("needs_image") or not old.get("image_path")
+                or shot["prompt"] != old.get("prompt", ""))
+        cleaned.append(shot)
+
+    scene["shots"] = cleaned
+    scene["needs_image"] = any(s["needs_image"] for s in cleaned)
+
+
 def _hero_store() -> dict[str, Any]:
     if not pgstore.enabled():
         return {"backend": "sqlite", "ok": True,
@@ -241,6 +327,14 @@ async def health() -> dict[str, Any]:
         },
         "can_dub": bool(config.GEMINI_API_KEY or config.OPENAI_API_KEY),
         "speeds": [{"id": k, "label": v["label"]} for k, v in config.SPEED_PROFILES.items()],
+        # How often the picture changes. The image count is what this really
+        # costs, so it is spelled out rather than left to be discovered.
+        "shot_paces": [
+            {"id": "steady", "label": "Bir sahna — bir rasm", "hint": "eng arzon"},
+            {"id": "dynamic", "label": "Jonli", "hint": "uzun sahnalar 2-3 rasmga bo'linadi"},
+            {"id": "fast", "label": "Tez", "hint": "har 3 soniyada yangi kadr — ko'p rasm"},
+        ],
+        "max_shots": shots.MAX_PER_SCENE,
         "cores": config.CPU_COUNT,
         "motions": list(kenburns.MOTIONS),
         "transitions": list(video.TRANSITION_CHOICES),
@@ -683,6 +777,11 @@ async def edit_scene(job_id: str, index: int, patch: ScenePatch) -> dict[str, An
         if new_ids != scene.get("hero_ids"):
             scene["hero_ids"] = new_ids
             scene["needs_image"] = True
+            for shot in scene.get("shots") or []:
+                shot["needs_image"] = True
+
+    if patch.shots is not None:
+        _apply_shots(scene, [s.model_dump() for s in patch.shots])
 
     store.update_job(job_id, result={"scenes": scenes},
                      log=f"Scene {index + 1} edited")
@@ -859,6 +958,7 @@ async def dub_video(
     voice_id: str | None = Form(None),
     original_volume: float = Form(0.0),
     render_speed: str = Form("balanced"),
+    shot_pace: str = Form("steady"),
     topic: str = Form(""),
 ) -> dict[str, Any]:
     """Dub a finished video: same picture, narration in another language."""
@@ -893,6 +993,7 @@ async def dub_video(
         "voice_id": (voice_id or "").strip() or None,
         "original_volume": max(0.0, min(1.0, original_volume)),
         "render_speed": render_speed,
+        "shot_pace": shot_pace if shot_pace in {"steady", "dynamic", "fast"} else "steady",
         "video_format": "16:9",
         "auto_render": True,
     })

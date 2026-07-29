@@ -394,6 +394,13 @@ app/
 - Ovoz so'rovlari daqiqasiga `TTS_RATE_LIMIT` tadan oshmaydi (standart 10).
   429 kelsa xato deb hisoblanmaydi — kutiladi va davom etadi, va bu kutish
   `TTS_DEADLINE` hisobiga kirmaydi.
+- Bitta sahna (bitta matn/ovoz) ostida 4 tagacha rasm bo'lishi mumkin — "kadr".
+  Yaratishda `Kadr almashishi` ni tanlang: `Jonli` uzun sahnalarni 2-3 rasmga,
+  `Tez` esa har ~3 soniyada bo'ladi. Har bir kadrning o'z kamera harakati va
+  o'z kirish effekti bor (standart — tez kesish). Tahrirlashda kadrlarni qo'lda
+  qo'shish, o'chirish, joyini almashtirish va ekranda turish ulushini o'zgartirish
+  mumkin. Kadr promptini o'zgartirsangiz faqat o'sha kadr qayta chiziladi.
+  Diqqat: har bir kadr — alohida rasm generatsiyasi.
 - Tayyor videoga musiqa keyin ham qo'shsa bo'ladi: "Tayyor" bo'limida
   "Musiqa qo'shish". Faqat tovush qayta mikslanadi, rasm nusxalanadi
   (`-c:v copy`) — shuning uchun bir necha soniya oladi va trekni xohlagancha
