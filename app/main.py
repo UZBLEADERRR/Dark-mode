@@ -29,7 +29,7 @@ from .models import (
     ShotIn,
     TranslateRequest,
 )
-from .providers import catalog, storage, tts
+from .providers import catalog, images, storage, tts
 from .render import kenburns, overlays as ov
 from .render import shots
 from .render import subtitles as subs
@@ -360,6 +360,8 @@ async def health() -> dict[str, Any]:
         "overlay_animations": {
             "text": list(ov.TEXT_ANIMATIONS),
             "image": list(ov.IMAGE_ANIMATIONS),
+            # Cut-out actors: an image layer that travels across the background.
+            "actor": [{"id": k, "label": v["label"]} for k, v in ov.ACTOR_MOVES.items()],
         },
         # The caption budget rides along so the editor's live preview can size
         # its text exactly the way the renderer will, instead of guessing.
@@ -470,6 +472,99 @@ async def create_asset(
     data, mime, ext = await _read_upload(image, IMAGE_TYPES)
     label = name.strip() or Path(image.filename or f"layer{ext}").stem
     return _asset_out(store.add_asset(label, data, mime, ext))
+
+
+@app.post("/api/actors", status_code=201)
+async def create_actor(
+    image: UploadFile | None = File(None),
+    prompt: str = Form(""),
+    name: str = Form(""),
+    hero_id: str = Form(""),
+) -> dict[str, Any]:
+    """Make a cut-out: a character on transparency, ready to walk on a scene.
+
+    Three ways in, because the character you want might already exist. An
+    uploaded picture is keyed as-is; a hero from the library is redrawn full
+    length against the key colour so it can be posed; a prompt draws someone new.
+    """
+    workdir = config.DATA_DIR / "cutouts"
+    workdir.mkdir(parents=True, exist_ok=True)
+    stem = store.new_id("cut")
+    source = workdir / f"{stem}-src.png"
+    label = name.strip()
+    # Scratch files, cleaned up whichever way this ends: the asset is the only
+    # thing meant to outlive the request, and a refused cut-out is exactly the
+    # case where litter would otherwise accumulate.
+    litter: list[Path] = [source]
+
+    try:
+        return await _build_actor(
+            workdir=workdir, stem=stem, source=source, label=label, litter=litter,
+            image=image, prompt=prompt, hero_id=hero_id)
+    finally:
+        for path in litter:
+            path.unlink(missing_ok=True)
+
+
+async def _build_actor(
+    *, workdir: Path, stem: str, source: Path, label: str, litter: list[Path],
+    image: UploadFile | None, prompt: str, hero_id: str,
+) -> dict[str, Any]:
+    if image is not None:
+        data, _mime, _ext = await _read_upload(image, IMAGE_TYPES)
+        source.write_bytes(data)
+        label = label or Path(image.filename or "actor").stem
+    else:
+        wanted = prompt.strip()
+        refs: list[Path] = []
+        if hero_id:
+            blob = store.get_hero_image(hero_id)
+            if blob is None:
+                raise HTTPException(status_code=404, detail="Bunday hero yo'q.")
+            hero = next(iter(store.get_heroes([hero_id])), {})
+            ref = workdir / f"{stem}-ref{blob[2] or '.png'}"
+            ref.write_bytes(blob[0])
+            refs = [ref]
+            litter.append(ref)
+            label = label or hero.get("name", "Hero")
+            wanted = wanted or (
+                f"{hero.get('name', 'the character')}, {hero.get('description', '')}".strip(", "))
+        if not wanted:
+            raise HTTPException(status_code=400,
+                                detail="Kim chizilsin? Matn yozing yoki hero tanlang.")
+        if not config.image_provider_ready(config.IMAGE_PROVIDER):
+            raise HTTPException(status_code=400,
+                                detail="Rasm provayderi uchun API kalit yo'q.")
+
+        path, warning = await images.generate_image(
+            prompt=f"{wanted}. {images.CUTOUT_INSTRUCTION}",
+            negative_prompt=images.CUTOUT_NEGATIVE,
+            reference_paths=refs, aspect="1:1", size=(1024, 1024),
+            provider=config.IMAGE_PROVIDER, out_path=source, attempts=2,
+        )
+        if warning:
+            raise HTTPException(status_code=502, detail=warning)
+        if path != source:
+            litter.append(path)
+        source = path
+        label = label or wanted[:40]
+
+    keyed = workdir / f"{stem}.png"
+    litter.append(keyed)
+    try:
+        await video.cut_out(source, keyed)
+    except video.RenderError as exc:
+        raise HTTPException(status_code=500, detail=f"Fon ajratilmadi: {exc}") from exc
+    if not await video.has_alpha(keyed):
+        # Said in terms of what to do next: the two ways this fails are a
+        # background the key could not find and a key that took everything.
+        raise HTTPException(
+            status_code=422,
+            detail="Fon ajralmadi — rasmning orqa foni tekis magenta (#FF00FF) "
+                   "bo'lishi kerak, qahramonning o'zida esa magenta bo'lmasin.")
+
+    return _asset_out(store.add_asset(label or "Aktyor", keyed.read_bytes(),
+                                      "image/png", ".png"))
 
 
 @app.get("/api/assets/{asset_id}/image")

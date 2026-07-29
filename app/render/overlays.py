@@ -22,6 +22,34 @@ TYPES = ("text", "image")
 TEXT_ANIMATIONS = ("none", "fade", "pop", "rise", "slide_left", "slide_right")
 IMAGE_ANIMATIONS = ("none", "fade", "pop", "rise", "float", "drift")
 
+# An actor is an image layer that goes somewhere. The still it is cut from never
+# changes — nothing is drawn frame by frame — but moving a cut-out across a
+# background is what separates a slide from a scene, and it is the whole of what
+# paper cut-out animation ever was.
+#
+# Each entry says where the layer starts and ends, as a multiple of the frame
+# width away from the position it was placed at. `enter_left` therefore begins
+# off the left edge and arrives where you put it; `exit_right` leaves from there.
+ACTOR_MOVES: dict[str, dict] = {
+    "walk_right":  {"from": -0.22, "to": 0.22, "label": "O'ngga yuradi"},
+    "walk_left":   {"from": 0.22, "to": -0.22, "label": "Chapga yuradi"},
+    "enter_left":  {"from": -0.85, "to": 0.0, "label": "Chapdan kiradi"},
+    "enter_right": {"from": 0.85, "to": 0.0, "label": "O'ngdan kiradi"},
+    "exit_left":   {"from": 0.0, "to": -0.85, "label": "Chapga chiqib ketadi"},
+    "exit_right":  {"from": 0.0, "to": 0.85, "label": "O'ngga chiqib ketadi"},
+    "cross_right": {"from": -0.85, "to": 0.85, "label": "Chapdan o'ngga o'tadi"},
+    "cross_left":  {"from": 0.85, "to": -0.85, "label": "O'ngdan chapga o'tadi"},
+    # These two stay put horizontally; the dictionary entry exists so the editor
+    # can list every move in one place.
+    "hop":         {"from": 0.0, "to": 0.0, "label": "Sakraydi"},
+    "sway":        {"from": 0.0, "to": 0.0, "label": "Tebranadi"},
+}
+
+# A move that carries the layer across the frame should not also fade at the
+# edges: it is meant to arrive from off-screen, not to appear out of nothing.
+TRAVELLING = {"enter_left", "enter_right", "exit_left", "exit_right",
+              "cross_right", "cross_left"}
+
 MAX_PER_SCENE = 8
 
 DEFAULTS: dict = {
@@ -87,7 +115,7 @@ def normalize(raw: dict, index: int) -> dict | None:
     for key in _NUMERIC:
         layer[key] = _number(layer.get(key), key)
 
-    allowed = TEXT_ANIMATIONS if kind == "text" else IMAGE_ANIMATIONS
+    allowed = TEXT_ANIMATIONS if kind == "text" else IMAGE_ANIMATIONS + tuple(ACTOR_MOVES)
     if layer["anim"] not in allowed:
         layer["anim"] = "fade"
 
@@ -195,7 +223,8 @@ def image_chain(
         span = max(0.3, end - start)
         ramp = min(0.4, span / 3)
 
-        if animation in {"fade", "pop", "rise", "float", "drift"}:
+        if animation in {"fade", "pop", "rise", "float", "drift"} or (
+                animation in ACTOR_MOVES and animation not in TRAVELLING):
             # The layer's own clock starts with the clip, so the fades are placed
             # at absolute clip times rather than relative to the layer.
             chain.append(f"fade=t=in:st={start:.3f}:d={ramp:.3f}:alpha=1")
@@ -221,6 +250,32 @@ def image_chain(
         elif animation == "drift":
             travel = max(10, int(width * 0.05))
             x_expr = f"{base_x}+{travel}*(t-{start:.3f})/{span:.3f}"
+        elif animation in ACTOR_MOVES:
+            move = ACTOR_MOVES[animation]
+            # `p` is how far through the layer's own window we are, 0 to 1, held
+            # at the ends so an actor that has arrived stays arrived rather than
+            # sliding on past.
+            p = f"min(1,max(0,(t-{start:.3f})/{span:.3f}))"
+            begin = int(width * move["from"])
+            finish = int(width * move["to"])
+            if begin != finish:
+                # Eased rather than linear: a cut-out that starts and stops
+                # abruptly reads as a sliding sticker, not as something walking.
+                ease = f"({p}*{p}*(3-2*{p}))"
+                x_expr = f"{base_x}+{begin}+{finish - begin}*{ease}"
+            if animation == "hop":
+                # Two bounces across the window, never below the ground line.
+                lift = max(8, int(height * 0.05))
+                x_expr = f"{base_x}"
+                y_expr = f"{base_y}-{lift}*abs(sin(2*PI*(t-{start:.3f})/{max(0.9, span / 2):.3f}))"
+            elif animation == "sway":
+                tilt = max(4, int(width * 0.006))
+                x_expr = f"{base_x}+{tilt}*sin(2*PI*(t-{start:.3f})/2.4)"
+            elif animation in {"walk_right", "walk_left", "cross_right", "cross_left"}:
+                # A walking figure rises and falls a little on each step. It is a
+                # small thing and it is most of what sells the movement.
+                step = max(3, int(height * 0.008))
+                y_expr = f"{base_y}-{step}*abs(sin(2*PI*(t-{start:.3f})/0.65))"
 
         label = f"[ovout{i}]"
         parts.append(

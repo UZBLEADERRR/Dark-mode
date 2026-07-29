@@ -201,6 +201,23 @@ def _placeholder(size: tuple[int, int], seed: str) -> bytes:
     return buffer.getvalue()
 
 
+# The instruction that makes a picture keyable. The flat field has to be
+# *flat* — a gradient or a cast shadow survives the key and arrives as a grey
+# smear around the character — so it is said three ways.
+CUTOUT_INSTRUCTION = (
+    "Full body, the subject alone and complete, centred with a small margin. "
+    "The background must be one absolutely flat solid magenta #FF00FF fill: no "
+    "gradient, no texture, no vignette, no ground, and no shadow of any kind "
+    "cast onto it. Do not let magenta appear anywhere on the subject itself."
+)
+
+CUTOUT_NEGATIVE = (
+    "background scenery, floor, ground, shadow, drop shadow, reflection, "
+    "gradient background, textured background, vignette, frame, border, text, "
+    "watermark, multiple characters, cropped limbs"
+)
+
+
 # --- public API --------------------------------------------------------------
 
 async def generate_image(
