@@ -391,6 +391,16 @@ app/
   uni qaytadan urinib ko'radi. Rasm chiqmasa gradient qo'yiladi.
 - Jarayon 45 soniyadan ortiq jim qolsa progress kartasida "To'xtatish" tugmasi
   chiqadi. To'xtatilgan job tayyor sahnalari bilan tahrirlash bo'limida qoladi.
+- **Telefonni o'chirsangiz ham ishlayveradi.** Render serverda ketadi — brauzer
+  faqat holatni ko'rsatadi. Ilovani yopsangiz ham to'xtamaydi; qaytib
+  kirganingizda o'zingiz kuzatayotgan job avtomatik ochiladi (u tugab bo'lgan
+  bo'lsa ham ko'rsatiladi). Tayyor bo'lganda bildirishnoma keladi — ruxsat
+  birinchi render boshlanganda so'raladi.
+- Konteyner qayta ishga tushsa ham ish yo'qolmaydi: sahnalar bosqichlar orasida
+  diskka yoziladi, shuning uchun render o'rtasida uzilgan job avtomatik davom
+  ettiriladi. Ketma-ket 2 marta uzilsa qo'lda render qilish uchun qoldiriladi
+  (cheksiz qayta urinish halqasining oldini oladi). Hech narsa saqlanmagan job
+  esa avvalgidek xato beradi.
 - Ovoz so'rovlari daqiqasiga `TTS_RATE_LIMIT` tadan oshmaydi (standart 10).
   429 kelsa xato deb hisoblanmaydi — kutiladi va davom etadi, va bu kutish
   `TTS_DEADLINE` hisobiga kirmaydi.

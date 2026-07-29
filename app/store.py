@@ -422,11 +422,70 @@ def delete_job(job_id: str) -> bool:
         return cur.rowcount > 0
 
 
-def reset_stale_jobs() -> None:
-    """Any job left 'running' belongs to a container that no longer exists."""
+# How many times a job may be picked back up after the container died under it.
+# Without a ceiling a render that reliably exhausts the container's memory would
+# restart it, be resumed, and exhaust it again — for ever.
+MAX_RESUMES = 2
+
+
+def recover_jobs() -> list[str]:
+    """Settle jobs the last container was in the middle of, and say what can go on.
+
+    A restart used to fail every job in flight, which threw away work that was
+    already on disk: scenes are written between stages, so a video interrupted
+    during the render still has its script, its voice-over and its pictures.
+
+    Anything with saved scenes goes back to `review`, where it can be rendered
+    again without paying for any of that twice. The ids returned are the ones
+    that were mid-render and are worth picking up automatically. A job with
+    nothing saved has nothing to resume, so it fails as it always did.
+    """
+    resumable: list[str] = []
     with _conn() as conn:
-        conn.execute(
-            "UPDATE jobs SET status='failed', error=? , updated_at=?"
-            " WHERE status IN ('running','queued','rendering')",
-            ("Server restarted while this job was running.", _now()),
-        )
+        rows = conn.execute(
+            "SELECT id, status, result FROM jobs WHERE status IN ('running','queued','rendering')"
+        ).fetchall()
+
+        for row in rows:
+            result = json.loads(row["result"] or "{}")
+            scenes = result.get("scenes") or []
+            logs_note = "Server restarted — "
+            resumes = int(result.get("resumes", 0))
+
+            if not scenes:
+                status, error = "failed", "The server restarted before anything was saved."
+                logs_note += "nothing had been saved yet."
+            elif row["status"] == "rendering" and resumes < MAX_RESUMES:
+                status, error = "review", ""
+                result["resumes"] = resumes + 1
+                logs_note += "picking the render back up where it left off."
+                resumable.append(row["id"])
+            else:
+                status, error = "review", ""
+                logs_note += (
+                    "your scenes are safe — press Render to finish."
+                    if resumes < MAX_RESUMES else
+                    "this job has been interrupted repeatedly; render it by hand."
+                )
+
+            logs = json.loads(row["logs"] or "[]") if "logs" in row.keys() else []
+            conn.execute(
+                "UPDATE jobs SET status=?, step=?, progress=?, result=?, error=?, updated_at=?"
+                " WHERE id=?",
+                (status, status, 72 if scenes else 0, json.dumps(result), error, _now(), row["id"]),
+            )
+            _append_log(conn, row["id"], logs_note)
+    return resumable
+
+
+def _append_log(conn: sqlite3.Connection, job_id: str, message: str) -> None:
+    row = conn.execute("SELECT logs FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if row is None:
+        return
+    logs = json.loads(row["logs"] or "[]")
+    logs.append(f"[{time.strftime('%H:%M:%S')}] {message}")
+    conn.execute("UPDATE jobs SET logs=? WHERE id=?", (json.dumps(logs[-200:]), job_id))
+
+
+# The old name, kept so nothing that calls it breaks.
+reset_stale_jobs = recover_jobs

@@ -1158,8 +1158,55 @@ $('#submit-btn').addEventListener('click', async () => {
 });
 
 // ── watch a job ───────────────────────────────────────────────────
+// The one job this browser is following, remembered across a reload. Rendering
+// happens on the server, so closing the tab never stopped the work — but until
+// this was written down, coming back meant hunting for the job again.
+const WATCH_KEY = 'studio.watching';
+
+function remember(jobId) {
+  try {
+    if (jobId) localStorage.setItem(WATCH_KEY, jobId);
+    else localStorage.removeItem(WATCH_KEY);
+  } catch (e) { /* private mode: following just does not survive a reload */ }
+}
+
+function remembered() {
+  try { return localStorage.getItem(WATCH_KEY) || ''; } catch (e) { return ''; }
+}
+
+// A render takes minutes, so nobody is going to sit and watch it. Permission is
+// asked the first time one starts — not on page load, where a browser prompt out
+// of nowhere is just an annoyance to dismiss.
+function askToNotify() {
+  try {
+    if (window.Notification && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  } catch (e) { /* not every browser has it, and none of this is required */ }
+}
+
+function announce(job) {
+  const done = job.status === 'done';
+  const title = job.title || job.topic || 'Video';
+  // On screen if you are here, as a system notification if you are not. The
+  // toast alone is useless to someone who put the phone in their pocket.
+  toast(done ? `${title} — tayyor` : `${title} — ${STATUS[job.status] || job.status}`);
+  try {
+    if (!window.Notification || Notification.permission !== 'granted') return;
+    if (!document.hidden) return;
+    new Notification(done ? 'Video tayyor' : 'Video tugadi', {
+      body: done ? `${title} — ko‘rish uchun oching.`
+                 : `${title} — ${job.error || STATUS[job.status] || job.status}`,
+      tag: job.id,          // a second notice for the same job replaces the first
+      icon: '/static/favicon.svg',
+    });
+  } catch (e) { /* notifying is a courtesy, never a failure */ }
+}
+
 function watch(jobId, { reveal = false } = {}) {
   state.activeId = jobId;
+  remember(jobId);
+  askToNotify();
   drawDock();
   state.drawn = null;
   state.reveal = reveal;
@@ -1168,6 +1215,20 @@ function watch(jobId, { reveal = false } = {}) {
   tick();
   state.poll = setInterval(tick, 2500);
 }
+
+// Phones throttle timers hard once a tab is in the background — a two-and-a-half
+// second poll can become a minute. Coming back should show the truth at once
+// rather than the last frame from before the screen went off.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.activeId) {
+    // The stall counter measures silence from the server, and a throttled tab
+    // is silence from us. Clearing the mark stops a backgrounded phone from
+    // returning to a false "the provider is not answering".
+    state.mark = null;
+    state.markAt = 0;
+    tick();
+  }
+});
 
 async function tick() {
   if (!state.activeId) return;
@@ -1178,6 +1239,8 @@ async function tick() {
     if (SETTLED.includes(job.status)) {
       clearInterval(state.poll);
       state.poll = null;
+      remember(null);
+      announce(job);
       loadJobs();
     }
   } catch (e) {
@@ -2772,8 +2835,30 @@ function drawReady(done) {
     // is not urgent, and unfolding it on load would bury the composer.
     drawDock();
     drawSummary();
-    const resume = state.jobs.find((j) => BUSY.includes(j.status));
-    if (resume) { go('edit'); watch(resume.id); }
+    // Rendering is server-side, so work carries on with the phone locked, the
+    // tab closed, or the container replaced. What follows is about picking the
+    // thread back up: the job you were last following wins, because "the one
+    // I started" is what you came back for.
+    const mine = state.jobs.find((j) => j.id === remembered());
+    const busy = state.jobs.find((j) => BUSY.includes(j.status));
+
+    if (mine && BUSY.includes(mine.status)) {
+      go('edit');
+      watch(mine.id);
+    } else if (mine && SETTLED.includes(mine.status)) {
+      // It finished while you were away. Say so and show it, rather than
+      // dropping you on the composer as though nothing had happened.
+      remember(null);
+      go('edit');
+      state.activeId = mine.id;
+      state.reveal = true;
+      $('#stage').classList.remove('hidden');
+      tick();
+      toast(mine.status === 'done' ? 'Videongiz tayyor bo‘libdi' : 'Ish tugagan');
+    } else if (busy) {
+      go('edit');
+      watch(busy.id);
+    }
   } catch (e) {
     document.body.insertAdjacentHTML('afterbegin',
       `<p class="msg err" style="margin:16px">Ilova yuklanmadi: ${esc(e.message)}</p>`);
