@@ -88,6 +88,20 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 CREATE INDEX IF NOT EXISTS jobs_created_idx ON jobs (created_at DESC);
+
+-- Everything a render made on the way to a video: scene pictures, voice clips.
+-- Object storage is the better home for these and is used when it is
+-- configured; this is what keeps the promise when it is not. `path` is the
+-- file's place under the projects directory, so a restored container puts it
+-- back exactly where the scene list expects it.
+CREATE TABLE IF NOT EXISTS media (
+    path       TEXT PRIMARY KEY,
+    job_id     TEXT NOT NULL,
+    data       {blob} NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS media_job_idx ON media (job_id);
 """
 
 
@@ -168,7 +182,7 @@ def init() -> None:
 
 
 # Everything that may already be sitting in a local SQLite file.
-_ADOPTABLE = ("heroes", "music", "assets", "settings", "jobs")
+_ADOPTABLE = ("heroes", "music", "assets", "settings", "jobs", "media")
 
 
 def _adopt_local_rows() -> None:
@@ -193,7 +207,7 @@ def _adopt_local_rows() -> None:
 
 
 def _adopt_table(table: str) -> None:
-    key = "key" if table == "settings" else "id"
+    key = {"settings": "key", "media": "path"}.get(table, "id")
     try:
         with _sqlite() as local:
             rows = [dict(r) for r in local.execute(f"SELECT * FROM {table}").fetchall()]
@@ -505,8 +519,49 @@ def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
 
 def delete_job(job_id: str) -> bool:
     with _conn() as conn:
+        # The media goes with it. Nothing else refers to a deleted project's
+        # pictures, and they are the largest thing here by a wide margin.
+        conn.execute("DELETE FROM media WHERE job_id = ?", (job_id,))
         cur = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         return cur.rowcount > 0
+
+
+# --- render media ------------------------------------------------------------
+# Kept only when there is nowhere better. A file this size belongs in object
+# storage; it is here so that "everything is saved" is true with a database
+# alone, which is how most people will have set this up.
+
+def put_media(job_id: str, path: str, data: bytes) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO media (path, job_id, data, created_at) VALUES (?,?,?,?)"
+            " ON CONFLICT(path) DO UPDATE SET data = excluded.data,"
+            " created_at = excluded.created_at",
+            (path, job_id, data, _now()),
+        )
+
+
+def get_media(path: str) -> bytes | None:
+    with _conn() as conn:
+        row = conn.execute("SELECT data FROM media WHERE path = ?", (path,)).fetchone()
+    return bytes(row["data"]) if row else None
+
+
+def stored_media(job_id: str) -> set[str]:
+    """Which of a project's files are already kept, so none is written twice."""
+    with _conn() as conn:
+        return {r["path"] for r in
+                conn.execute("SELECT path FROM media WHERE job_id = ?", (job_id,)).fetchall()}
+
+
+def media_bytes(job_id: str | None = None) -> int:
+    query = "SELECT COALESCE(SUM(LENGTH(data)), 0) AS total FROM media"
+    params: tuple = ()
+    if job_id:
+        query += " WHERE job_id = ?"
+        params = (job_id,)
+    with _conn() as conn:
+        return int(conn.execute(query, params).fetchone()["total"] or 0)
 
 
 # How many times a job may be picked back up after the container died under it.
