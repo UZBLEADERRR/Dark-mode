@@ -1424,6 +1424,7 @@ async def run_render(job_id: str) -> None:
         if upload_warning:
             warnings.append(upload_warning)
         subtitle_url, _ = await storage.publish(srt_path, f"{job_id}/subtitles.srt")
+        await keep_media([{"image_path": str(srt_path)}], job_id)
 
         store.update_job(
             job_id, status="done", step="done", progress=100, error="",
@@ -1499,6 +1500,7 @@ async def restyle_music(job_id: str, music_id: str | None, music_start: float) -
 
         _progress(job_id, "music", 85, "Publishing the new mix", status="rendering")
         video_url, upload_warning = await storage.publish(current, f"{job_id}/{current.name}")
+        await keep_media([{"image_path": str(current)}], job_id)
         if upload_warning:
             warnings.append(upload_warning)
 
@@ -1626,12 +1628,16 @@ async def resume_job(job_id: str) -> None:
         if still["left"]:
             # Some gaps do not close on a retry — a prompt the provider refuses,
             # a line it will not read. Say so plainly and leave the rest usable.
+            store.update_job(job_id, error="")
             _progress(job_id, "review", 72,
                       f"{still['left']} ta qism baribir tayyor bo'lmadi — "
                       "qolganini tahrirlab yoki qayta urinib ko'ring",
                       status="review")
             return
 
+        # The failure that sent somebody here is over. Left in place, the card
+        # keeps showing the red ffmpeg dump above a project that is now fine.
+        store.update_job(job_id, error="")
         _progress(job_id, "review", 72, "Hammasi tayyor — Render bosing", status="review")
         if request.get("auto_render", True):
             await run_render(job_id)
@@ -2175,6 +2181,7 @@ async def run_dub(job_id: str) -> None:
         )
 
         stored, upload_warning = await storage.publish(out_path, f"{job_id}/{out_path.name}")
+        await keep_media([{"image_path": str(out_path)}], job_id)
         if upload_warning:
             warnings.append(upload_warning)
         duration = await video.probe_duration(out_path)
