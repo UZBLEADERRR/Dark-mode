@@ -345,6 +345,61 @@ def _save_scenes(job_id: str, scenes: list[dict], **extra: Any) -> None:
     store.update_job(job_id, result={"scenes": scenes, **extra})
 
 
+def _media_paths(scenes: list[dict]) -> list[Path]:
+    out: list[Path] = []
+    for scene in scenes:
+        for holder in [scene] + list(scene.get("shots") or []):
+            for key in ("image_path", "audio_path"):
+                if holder.get(key):
+                    out.append(Path(holder[key]))
+    return out
+
+
+async def keep_media(scenes: list[dict]) -> int:
+    """Copy every picture and voice clip made so far into object storage.
+
+    Called between stages rather than after each file, so a fifty-scene project
+    pays one batch of uploads instead of fifty round trips inside the generation
+    loop. What it buys is the thing that used to hurt most: a render that dies at
+    scene thirty comes back with thirty pictures, not with a scene list pointing
+    at files that no longer exist.
+    """
+    if storage.backend() != "supabase":
+        return 0
+
+    jobs = []
+    for local in _media_paths(scenes):
+        remote = storage.key_for(local, config.PROJECTS_DIR)
+        if remote:
+            jobs.append(storage.mirror(local, remote))
+    if not jobs:
+        return 0
+    return sum(1 for saved in await _gather_limited(jobs, 4) if saved is True)
+
+
+async def restore_media(scenes: list[dict]) -> int:
+    """Bring back the pictures and voice clips a redeploy took with it.
+
+    The scene list survives in the database; the files it points at were on a
+    disk that no longer exists. Anything already present is left alone, so this
+    costs nothing on the normal path and is the difference between "press Render
+    and it finishes" and "press Render and it draws all fifty scenes again".
+    """
+    if storage.backend() != "supabase":
+        return 0
+
+    jobs = []
+    for local in _media_paths(scenes):
+        if local.exists():
+            continue
+        remote = storage.key_for(local, config.PROJECTS_DIR)
+        if remote:
+            jobs.append(storage.fetch(remote, local))
+    if not jobs:
+        return 0
+    return sum(1 for got in await _gather_limited(jobs, 4) if got is True)
+
+
 def _load_scenes(job: dict) -> list[dict]:
     return _ensure_sids(job.get("result", {}).get("scenes") or [])
 
@@ -757,6 +812,10 @@ async def run_draft(job_id: str) -> None:
                 voice_id=request.get("voice_id"), language=language, job_id=job_id,
                 strict=False,
             )
+            # Saved before the pictures start, so a failure during the images
+            # cannot cost the voice-over that has already been paid for.
+            _save_scenes(job_id, scenes)
+            await keep_media(scenes)
 
         # --- images -----------------------------------------------------------
         _progress(job_id, "images", 48, "Generating scene images")
@@ -767,6 +826,7 @@ async def run_draft(job_id: str) -> None:
 
         _save_scenes(job_id, scenes, style_bible=prompt_pack.get("style_bible"),
                      warnings=warnings)
+        await keep_media(scenes)
 
         if request.get("auto_render", True):
             await run_render(job_id)
@@ -793,6 +853,13 @@ async def run_render(job_id: str) -> None:
         scenes = _load_scenes(job)
         if not scenes:
             raise PipelineError("This job has no scenes to render.")
+
+        # A project resumed after a redeploy still knows its scenes; the files
+        # are what went missing. Bring them back before deciding what is stale,
+        # or every one of them looks like it needs drawing again.
+        recovered = await restore_media(scenes)
+        if recovered:
+            _note(job_id, f"{recovered} ta tayyor fayl saqlangan nusxadan qaytarildi")
 
         workdir = workdir_for(job_id)
         fmt = config.FORMATS.get(request.get("video_format", "16:9"), config.FORMATS["16:9"])

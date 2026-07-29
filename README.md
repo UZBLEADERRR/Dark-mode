@@ -1,4 +1,4 @@
-# AI Video Studio
+# Sarideo
 
 Mavzu nomini yozasiz — ilova skript yozadi, ovoz beradi, har bir sahna uchun rasm
 yaratadi, subtitr qo'shadi va tayyor MP4 ni render qiladi.
@@ -89,19 +89,109 @@ har biri o'z xabari bilan.
 Namunasi ham ElevenLabs'ning o'z sample'idan olinadi, ya'ni **kredit
 sarflanmaydi**. API kalitiga `text_to_speech` va `voices_read` ruxsati kerak.
 
-Supabase ulasangiz: `STORAGE_BACKEND=supabase` + `SUPABASE_URL` va
-`SUPABASE_SERVICE_KEY`. Bucket avtomatik yaratiladi, render tugagach video
-bucket'ga yuklanadi va havolasi o'shanga qarab turadi — konteyner o'chsa ham
-video qoladi. Baza (herolar, brend, sozlamalar) baribir `DATA_DIR/app.db` da,
-shuning uchun Railway volume'i baribir kerak.
-
 ## Ma'lumotlar qayerda
 
-- **Herolar, musiqa, tovush effektlari, qatlam rasmlari va brend** — SQLite
-  bazasida, fayllari ham blob sifatida ichida. Alohida papka kerak emas: bitta
-  `app.db` — butun kutubxona.
-- **Renderlar** — `DATA_DIR/projects/<job>/` ichida. Video tayyor bo'lgach
-  yuklab olasiz. Supabase yoqilgan bo'lsa nusxasi bucket'ga ham chiqadi.
+Ikki xil narsa saqlanadi va ikkovi ikki joyda turadi:
+
+| Nima | Qayerda | Nimaga |
+|---|---|---|
+| Herolar, musiqa, effektlar, qatlam rasmlari, aktyorlar, brend, **loyihalar** | Baza (SQLite yoki Postgres) | Kichkina yozuvlar, tez o'qiladi |
+| Sahna rasmlari, ovoz bo'laklari, tayyor MP4 | Disk (va Supabase Storage) | Yuzlab megabayt — bazaga sig'maydi |
+
+Standart holatda ikkovi ham konteyner ichida — ya'ni **deploy qilinsa
+o'chadi**. Supabase ulansangiz ikkovi ham saqlanadi. Sozlamalar sahifasida
+«deploydan keyin saqlanadi» degan alohida qator borligi shundan: yarmi ulangan
+holat konteyner qayta ishga tushmaguncha ishlayotgandek ko'rinadi.
+
+---
+
+## Supabase'ni ulash
+
+Ikki qism bor va **ikkalasini ham** qo'yish kerak: baza (yozuvlar uchun) va
+Storage (rasm/ovoz/video uchun). Bittasi qolib ketsa yarmi saqlanadi.
+
+### 1. Loyiha yarating
+
+[supabase.com](https://supabase.com) → **New project**. Parolni yozib qo'ying —
+u ulanish satrida kerak bo'ladi.
+
+### 2. Baza ulanish satrini oling
+
+**Project Settings → Database → Connection string → URI**, u yerda
+**Session pooler** ni tanlang. Shunday ko'rinadi:
+
+```
+postgresql://postgres.abcdefghijklm:PAROL@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
+```
+
+> **Nega pooler?** «Direct connection» (`db.xxx.supabase.co:5432`) endi faqat
+> IPv6 orqali ishlaydi va Railway'dan unga yetib bo'lmaydi — «Network is
+> unreachable» xatosi aynan shundan chiqadi. Pooler IPv4'da ham ishlaydi.
+>
+> Parolda `@ : / ? # &` kabi belgi bo'lsa, uni URL-kodlash kerak (`@` → `%40`).
+> Eng osoni — parolni faqat harf va raqamdan qilish.
+
+### 3. Storage kalitlarini oling
+
+**Project Settings → API**:
+
+- **Project URL** → `SUPABASE_URL`
+- **service_role** kaliti (`anon` emas!) → `SUPABASE_SERVICE_KEY`
+
+Bucket'ni qo'lda yaratish shart emas — ilova ishga tushganda o'zi yaratadi.
+
+### 4. Railway'ga to'rtta o'zgaruvchi qo'ying
+
+```
+DATABASE_URL=postgresql://postgres.abcdefghijklm:PAROL@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
+STORAGE_BACKEND=supabase
+SUPABASE_URL=https://abcdefghijklm.supabase.co
+SUPABASE_SERVICE_KEY=eyJhbGciOi...
+```
+
+### 5. Deploy qiling va tekshiring
+
+Jadvallarni qo'lda yaratish **shart emas** — ilova birinchi ulanganda o'zi
+yaratadi. Qanday ko'rinishini oldindan ko'rmoqchi bo'lsangiz yoki qo'lda
+tayyorlab qo'ymoqchi bo'lsangiz: [`supabase/schema.sql`](supabase/schema.sql)
+ni Supabase → **SQL Editor** ga qo'yib «Run» bosing. Ikkinchi marta bossangiz
+ham hech narsa buzilmaydi.
+
+Deploy tugagach ilovadagi **Sozlamalar** ni oching. Ko'rishingiz kerak:
+
+```
+baza — postgres                    bor
+deploydan keyin saqlanadi          bor
+```
+
+Ikkinchi qator «yo'q» bo'lsa — nimasi yetishmayotgani o'sha yerning o'zida
+yozib turadi.
+
+### Jadvallar va ular nimani saqlaydi
+
+| Jadval | Ichida |
+|---|---|
+| `heroes` | Siz yuklagan personaj suratlari (qayta yaratib bo'lmaydigan yagona narsa) |
+| `music` | Fon musiqasi va tovush effektlari |
+| `assets` | Stikerlar, logotip, kesib olingan aktyorlar, yozib olingan ovozlar |
+| `settings` | Brend to'plami, tanlangan modellar va ovozlar |
+| `jobs` | Loyihalar: ssenariy, sahnalar, ovoz uzunliklari, tayyor video havolasi |
+
+Storage bucket'ida (`videos`) esa har bir loyihaning sahna rasmlari, ovoz
+bo'laklari va tayyor MP4 si `<job_id>/...` ko'rinishida turadi.
+
+### Avvalgi ishlaringiz yo'qolmaydi
+
+Ilova birinchi marta Supabase bilan ishga tushganda konteynerdagi SQLite
+bazasida nima bo'lsa — herolar, musiqa, sozlamalar va loyihalar — hammasini
+Postgres'ga ko'chiradi. Ikki marta ishga tushsa ham nusxalanmaydi.
+
+### Yarim tayyor loyiha endi yo'qolmaydi
+
+Sahna rasmlari va ovoz bo'laklari tayyor bo'lgan sayin Storage'ga chiqariladi.
+Konteyner 30-sahnada o'lsa ham, qaytib kelganingizda o'sha 30 ta rasm joyida
+turadi: **Render** bosasiz, ilova qolganidan davom ettiradi — allaqachon
+to'langan narsa uchun ikkinchi marta to'lanmaydi.
 
 ## Animatsiya
 
@@ -262,13 +352,14 @@ yaratsangiz yangi kadr uchun chiziladi (sifatli).
 
    Tamom. Qolgan hammasining default qiymati bor.
 
-3. **Volume** qo'shing va `/data` ga mount qiling, `DATA_DIR=/data` deb belgilang.
-   Bu bo'lmasa herolar bazasi har deploy'da o'chib ketadi.
-4. Deploy tugagach domenni oching — UI shu yerda.
+3. **Hamma narsa saqlanishi uchun** Supabase'ni ulang — usuli yuqoridagi
+   «Supabase'ni ulash» bo'limida. Qisqasi: `DATABASE_URL`,
+   `STORAGE_BACKEND=supabase`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
 
-Videolar deploy'dan keyin ham turishi kerak bo'lsa `STORAGE_BACKEND=supabase`
-qo'ying va `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` bering; bucket avtomatik
-yaratiladi.
+   Supabase'siz ishlatmoqchi bo'lsangiz, hech bo'lmasa **Volume** qo'shib
+   `/data` ga mount qiling va `DATA_DIR=/data` deb belgilang. Volume ham,
+   Supabase ham bo'lmasa har deploy'da hammasi o'chadi.
+4. Deploy tugagach domenni oching — UI shu yerda.
 
 ## Lokal ishga tushirish
 
@@ -372,7 +463,8 @@ app/
 ├── main.py            FastAPI: API, yuklash, tahrirlash, yuklab olish
 ├── pipeline.py        Ikki bosqich: draft (qoralama) va render
 ├── config.py          Barcha env sozlamalari
-├── store.py           SQLite: herolar (blob), musiqa (blob), joblar
+├── store.py           Baza: herolar, musiqa, aktyorlar, sozlamalar, loyihalar
+├── pgstore.py         Postgres (Supabase) ulanishi — SQL bitta joyda, store.py da
 ├── skills/            AI promptlari + provayder adapteri (llm.py)
 ├── providers/         Tashqi API adapterlari (images, tts, align, storage)
 ├── render/            ffmpeg: kenburns, subtitles (ASS), overlays, video
@@ -436,7 +528,7 @@ app/
   "Musiqa qo'shish". Faqat tovush qayta mikslanadi, rasm nusxalanadi
   (`-c:v copy`) — shuning uchun bir necha soniya oladi va trekni xohlagancha
   almashtirish mumkin.
-- `DATABASE_URL` berilsa hero kutubxonasi Postgres'da saqlanadi (Railway'da
-  Postgres qo'shsangiz o'zi qo'yiladi). Faqat hero — chunki deploy konteyner
-  diskini o'chiradi va hero yagona qayta yaratib bo'lmaydigan fayl. Birinchi
-  ishga tushishda SQLite'dagi hero'lar avtomatik ko'chiriladi.
+- `DATABASE_URL` berilsa **hamma narsa** Postgres'da saqlanadi — herolar,
+  musiqa, aktyorlar, sozlamalar va loyihalar. Birinchi ishga tushishda
+  konteynerdagi SQLite'da nima bo'lsa, o'sha ko'chiriladi. Baza o'chib turgan
+  bo'lsa ham ilova ishga tushaveradi: sabab Sozlamalar sahifasida yoziladi.
