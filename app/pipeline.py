@@ -1557,8 +1557,12 @@ async def restyle_music(job_id: str, music_id: str | None, music_start: float) -
 
 
 def _finished_video(workdir: Path) -> Path | None:
+    # `fuse_` files are the half-joined batches a long project is assembled from.
+    # They are ordinary MP4s and they are the newest thing in the folder when an
+    # assemble dies, so without this a seventy-scene project would hand back
+    # twelve silent scenes as its finished video.
     videos = [v for v in workdir.glob("*.mp4")
-              if not v.name.startswith("clip_") and v.name != "remix.mp4"]
+              if not v.name.startswith(("clip_", "fuse_")) and v.name != "remix.mp4"]
     return max(videos, key=lambda p: p.stat().st_mtime) if videos else None
 
 

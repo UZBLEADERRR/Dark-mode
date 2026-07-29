@@ -384,21 +384,24 @@ async def mux_dub(
     return out_path
 
 
-async def concat_narration(
-    *, audio_paths: list[Path], out_path: Path, gap: float = SCENE_GAP
-) -> Path:
-    """Join the per-scene voice files, padding each with a short breath."""
+# Audio decoders are far cheaper than video ones, so this sits much higher than
+# the filtergraph limit — but it is not unlimited, for the same reason.
+MAX_AUDIO_INPUTS = 40
+
+
+async def _concat_group(paths: list[Path], out_path: Path, gap: float) -> Path:
+    """Join a handful of voice files end to end. `gap` pads each with a breath."""
     inputs: list[str] = []
-    for path in audio_paths:
+    for path in paths:
         inputs += ["-i", str(path)]
 
+    pad = f",apad=pad_dur={gap}" if gap > 0 else ""
     chains = [
-        f"[{i}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-        f"apad=pad_dur={gap}[a{i}]"
-        for i in range(len(audio_paths))
+        f"[{i}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo{pad}[a{i}]"
+        for i in range(len(paths))
     ]
-    labels = "".join(f"[a{i}]" for i in range(len(audio_paths)))
-    graph = ";".join(chains) + f";{labels}concat=n={len(audio_paths)}:v=0:a=1[out]"
+    labels = "".join(f"[a{i}]" for i in range(len(paths)))
+    graph = ";".join(chains) + f";{labels}concat=n={len(paths)}:v=0:a=1[out]"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     await _run(
@@ -412,6 +415,53 @@ async def concat_narration(
         ]
     )
     return out_path
+
+
+async def concat_narration(
+    *, audio_paths: list[Path], out_path: Path, gap: float = SCENE_GAP
+) -> Path:
+    """Join the per-scene voice files, padding each with a short breath.
+
+    Long projects are joined in stages rather than all at once: a filtergraph
+    with one decoder per scene is how a seventy-scene render runs the container
+    out of handles, and the voice-over is the half of it that was hardest to pay
+    for. Every stage is uncompressed, so joining in two passes is bit-identical
+    to joining in one.
+    """
+    if not audio_paths:
+        raise RenderError("There is no voice-over to join.")
+
+    parts = list(audio_paths)
+    work = out_path.parent
+    work.mkdir(parents=True, exist_ok=True)
+    stage = 0
+    scratch: list[Path] = []
+
+    try:
+        # The breath belongs to a scene and is added exactly once, on the pass
+        # that still knows where the scenes are.
+        gap_now = gap
+        while len(parts) > MAX_AUDIO_INPUTS:
+            joined: list[Path] = []
+            for n in range(0, len(parts), MAX_AUDIO_INPUTS):
+                group = parts[n:n + MAX_AUDIO_INPUTS]
+                if len(group) == 1 and gap_now <= 0:
+                    joined.append(group[0])
+                    continue
+                piece = work / f"voice_part_{stage}_{n // MAX_AUDIO_INPUTS}.wav"
+                scratch.append(piece)
+                joined.append(await _concat_group(group, piece, gap_now))
+            parts, gap_now, stage = joined, 0.0, stage + 1
+
+        if len(parts) == 1 and gap_now <= 0:
+            shutil.copyfile(parts[0], out_path)
+            return out_path
+        return await _concat_group(parts, out_path, gap_now)
+    finally:
+        # Uncompressed and the length of the whole voice-over, twice over on a
+        # two-stage join. Kept only as long as they are being read.
+        for piece in scratch:
+            piece.unlink(missing_ok=True)
 
 
 def _video_graph(
@@ -459,6 +509,95 @@ def _video_graph(
         current = "[vout]"
 
     return ";".join(parts), current
+
+
+# How many clips one ffmpeg call may cross-fade at once.
+#
+# Every input in a filtergraph opens its own h264 decoder, and every decoder
+# takes threads and buffers before a single frame is read. A seventy-four scene
+# project asked for seventy-four at once and the container ran out at the
+# sixty-first: `Error while opening decoder: Resource temporarily unavailable`,
+# then `Error binding an input stream to complex filtergraph input xfade` — a
+# render that had already paid for all seventy-four pictures and all seventy-four
+# lines of voice-over. Twelve is comfortable on the smallest box worth using,
+# and short projects never reach it, so nothing about an ordinary render changes.
+MAX_GRAPH_INPUTS = 12
+
+
+async def _fuse_group(
+    clips: list[Path], durations: list[float], transition: float,
+    effects: list[str | None], out_path: Path, profile: dict,
+) -> Path:
+    """Cross-fade a handful of clips into one file, picture only."""
+    graph, label = _video_graph(len(clips), durations, transition, None, effects)
+    args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+    for clip in clips:
+        args += ["-i", clip.name]
+    if graph:
+        args += ["-filter_complex", graph]
+    args += [
+        "-map", label,
+        "-an",
+        "-c:v", "libx264",
+        # An intermediate is read once and thrown away, so it is encoded for
+        # speed at a quality high enough that the final pass cannot see it.
+        "-preset", "ultrafast",
+        "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-r", str(config.FPS),
+        "-threads", str(profile.get("threads", 1)),
+        out_path.name,
+    ]
+    await _run(args, cwd=out_path.parent)
+    return out_path
+
+
+async def fuse_clips(
+    clips: list[Path], durations: list[float], transition: float,
+    effects: list[str | None] | None, workdir: Path, profile: dict,
+    limit: int = MAX_GRAPH_INPUTS,
+) -> tuple[list[Path], list[float], list[str | None]]:
+    """Reduce a long list of clips to one short enough to assemble in one go.
+
+    Clips are cross-faded in groups, each group written to an intermediate file,
+    and the intermediates cross-faded in turn — so the transitions the user chose
+    survive across the seams. Returns the reduced clips, their real durations and
+    the transitions that still have to be applied *between* them.
+
+    A project short enough to assemble directly is returned untouched: no extra
+    encode, no second generation of compression, nothing about it changes.
+    """
+    effects = list(effects or [])
+    while len(clips) > limit:
+        starts = list(range(0, len(clips), limit))
+        # A final group of one cannot be cross-faded into anything, and encoding
+        # it alone would only cost a generation of quality — it is carried up.
+        if len(starts) > 1 and len(clips) - starts[-1] == 1:
+            starts.pop()
+        fused: list[Path] = []
+        fused_effects: list[str | None] = []
+        level = len(list(workdir.glob("fuse_*.mp4")))
+        for n, start in enumerate(starts):
+            end = starts[n + 1] if n + 1 < len(starts) else len(clips)
+            group = clips[start:end]
+            # The transition *into* this group is applied at the next level up,
+            # not inside it, so it is carried rather than used here.
+            fused_effects.append(effects[start] if start < len(effects) else None)
+            if len(group) == 1:
+                fused.append(group[0])
+                continue
+            out = workdir / f"fuse_{level + n}.mp4"
+            await _fuse_group(
+                group, durations[start:end], transition,
+                effects[start:end], out, profile,
+            )
+            fused.append(out)
+        # Measured, not calculated. An offset derived from arithmetic that has
+        # drifted a few milliseconds past the real end of a stream makes xfade
+        # emit nothing, which surfaces much later as the encoder refusing to open.
+        durations = [max(MIN_CLIP_SECONDS, await probe_duration(path)) for path in fused]
+        clips, effects = fused, fused_effects
+    return clips, durations, effects
 
 
 def _audio_graph(
@@ -646,6 +785,20 @@ async def assemble(
     cues = [c for c in (sfx or []) if c.get("path")]
     profile = speed or config.speed_profile()
 
+    # Done once, before the music and ducking retries: those re-run the final
+    # call, and re-fusing seventy-four clips for each of them would triple the
+    # cost of a failure that has nothing to do with the picture.
+    for stale in workdir.glob("fuse_*.mp4"):
+        stale.unlink(missing_ok=True)
+    clips, clip_durations, effects = await fuse_clips(
+        clips, clip_durations, transition, effects, workdir, profile,
+    )
+    # Half-joined batches are the size of the finished video all over again, on a
+    # disk that has to hold every scene clip as well. They go as soon as the
+    # video is written, and equally when it is not — the scene clips are still
+    # there and re-joining them costs nothing but local CPU.
+    scratch = [clip for clip in clips if clip.name.startswith("fuse_")]
+
     async def attempt(with_music: bool, duck: bool, with_sfx: bool = True) -> Path:
         inputs: list[str] = []
         for clip in clips:
@@ -703,22 +856,26 @@ async def assemble(
         await _run(args, cwd=workdir)
         return out_path
 
-    if music is not None:
-        try:
-            return await attempt(with_music=True, duck=True)
-        except RenderError:
-            # sidechaincompress is the least portable piece — retry flat, then dry.
-            try:
-                return await attempt(with_music=True, duck=False)
-            except RenderError:
-                pass
     try:
-        return await attempt(with_music=False, duck=False)
-    except RenderError:
-        if not cues:
-            raise
-        # Losing the stings is a far smaller failure than losing the video.
-        return await attempt(with_music=False, duck=False, with_sfx=False)
+        if music is not None:
+            try:
+                return await attempt(with_music=True, duck=True)
+            except RenderError:
+                # sidechaincompress is the least portable piece — retry flat, then dry.
+                try:
+                    return await attempt(with_music=True, duck=False)
+                except RenderError:
+                    pass
+        try:
+            return await attempt(with_music=False, duck=False)
+        except RenderError:
+            if not cues:
+                raise
+            # Losing the stings is a far smaller failure than losing the video.
+            return await attempt(with_music=False, duck=False, with_sfx=False)
+    finally:
+        for piece in scratch:
+            piece.unlink(missing_ok=True)
 
 
 async def slice_audio(source: Path, out_path: Path, start: float, end: float) -> Path:
