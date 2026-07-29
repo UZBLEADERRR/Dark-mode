@@ -70,6 +70,18 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS jobs_created_idx ON jobs (created_at DESC);
 
+-- Render natijalari: sahna rasmlari va ovoz bo'laklari. Storage ulangan bo'lsa
+-- ular bucket'ga chiqadi va bu jadval bo'sh turadi. Storage ulanmagan bo'lsa —
+-- shu yerda saqlanadi, ya'ni faqat DATABASE_URL bilan ham hech narsa yo'qolmaydi.
+CREATE TABLE IF NOT EXISTS media (
+    path       TEXT PRIMARY KEY,
+    job_id     TEXT NOT NULL,
+    data       BYTEA NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS media_job_idx ON media (job_id);
+
 -- Bu jadvallarga faqat serverning o'zi (service key bilan) kiradi, brauzerdan
 -- emas. RLS yoqilmagan — anon key bu jadvallarni umuman ko'rmaydi.
 

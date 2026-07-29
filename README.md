@@ -165,12 +165,18 @@ Ikki xil narsa saqlanadi va ikkovi ikki joyda turadi:
 | Nima | Qayerda | Nimaga |
 |---|---|---|
 | Herolar, musiqa, effektlar, qatlam rasmlari, aktyorlar, brend, **loyihalar** | Baza (SQLite yoki Postgres) | Kichkina yozuvlar, tez o'qiladi |
-| Sahna rasmlari, ovoz bo'laklari, tayyor MP4 | Disk (va Supabase Storage) | Yuzlab megabayt — bazaga sig'maydi |
+| Sahna rasmlari, ovoz bo'laklari, tayyor MP4 | Supabase Storage, u yo'q bo'lsa baza | Kattaroq fayllar |
 
 Standart holatda ikkovi ham konteyner ichida — ya'ni **deploy qilinsa
-o'chadi**. Supabase ulansangiz ikkovi ham saqlanadi. Sozlamalar sahifasida
-«deploydan keyin saqlanadi» degan alohida qator borligi shundan: yarmi ulangan
-holat konteyner qayta ishga tushmaguncha ishlayotgandek ko'rinadi.
+o'chadi**.
+
+`DATABASE_URL` qo'ysangiz **hammasi saqlanadi**: yozuvlar ham, sahna rasmlari
+ham, ovoz bo'laklari ham. Rasm va ovozlar `media` jadvaliga tushadi va loyihani
+o'chirmaguningizcha turadi.
+
+Yuqorida `STORAGE_BACKEND=supabase` ham qo'shsangiz, kattaroq fayllar bazaga
+emas **Storage bucket'ga** chiqadi — bu tavsiya etiladi, chunki baza hajmi
+arzonroq ishlatiladi va tayyor videoga to'g'ridan-to'g'ri havola beriladi.
 
 ---
 

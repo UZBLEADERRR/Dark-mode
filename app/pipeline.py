@@ -23,7 +23,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, skills, store
+from . import config, pgstore, skills, store
 from .providers import align, images, storage, tts
 from .render import overlays as ov
 from .render import shots
@@ -198,7 +198,7 @@ async def replace_scene_voice(job_id: str, index: int, data: bytes, suffix: str,
     )
     _recompute_starts(scenes)
     _save_scenes(job_id, scenes)
-    await keep_media([scene])
+    await keep_media([scene], job_id)
     _note(job_id, f"Scene {index + 1}: o'z ovozingiz bilan almashtirildi")
     return scene
 
@@ -421,26 +421,106 @@ def _media_paths(scenes: list[dict]) -> list[Path]:
     return out
 
 
-async def keep_media(scenes: list[dict]) -> int:
-    """Copy every picture and voice clip made so far into object storage.
+# A single file this big is not worth keeping in a database row. Nothing the
+# renderer makes comes close — a scene picture is about a megabyte and a voice
+# clip far less — so in practice this only ever catches something that has gone
+# wrong.
+MAX_KEPT_BYTES = 12 * 1024 * 1024
+
+
+def _keep_in_db(job_id: str, scenes: list[dict]) -> int:
+    """Keep the render's files in the database, when there is nowhere better.
+
+    Object storage is the right home for a megabyte of picture and it is used
+    whenever it is configured. But most people will attach a database and stop
+    there, and then "everything is saved" has to still be true — otherwise the
+    first redeploy quietly bins every picture and voice clip a project paid for,
+    which is exactly what happened.
+    """
+    already = store.stored_media(job_id)
+    kept = 0
+    for local in _media_paths(scenes):
+        key = storage.key_for(local, config.PROJECTS_DIR)
+        if not key or key in already or not local.exists():
+            continue
+        try:
+            data = local.read_bytes()
+        except OSError:
+            continue
+        if len(data) > MAX_KEPT_BYTES:
+            continue
+        store.put_media(job_id, key, data)
+        kept += 1
+    return kept
+
+
+async def keep_media(scenes: list[dict], job_id: str = "") -> int:
+    """Put every picture and voice clip made so far somewhere it will survive.
 
     Called between stages rather than after each file, so a fifty-scene project
-    pays one batch of uploads instead of fifty round trips inside the generation
-    loop. What it buys is the thing that used to hurt most: a render that dies at
-    scene thirty comes back with thirty pictures, not with a scene list pointing
-    at files that no longer exist.
+    pays one batch instead of fifty round trips inside the generation loop. What
+    it buys is the thing that used to hurt most: a render that dies at scene
+    thirty comes back with thirty pictures, not with a scene list pointing at
+    files that no longer exist.
     """
-    if storage.backend() != "supabase":
-        return 0
+    if storage.backend() == "supabase":
+        jobs = []
+        for local in _media_paths(scenes):
+            remote = storage.key_for(local, config.PROJECTS_DIR)
+            if remote:
+                jobs.append(storage.mirror(local, remote))
+        if not jobs:
+            return 0
+        return sum(1 for saved in await _gather_limited(jobs, 4) if saved is True)
 
-    jobs = []
+    # No bucket. If there is a database that outlives the container, it holds
+    # them; if there is not, nothing here would survive anyway.
+    if job_id and pgstore.enabled():
+        return await asyncio.to_thread(_keep_in_db, job_id, scenes)
+    return 0
+
+
+def forget_missing(scenes: list[dict]) -> int:
+    """Drop every path that points at a file which is not there.
+
+    A row saying `audio_path` and a disk saying nothing is not progress — it is
+    the render walking into ffmpeg with a filename that cannot be opened, which
+    is what "Error opening input file .../audio/scene_x" is. Cleared here, the
+    stage that follows simply remakes what is missing, which is what it would
+    have done had the row been honest.
+
+    A container replaced between the draft and the render is the ordinary way
+    this happens, and it is ordinary precisely when the files were never
+    mirrored anywhere.
+    """
+    lost = 0
+    for scene in scenes:
+        for holder in [scene] + list(scene.get("shots") or []):
+            if holder.get("image_path") and not Path(holder["image_path"]).exists():
+                holder["image_path"] = None
+                holder["needs_image"] = True
+                lost += 1
+        if scene.get("audio_path") and not Path(scene["audio_path"]).exists():
+            scene["audio_path"] = None
+            scene["words"] = []
+            scene["needs_voice"] = True
+            lost += 1
+    return lost
+
+
+def _restore_from_db(scenes: list[dict]) -> int:
+    brought = 0
     for local in _media_paths(scenes):
-        remote = storage.key_for(local, config.PROJECTS_DIR)
-        if remote:
-            jobs.append(storage.mirror(local, remote))
-    if not jobs:
-        return 0
-    return sum(1 for saved in await _gather_limited(jobs, 4) if saved is True)
+        if local.exists():
+            continue
+        key = storage.key_for(local, config.PROJECTS_DIR)
+        data = store.get_media(key) if key else None
+        if data is None:
+            continue
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(data)
+        brought += 1
+    return brought
 
 
 async def restore_media(scenes: list[dict]) -> int:
@@ -451,19 +531,21 @@ async def restore_media(scenes: list[dict]) -> int:
     costs nothing on the normal path and is the difference between "press Render
     and it finishes" and "press Render and it draws all fifty scenes again".
     """
-    if storage.backend() != "supabase":
-        return 0
+    if storage.backend() == "supabase":
+        jobs = []
+        for local in _media_paths(scenes):
+            if local.exists():
+                continue
+            remote = storage.key_for(local, config.PROJECTS_DIR)
+            if remote:
+                jobs.append(storage.fetch(remote, local))
+        if not jobs:
+            return 0
+        return sum(1 for got in await _gather_limited(jobs, 4) if got is True)
 
-    jobs = []
-    for local in _media_paths(scenes):
-        if local.exists():
-            continue
-        remote = storage.key_for(local, config.PROJECTS_DIR)
-        if remote:
-            jobs.append(storage.fetch(remote, local))
-    if not jobs:
-        return 0
-    return sum(1 for got in await _gather_limited(jobs, 4) if got is True)
+    if pgstore.enabled():
+        return await asyncio.to_thread(_restore_from_db, scenes)
+    return 0
 
 
 def _load_scenes(job: dict) -> list[dict]:
@@ -1129,7 +1211,7 @@ async def run_draft(job_id: str) -> None:
             # Saved before the pictures start, so a failure during the images
             # cannot cost the voice-over that has already been paid for.
             _save_scenes(job_id, scenes)
-            await keep_media(scenes)
+            await keep_media(scenes, job_id)
 
         # --- images -----------------------------------------------------------
         _progress(job_id, "images", 48, "Generating scene images")
@@ -1140,7 +1222,7 @@ async def run_draft(job_id: str) -> None:
 
         _save_scenes(job_id, scenes, style_bible=prompt_pack.get("style_bible"),
                      warnings=warnings)
-        await keep_media(scenes)
+        await keep_media(scenes, job_id)
 
         if request.get("auto_render", True):
             await run_render(job_id)
@@ -1180,6 +1262,21 @@ async def run_render(job_id: str) -> None:
         width, height = fmt["width"], fmt["height"]
         language = request.get("language", "en")
         uploaded_audio = request.get("narration_audio")
+
+        # Whatever storage could not bring back is remade rather than handed to
+        # ffmpeg as a filename. Checked here and not only on resume, because the
+        # render is where a missing file actually breaks something.
+        lost = forget_missing(scenes)
+        if lost:
+            _note(job_id, f"{lost} ta fayl topilmadi — o'shalar qayta yaratiladi")
+            if storage.backend() != "supabase":
+                # Naming the cause where it bites. Without object storage this
+                # happens on every redeploy, and paying for the voice-over twice
+                # is a poor way to find that out.
+                warnings.append(
+                    "Fayllar konteyner bilan o'chgan va qaytadan yaratilmoqda. "
+                    "Buning oldini olish uchun STORAGE_BACKEND=supabase qo'ying.")
+            _save_scenes(job_id, scenes)
 
         # Any scene edited since the last render still needs its asset built.
         stale_voice = [s for s in scenes if s.get("needs_voice") and not uploaded_audio]
@@ -1323,6 +1420,7 @@ async def run_render(job_id: str) -> None:
         )
 
         video_url, upload_warning = await storage.publish(out_path, f"{job_id}/{out_path.name}")
+        await keep_media([{"image_path": str(out_path)}], job_id)
         if upload_warning:
             warnings.append(upload_warning)
         subtitle_url, _ = await storage.publish(srt_path, f"{job_id}/subtitles.srt")
@@ -1488,16 +1586,7 @@ async def resume_job(job_id: str) -> None:
         if recovered:
             _note(job_id, f"{recovered} ta tayyor fayl saqlangan nusxadan qaytarildi")
 
-        # Anything the disk cannot show has to be made again, whatever the row
-        # says — a path pointing at a file that is not there is not progress.
-        for scene in scenes:
-            for holder in [scene] + list(scene.get("shots") or []):
-                if holder.get("image_path") and not Path(holder["image_path"]).exists():
-                    holder["image_path"] = None
-                    holder["needs_image"] = True
-            if scene.get("audio_path") and not Path(scene["audio_path"]).exists():
-                scene["audio_path"] = None
-                scene["needs_voice"] = True
+        forget_missing(scenes)
 
         left = unfinished(scenes, uploaded_audio=bool(uploaded_audio))
         workdir = workdir_for(job_id)
@@ -1518,7 +1607,7 @@ async def resume_job(job_id: str) -> None:
                 strict=False,
             )
             _save_scenes(job_id, scenes)
-            await keep_media(scenes)
+            await keep_media(scenes, job_id)
 
         if left["images_left"]:
             _progress(job_id, "images", 55,
@@ -1531,7 +1620,7 @@ async def resume_job(job_id: str) -> None:
             )
 
         _save_scenes(job_id, scenes, warnings=warnings)
-        await keep_media(scenes)
+        await keep_media(scenes, job_id)
 
         still = unfinished(scenes, uploaded_audio=bool(uploaded_audio))
         if still["left"]:

@@ -1281,15 +1281,26 @@ async def download(job_id: str) -> FileResponse:
     return FileResponse(newest, media_type="video/mp4", filename=newest.name)
 
 
+async def _bring_back(path: str, target: Path) -> bool:
+    """Fetch one project file from object storage, or from the database."""
+    if await storage.fetch(path, target):
+        return True
+    data = await asyncio.to_thread(store.get_media, path)
+    if data is None:
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return True
+
+
 @app.get("/api/files/{path:path}")
 async def project_file(path: str) -> FileResponse:
     target = _safe_child(config.PROJECTS_DIR, path)
     if not target.exists() or not target.is_file():
         # The database remembers a project across a redeploy, but the disk it
-        # was rendered on is gone. If the file was mirrored to object storage,
-        # pull it back rather than showing a hole — and keep the copy, so the
-        # render that follows finds it already there.
-        if not await storage.fetch(path, target):
+        # was rendered on is gone. Bring the file back from wherever it was
+        # kept — and keep the copy, so the render that follows finds it there.
+        if not await _bring_back(path, target):
             raise HTTPException(status_code=404, detail="File not found.")
     media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
     return FileResponse(target, media_type=media_type)
