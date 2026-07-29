@@ -421,7 +421,9 @@ async function loadHealth() {
     // so whether they outlive a deploy is something you want to know before it
     // happens rather than after.
     [`hero bazasi — ${h.hero_store?.backend || 'sqlite'}`, h.hero_store?.ok !== false],
-    [`ovoz limiti — ${h.tts_rate_limit || 0}/daqiqa`, true],
+    [h.tts_rate_limit
+      ? `ovoz limiti — ${h.tts_rate_limit}/daqiqa`
+      : 'ovoz limiti — cheklanmagan', true],
   ];
   $('#health-list').innerHTML = checks.map(([label, ok]) =>
     `<div class="row"><span>${esc(label)}</span><span class="tag ${ok ? 'done' : 'failed'}">${ok ? 'bor' : 'yo‘q'}</span></div>`
