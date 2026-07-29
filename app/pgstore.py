@@ -16,6 +16,7 @@ that drifts is always the one you cannot test locally.
 
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -23,6 +24,24 @@ from . import config
 
 _pool: Any = None
 _ready = False
+
+# How long to wait for a connection before giving up. Short on purpose: a wrong
+# host does not become right by waiting, and every second spent here is a second
+# the browser sits on a spinner.
+CONNECT_TIMEOUT = 8.0
+
+# After a failure, stop trying for this long. Without it, a database that is
+# unreachable makes every single request pay the full timeout, and the app
+# becomes unusable rather than merely degraded — which is a much worse way to
+# tell somebody their connection string is wrong.
+COOLDOWN = 20.0
+
+_down_since = 0.0
+_down_reason = ""
+
+
+class Unreachable(RuntimeError):
+    """The database is known to be down; raised without waiting to find out."""
 
 
 def enabled() -> bool:
@@ -100,7 +119,10 @@ def connect() -> Iterator[Connection]:
     briefly unreachable should make the library fail, not stop the container
     from passing its healthcheck.
     """
-    global _pool
+    global _pool, _down_since, _down_reason
+
+    if _down_since and time.monotonic() - _down_since < COOLDOWN:
+        raise Unreachable(_down_reason)
 
     dict_row = _driver()
     if _pool is None:
@@ -110,7 +132,7 @@ def connect() -> Iterator[Connection]:
             config.DATABASE_URL,
             min_size=0,
             max_size=6,
-            timeout=20,
+            timeout=CONNECT_TIMEOUT,
             # Supabase's transaction pooler (port 6543) rejects prepared
             # statements, and psycopg starts preparing a query on its fifth
             # run. Every query here is short, so nothing is lost by never
@@ -120,8 +142,27 @@ def connect() -> Iterator[Connection]:
             open=True,
         )
 
-    with _pool.connection() as conn:
-        yield Connection(conn)
+    try:
+        with _pool.connection() as conn:
+            _down_since, _down_reason = 0.0, ""
+            yield Connection(conn)
+    except Exception as exc:  # noqa: BLE001 - recorded, then re-raised as-is
+        if is_connection_problem(exc):
+            _down_since = time.monotonic()
+            _down_reason = explain(exc)
+        raise
+
+
+def is_connection_problem(exc: Exception) -> bool:
+    """Could not reach it, as opposed to a query it refused."""
+    if isinstance(exc, Unreachable):
+        return True
+    text = str(exc).lower()
+    return any(sign in text for sign in (
+        "couldn't get a connection", "connection is bad", "network is unreachable",
+        "connection refused", "could not translate host name", "timeout expired",
+        "server closed the connection", "name or service not known",
+    ))
 
 
 def mark_ready() -> bool:
@@ -135,7 +176,8 @@ def mark_ready() -> bool:
 
 def reset() -> None:
     """Drop the pool — used by tests that switch databases mid-process."""
-    global _pool, _ready
+    global _pool, _ready, _down_since, _down_reason
+    _down_since, _down_reason = 0.0, ""
     if _pool is not None:
         try:
             _pool.close()
@@ -145,18 +187,25 @@ def reset() -> None:
 
 
 def health() -> tuple[bool, str]:
-    """Is the database actually reachable? Shown on the settings page."""
+    """Is the database actually reachable? Shown on the settings page.
+
+    Checked for real rather than from the cooldown flag: this is the page
+    somebody opens *because* it was down, and answering from a memory of the
+    last failure would mean it never comes back without a restart.
+    """
     if not enabled():
         return False, "not configured"
+    global _down_since
+    _down_since = 0.0
     try:
         with connect() as conn:
             conn.execute("SELECT 1").fetchone()
         return True, "connected"
     except Exception as exc:  # noqa: BLE001 - reported, never raised at the user
-        return False, _readable(exc)
+        return False, explain(exc)
 
 
-def _readable(exc: Exception) -> str:
+def explain(exc: Exception) -> str:
     """Turn the driver's message into the thing to actually go and fix."""
     text = str(exc).strip() or exc.__class__.__name__
     lowered = text.lower()
@@ -165,9 +214,18 @@ def _readable(exc: Exception) -> str:
                 "(parolda maxsus belgi bo'lsa, u kodlangan bo'lishi kerak).")
     if "could not translate host name" in lowered or "name or service not known" in lowered:
         return "Host topilmadi — DATABASE_URL'dagi manzilni tekshiring."
-    if "network is unreachable" in lowered:
-        return ("Manzilga yetib bo'lmadi. Supabase'ning to'g'ridan-to'g'ri ulanishi "
-                "faqat IPv6 — o'rniga Session pooler satrini oling.")
+    if "network is unreachable" in lowered or _looks_ipv6_only(text):
+        return ("Manzilga yetib bo'lmadi — Railway IPv6'ga chiqa olmaydi. "
+                "Supabase'da Connection string → «Session pooler» satrini oling "
+                "(host ...pooler.supabase.com), db.xxx.supabase.co emas.")
+    if "couldn't get a connection" in lowered:
+        return ("Bazaga ulanib bo'lmadi (kutish vaqti tugadi). Ulanish satrini "
+                "tekshiring — Supabase'da «Session pooler» ni tanlang.")
     if "prepared statement" in lowered:
         return "Pooler tayyorlangan so'rovlarni qabul qilmadi — ilovani qayta ishga tushiring."
     return text[:200]
+
+
+def _looks_ipv6_only(text: str) -> str | bool:
+    """A bare IPv6 address in the error is Supabase's direct host, every time."""
+    return "connection to server at \"" in text and text.count(":") > 4

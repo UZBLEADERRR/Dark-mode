@@ -63,15 +63,28 @@ async def _ensure_bucket_quietly() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Start up. Nothing in here may prevent the server from accepting requests.
+
+    A database that cannot be reached is a configuration problem, and the only
+    place a configuration problem can be explained is a page the user can open.
+    If it kills startup instead, the platform reports a failed healthcheck, rolls
+    back, and loops — and the actual reason is buried in a stack trace nobody
+    asked for. So every step here is allowed to fail, and what failed is said on
+    the settings page.
+    """
     store.init()
-    # A render is server-side work: closing the browser never stopped it, and now
-    # neither does the container being replaced under it. Anything interrupted
-    # mid-render is picked straight back up, from the scenes already on disk.
-    resumable = store.recover_jobs()
-    # Model and voice choices made in the UI are stored, not exported to the
-    # environment, so they have to be loaded back before the first request.
-    config.set_model_overrides(store.get_setting(MODELS_KEY) or {})
-    config.set_voice_overrides(store.get_setting(VOICES_KEY) or {})
+    resumable: list[str] = []
+    try:
+        # A render is server-side work: closing the browser never stopped it, and
+        # now neither does the container being replaced under it. Anything
+        # interrupted mid-render is picked straight back up.
+        resumable = store.recover_jobs()
+        # Model and voice choices made in the UI are stored, not exported to the
+        # environment, so they have to be loaded back before the first request.
+        config.set_model_overrides(store.get_setting(MODELS_KEY) or {})
+        config.set_voice_overrides(store.get_setting(VOICES_KEY) or {})
+    except Exception as exc:  # noqa: BLE001 - reported, never fatal
+        print(f"[sarideo] Baza bilan ishlanmadi: {pgstore.explain(exc)}", flush=True)
     # Provisioning the remote bucket is a network call. Never put one between
     # the process starting and the server accepting requests: a wrong storage
     # URL would stall startup and the platform reports that as a failed
@@ -1285,3 +1298,17 @@ async def project_file(path: str) -> FileResponse:
 @app.exception_handler(HTTPException)
 async def http_error(_, exc: HTTPException) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def unhandled(_, exc: Exception) -> JSONResponse:
+    """Turn a database that cannot be reached into an answer, not a stack trace.
+
+    Deliberately no fallback to the local file. Serving an empty library from
+    SQLite while the real one sits in Postgres would look exactly like the data
+    being gone, and somebody would re-upload it — which is worse than being told
+    plainly that the connection string is wrong.
+    """
+    if pgstore.enabled() and pgstore.is_connection_problem(exc):
+        return JSONResponse(status_code=503, content={"error": pgstore.explain(exc)})
+    raise exc
