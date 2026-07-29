@@ -17,6 +17,11 @@ from . import kenburns, overlays as ov
 
 SCENE_GAP = 0.25  # breath of silence appended to each narration segment
 
+# No scene may be shorter than this on the timeline. Long enough to survive the
+# shortest cross-fade with room to spare, short enough that a real scene is never
+# stretched by it.
+MIN_CLIP_SECONDS = 0.8
+
 # The rotation used when a scene has no transition of its own. `fade` repeats
 # on purpose: a video where every cut is a different flourish looks restless, so
 # the plainer one carries most of them.
@@ -439,7 +444,9 @@ def _video_graph(
         if chosen not in TRANSITION_CHOICES:
             chosen = TRANSITIONS[i % len(TRANSITIONS)]
         # Clip i-1 runs `transition` seconds past its narration; the fade eats it.
-        offset += durations[i - 1] - transition
+        # Never backwards: xfade with an offset behind the one before it emits an
+        # empty stream, and the failure surfaces as the encoder refusing to open.
+        offset = max(offset + durations[i - 1] - transition, offset + 0.05)
         label = f"[vx{i}]"
         parts.append(
             f"{current}[{i}:v]xfade=transition={chosen}"
@@ -628,6 +635,13 @@ async def assemble(
     if not clips:
         raise RenderError("There are no scene clips to assemble.")
 
+    # A clip has to be longer than the cross-fade that eats into it. A scene that
+    # somehow arrives at zero seconds — a voice that never recorded, an audio
+    # file that came back empty — drags every following offset backwards, xfade
+    # then produces nothing, and libx264 fails to open with "Invalid argument"
+    # over a graph that never had a chance. Floored here, where the numbers are,
+    # rather than diagnosed later from an ffmpeg dump.
+    clip_durations = [max(MIN_CLIP_SECONDS, float(d or 0.0)) for d in clip_durations]
     transition = min(config.TRANSITION_SECONDS, max(0.2, min(clip_durations) / 2))
     cues = [c for c in (sfx or []) if c.get("path")]
     profile = speed or config.speed_profile()
