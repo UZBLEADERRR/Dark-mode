@@ -1559,8 +1559,12 @@ function drawStage(job) {
     </div>`);
   }
 
-  // A run that stopped with work banked can be carried on instead of redone.
-  if (!busy && left?.left && job.status !== 'done') {
+  // A run that stopped can be carried on instead of redone. Offered whenever it
+  // failed, not only when the counters say something is outstanding: a project
+  // whose files vanished under it has a row for every scene and still cannot
+  // render, and that is exactly the case where being left with no way forward
+  // is worst. The resume checks the disk itself and remakes what is not there.
+  if (!busy && job.status !== 'done' && (left?.left || job.status === 'failed')) {
     p.push(`<div class="acts">
       <button class="btn primary" data-resume="${esc(job.id)}">Davom ettirish</button>
       <small class="note">Tayyor bo‘lganlari qayta yaratilmaydi.</small>
