@@ -1531,10 +1531,20 @@ function drawStage(job) {
   const made = (job.scenes || []).filter((s) => s.image_url || s.audio_url);
   const left = job.progress_detail;
   if (made.length && job.status !== 'done') {
-    const ready = made.filter((s) => s.image_url).length;
+    // Counted per kind, not as one number. A draft in the middle of its
+    // voice-over has ten recordings and no pictures yet, and reporting that as
+    // "0/28 ready" reads as nothing having happened — next to a strip visibly
+    // full of finished clips.
+    const done = [];
+    if (left) {
+      const spoken = Math.max(0, (left.scenes_total || 0) - (left.voices_left || 0));
+      const drawn = Math.max(0, (left.images_total || 0) - (left.images_left || 0));
+      if (left.scenes_total) done.push(`Ovoz ${spoken}/${left.scenes_total}`);
+      if (left.images_total) done.push(`Rasm ${drawn}/${left.images_total}`);
+    }
     p.push(`<div class="made">
       <div class="made-head">
-        <span>Tayyor bo‘lganlari · ${ready}/${left?.scenes_total || made.length}</span>
+        <span>${esc(done.join(' · ') || `Tayyor · ${made.length}`)}</span>
         ${left?.left ? `<em>${left.left} ta qoldi</em>` : ''}
       </div>
       <div class="made-strip">${made.map((s) => `
