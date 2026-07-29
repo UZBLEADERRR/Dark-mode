@@ -953,14 +953,21 @@ async function loadVoices() {
         return `<option value="${esc(v.id)}">${esc(v.label)}${about ? ` — ${esc(about)}` : ''}</option>`;
       }).join('');
     if (wanted && state.voices.some((v) => v.id === wanted)) select.value = wanted;
-    hint.textContent = data.error
-      ? data.error
-      : state.voices.length
-        ? `${state.voices.length} ta ovoz — ▶ bosib namunasini eshiting.`
-        : 'Bu provayder uchun ovoz ro’yxati yo’q.';
+    if (data.error || !state.voices.length) {
+      // A key that exists but is refused used to look like a working setup: the
+      // provider stayed selected, the app looked configured, and the only sign
+      // was a line of grey text. It is a failure, so it reads as one — and it
+      // offers the way out, because otherwise you are stuck on a provider that
+      // will refuse every scene.
+      voiceTrouble(hint, provider,
+                   data.error || 'Bu provayder uchun ovoz ro’yxati yo’q.');
+    } else {
+      hint.className = 'voice-hint';
+      hint.textContent = `${state.voices.length} ta ovoz — ▶ bosib namunasini eshiting.`;
+    }
   } catch (e) {
     select.innerHTML = '<option value="">standart ovoz</option>';
-    hint.textContent = e.message;
+    voiceTrouble(hint, provider, e.message);
   } finally {
     select.disabled = false;
   }
@@ -984,18 +991,48 @@ async function fillRevoice(provider, wanted) {
           return `<option value="${esc(v.id)}">${esc(v.label)}${about ? ` — ${esc(about)}` : ''}</option>`;
         }).join('');
       if (wanted && (data.voices || []).some((v) => v.id === wanted)) select.value = wanted;
-      hint.textContent = data.error || (data.voices || []).length
-        ? (data.error || `${data.voices.length} ta ovoz — ▶ bosib eshiting.`)
-        : 'Bu provayder uchun ovoz ro’yxati yo’q.';
+      if (data.error || !(data.voices || []).length) {
+        voiceTrouble(hint, chosen,
+                     data.error || 'Bu provayder uchun ovoz ro’yxati yo’q.');
+        // Switching from inside the dialog has to move the dialog's own select,
+        // not the composer's, or the choice would not be the one you confirm.
+        $('[data-swap]', hint)?.addEventListener('click', () => {
+          $('#revoice-provider').value = $('#tts_provider').value;
+          wanted = '';
+          load();
+        });
+      } else {
+        hint.className = 'voice-hint';
+        hint.textContent = `${data.voices.length} ta ovoz — ▶ bosib eshiting.`;
+      }
     } catch (e) {
       select.innerHTML = '<option value="">standart ovoz</option>';
-      hint.textContent = e.message;
+      voiceTrouble(hint, chosen, e.message);
     }
   };
   $('#revoice-provider').addEventListener('change', () => { wanted = ''; load(); });
   $('#revoice-hear').addEventListener('click', () =>
     playVoiceSample($('#revoice-provider').value, select.value, $('#revoice-hear')));
   await load();
+}
+
+// Say what went wrong, and give the one action that gets past it. Being told
+// "401" is only useful next to a button that switches to a provider that works.
+function voiceTrouble(hint, provider, message) {
+  const others = Object.entries(state.health?.tts_providers || {})
+    .filter(([name, ready]) => ready && name !== provider)
+    .map(([name]) => name);
+
+  hint.className = 'voice-hint bad';
+  hint.innerHTML = esc(message) + (others.length
+    ? ` <button type="button" class="linky" data-swap="${esc(others[0])}">${esc(others[0])}ga o‘tish</button>`
+    : '');
+  $('[data-swap]', hint)?.addEventListener('click', () => {
+    $('#tts_provider').value = others[0];
+    loadVoices();
+    drawSummary();
+    toast(`Ovoz provayderi ${others[0]} ga o‘zgartirildi`);
+  });
 }
 
 let voiceAudio = null;

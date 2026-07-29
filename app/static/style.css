@@ -1074,6 +1074,15 @@ input[type="range"]::-moz-range-thumb {
 /* The same select-plus-audition pair, but sitting under its own label rather
    than beside one — which is what a dialog has room for. */
 .voice-pick { display: flex; gap: 7px; align-items: stretch; }
+
+/* A refused key is a failure, not a footnote — it reads as one, and carries
+   the action that gets past it. */
+.voice-hint.bad { color: #ffb0a3; }
+.linky {
+  padding: 0; color: var(--accent); font-size: inherit;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.linky:hover { filter: brightness(1.2); }
 .voice-pick select { flex: 1; min-width: 0; }
 .hear {
   flex: 0 0 auto; width: 40px;
