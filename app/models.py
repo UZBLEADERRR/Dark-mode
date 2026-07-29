@@ -169,11 +169,32 @@ class CreateJobRequest(BaseModel):
     brand_logo: bool = True
     # fast | balanced | quality — trades encode time against picture quality.
     render_speed: Literal["fast", "balanced", "quality"] = "balanced"
+    # How often the picture changes. steady = one image per line, as before;
+    # dynamic and fast split longer lines across two to four, which costs that
+    # many more images to generate.
+    shot_pace: Literal["steady", "dynamic", "fast"] = "steady"
     # False stops after the draft so scenes can be reviewed and edited first.
     auto_render: bool = True
 
     def resolved_format(self) -> dict:
         return config.FORMATS.get(self.video_format, config.FORMATS["16:9"])
+
+
+class ShotIn(BaseModel):
+    """One picture inside a scene. Order in the list is order on screen."""
+
+    prompt: str = Field(default="", max_length=2000)
+    motion: str = ""
+    motion_strength: float = Field(default=1.0, ge=0.2, le=2.5)
+    # How this shot arrives. "" is a straight cut, which is what fast cutting
+    # usually wants; anything else cross-fades in.
+    transition: str = ""
+    # Relative share of the scene's time. Only the ratio between a scene's shots
+    # matters, so the absolute number is never meaningful on its own.
+    weight: float = Field(default=1.0, ge=0.25, le=4.0)
+    # Sent back unchanged by the editor so an edit does not orphan the picture
+    # that has already been drawn for this shot.
+    sid: str = Field(default="", max_length=64)
 
 
 class ScenePatch(BaseModel):
@@ -192,6 +213,8 @@ class ScenePatch(BaseModel):
     sfx_id: str | None = None
     sfx_volume: float | None = Field(default=None, ge=0, le=4)
     sfx_offset: float | None = Field(default=None, ge=0, le=600)
+    # An empty list collapses the scene back to a single picture.
+    shots: list[ShotIn] | None = None
 
 
 class RegenerateRequest(BaseModel):

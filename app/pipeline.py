@@ -26,6 +26,7 @@ from typing import Any, Callable
 from . import config, skills, store
 from .providers import align, images, storage, tts
 from .render import overlays as ov
+from .render import shots
 from .render import subtitles as subs
 from .render import video
 
@@ -299,6 +300,17 @@ def _ensure_sids(scenes: list[dict]) -> list[dict]:
         # One place where the shape is completed, so nothing downstream has to
         # guess whether a scene from an older job has a layer list.
         scene.setdefault("overlays", [])
+        scene.setdefault("shots", [])
+        # Shots are named from the scene, so a scene that moves takes its
+        # pictures with it and never lands on another scene's files.
+        for j, shot in enumerate(scene["shots"]):
+            if not shot.get("sid"):
+                shot["sid"] = f"{sid}-{j}"
+        seen: set[str] = set()
+        for shot in scene["shots"]:
+            while shot["sid"] in seen:
+                shot["sid"] = f"{shot['sid']}x"
+            seen.add(shot["sid"])
     return scenes
 
 
@@ -362,6 +374,30 @@ def public_scene(job_id: str, scene: dict) -> dict:
         "words": scene.get("words") or [],
         "needs_image": bool(scene.get("needs_image")),
         "needs_voice": bool(scene.get("needs_voice")),
+        # Always the real list, so an unsplit scene reports no shots rather than
+        # a phantom one the editor would then offer to delete.
+        "shots": [public_shot(job_id, scene, s, i)
+                  for i, s in enumerate(scene.get("shots") or [])],
+    }
+
+
+def public_shot(job_id: str, scene: dict, shot: dict, position: int) -> dict:
+    total = sum(max(0.25, float(s.get("weight") or 1.0)) for s in scene.get("shots") or [shot])
+    duration = float(scene.get("audio_duration") or 0.0)
+    weight = max(0.25, float(shot.get("weight") or 1.0))
+    return {
+        "sid": shot.get("sid", ""),
+        "position": position,
+        "prompt": shot.get("prompt", ""),
+        "motion": shot.get("motion", "zoom_in"),
+        "motion_strength": round(float(shot.get("motion_strength") or 1.0), 2),
+        "transition": shot.get("transition") or "",
+        "weight": round(weight, 2),
+        # What this shot will actually be on screen for — the number the user is
+        # really choosing when they drag its share.
+        "seconds": round(duration * weight / total, 2) if total else 0.0,
+        "image_url": _file_url(shot.get("image_path"), shot.get("image_version", 0)),
+        "needs_image": bool(shot.get("needs_image") or not shot.get("image_path")),
     }
 
 
@@ -438,6 +474,27 @@ async def _voice_scenes(
     return warnings
 
 
+def _picture_work(targets: list[dict], only_stale: bool = False) -> list[tuple[dict, dict | None]]:
+    """Every picture that needs drawing, as (scene, shot) — shot None if unsplit."""
+    work: list[tuple[dict, dict | None]] = []
+    for scene in targets:
+        holders = scene.get("shots") or []
+        if not holders:
+            if not only_stale or scene.get("needs_image") or not scene.get("image_path"):
+                work.append((scene, None))
+            continue
+        for shot in holders:
+            # Re-rendering after an edit should redraw the shot that changed,
+            # not every shot in the scene it happens to sit in.
+            if not only_stale or shot.get("needs_image") or not shot.get("image_path"):
+                work.append((scene, shot))
+    return work
+
+
+def _wants_picture(scene: dict) -> bool:
+    return bool(_picture_work([scene], only_stale=True))
+
+
 async def _render_images(
     *,
     scenes: list[dict],
@@ -450,37 +507,56 @@ async def _render_images(
     job_id: str,
     base_progress: int = 48,
     span: int = 24,
+    only_stale: bool = False,
 ) -> list[str]:
     image_dir = workdir / "images"
     warnings: list[str] = []
     done = 0
     lock = asyncio.Lock()
+    # A split scene needs a picture per shot, not per scene, so the unit of work
+    # here is a shot. `None` stands for a scene that was never split and keeps
+    # its picture on the scene itself.
+    work = _picture_work(targets, only_stale=only_stale)
+    total = max(len(work), 1)
 
-    async def one(scene: dict) -> None:
+    async def one(scene: dict, shot: dict | None) -> None:
         nonlocal done
         refs = [hero_paths[h] for h in scene.get("hero_ids", []) if h in hero_paths]
+        holder = shot if shot is not None else scene
+        label = f"Scene {scene['index'] + 1}"
+        if shot is not None and len(scene.get("shots") or []) > 1:
+            label += f" shot {scene['shots'].index(shot) + 1}"
+
         path, warning = await images.generate_image(
-            prompt=scene["image_prompt"],
-            negative_prompt=scene.get("negative_prompt", ""),
+            prompt=holder.get("prompt") or holder.get("image_prompt") or scene["image_prompt"],
+            negative_prompt=holder.get("negative_prompt") or scene.get("negative_prompt", ""),
             reference_paths=refs,
             aspect=aspect,
             size=size,
             provider=provider,
-            out_path=image_dir / f"scene_{scene['sid']}.png",
-            on_retry=_retry_note(job_id, f"Scene {scene['index'] + 1} image"),
+            out_path=image_dir / (f"shot_{shot['sid']}.png" if shot is not None
+                                  else f"scene_{scene['sid']}.png"),
+            on_retry=_retry_note(job_id, f"{label} image"),
         )
-        scene["image_path"] = str(path)
-        scene["needs_image"] = False
-        scene["image_version"] = int(scene.get("image_version", 0)) + 1
+        holder["image_path"] = str(path)
+        holder["needs_image"] = False
+        holder["image_version"] = int(holder.get("image_version", 0)) + 1
+        if shot is not None:
+            # The scene's own thumbnail follows its first shot, so the filmstrip
+            # and the editor keep showing something recognisable.
+            scene["needs_image"] = any(s.get("needs_image") for s in scene["shots"])
+            if scene["shots"][0] is shot:
+                scene["image_path"] = str(path)
+                scene["image_version"] = int(scene.get("image_version", 0)) + 1
         async with lock:
             done += 1
             if warning:
-                warnings.append(f"Scene {scene['index'] + 1}: {warning}")
-            _progress(job_id, "images", base_progress + int(span * done / max(len(targets), 1)),
-                      f"Scene image {done}/{len(targets)}")
+                warnings.append(f"{label}: {warning}")
+            _progress(job_id, "images", base_progress + int(span * done / total),
+                      f"Scene image {done}/{total}")
 
-    if targets:
-        await _gather_limited([one(scene) for scene in targets], config.IMAGE_CONCURRENCY)
+    if work:
+        await _gather_limited([one(s, sh) for s, sh in work], config.IMAGE_CONCURRENCY)
     return warnings
 
 
@@ -598,6 +674,20 @@ async def run_draft(job_id: str) -> None:
         store.update_job(job_id, result={"title": script.get("title"),
                                          "scene_count": len(scenes)})
 
+        # --- shot list --------------------------------------------------------
+        # Decided before the prompts, because a scene covered by three pictures
+        # needs three prompts written for it, not one prompt used three times.
+        pace = (request.get("shot_pace") or "steady").lower()
+        if pace != "steady":
+            for scene in scenes:
+                count = shots.wanted_count(len(_tokens(scene["narration"])), pace)
+                scene["shots"] = [shots.blank(j) for j in range(count)] if count > 1 else []
+            _ensure_sids(scenes)
+            extra = sum(len(s["shots"]) for s in scenes if s["shots"])
+            if extra:
+                _progress(job_id, "prompts", 22,
+                          f"{extra} kadr — ba'zi sahnalar bir nechta rasmga bo'lindi")
+
         # --- image prompts ---------------------------------------------------
         _progress(job_id, "prompts", 24, "Designing the look of each scene")
         prompt_pack = await skills.build_image_prompts(
@@ -606,6 +696,12 @@ async def run_draft(job_id: str) -> None:
             title=script.get("title", request["topic"]),
         )
         scenes = _ensure_sids(prompt_pack["scenes"])
+        # Whatever the Imagesmith returned, every shot ends up with a prompt of
+        # its own. A model that answers per scene rather than per shot would
+        # otherwise draw the same still two or three times and the cuts would
+        # be invisible.
+        for scene in scenes:
+            shots.backfill_prompts(scene)
         _apply_brand(scenes, request, script.get("hook", ""))
 
         # --- voice ------------------------------------------------------------
@@ -661,7 +757,7 @@ async def run_render(job_id: str) -> None:
 
         # Any scene edited since the last render still needs its asset built.
         stale_voice = [s for s in scenes if s.get("needs_voice") and not uploaded_audio]
-        stale_image = [s for s in scenes if s.get("needs_image") or not s.get("image_path")]
+        stale_image = [s for s in scenes if _wants_picture(s)]
 
         if stale_voice:
             _progress(job_id, "voice", 24, f"Re-recording {len(stale_voice)} edited scene(s)",
@@ -681,7 +777,7 @@ async def run_render(job_id: str) -> None:
                 scenes=scenes, targets=stale_image, workdir=workdir, hero_paths=hero_paths,
                 provider=(request.get("image_provider") or config.IMAGE_PROVIDER).lower(),
                 aspect=fmt["aspect"], size=(width, height), job_id=job_id,
-                base_progress=40, span=18,
+                base_progress=40, span=18, only_stale=True,
             )
 
         if uploaded_audio:
@@ -738,6 +834,9 @@ async def run_render(job_id: str) -> None:
         asset_paths = _materialize_assets(workdir, scenes)
         speed = config.speed_profile(request.get("render_speed"))
         clip_durations = [s["audio_duration"] + transition for s in scenes]
+        # The cut between two shots of the same scene is quicker than the one
+        # between scenes — it is a change of angle, not a change of subject.
+        inner = max(0.15, min(0.35, transition / 2))
         clips: list[Path] = [workdir / f"clip_{s['index']:03d}.mp4" for s in scenes]
         made = 0
         lock = asyncio.Lock()
@@ -749,10 +848,16 @@ async def run_render(job_id: str) -> None:
                 for layer in ov.image_layers(scene, float(scene["audio_duration"]))
                 if layer.get("asset_id") in asset_paths
             ]
+            # A scene may be covered by several pictures. The slices are worked
+            # out here, against the length this clip will actually run, so the
+            # shots always add up to the narration they sit under.
+            cuts = shots.plan(scene, scene["audio_duration"] + transition, inner)
+            for cut in cuts:
+                cut["image"] = Path(cut.get("image_path") or scene["image_path"])
             await video.make_scene_clip(
-                image=Path(scene["image_path"]), motion=scene.get("motion", "zoom_in"),
+                shots=cuts,
                 duration=scene["audio_duration"] + transition, width=width, height=height,
-                strength=float(scene.get("motion_strength") or 1.0),
+                inner_transition=inner,
                 image_overlays=picture_layers, speed=speed,
                 out_path=workdir / f"clip_{scene['index']:03d}.mp4",
             )

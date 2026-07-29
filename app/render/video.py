@@ -94,28 +94,96 @@ async def probe_duration(path: Path) -> float:
         raise RenderError(f"Could not read the duration of {path.name}") from exc
 
 
+def _shot_graph(
+    cuts: list[dict], width: int, height: int, fps: int, inner: float,
+    supersample: float,
+) -> tuple[str, str, int]:
+    """Animate each shot and join them; return (graph, label, total frames).
+
+    `cuts[i]` needs `seconds`, `motion`, `motion_strength` and optionally
+    `transition`. A shot with no transition is a straight cut, which is what
+    fast cutting normally wants; anything else cross-fades in, and the fade eats
+    the overlap the slices were grown to pay for.
+    """
+    parts: list[str] = []
+    frames = [max(2, int(round(float(c["seconds"]) * fps))) for c in cuts]
+
+    for i, cut in enumerate(cuts):
+        vf = kenburns.build_filter(
+            motion=cut.get("motion", "zoom_in"), frames=frames[i],
+            width=width, height=height, fps=fps,
+            strength=float(cut.get("motion_strength") or 1.0), supersample=supersample,
+        )
+        # setpts restarts each shot's clock at zero. Without it xfade reads the
+        # offsets against whatever timestamps the still came in with.
+        parts.append(f"[{i}:v]{vf},setpts=PTS-STARTPTS[sh{i}]")
+
+    if len(cuts) == 1:
+        return ";".join(parts), "[sh0]", frames[0]
+
+    fades = [(c.get("transition") or "").strip() for c in cuts]
+    if not any(f in TRANSITION_CHOICES for f in fades[1:]):
+        # Every join is a hard cut, so the frames simply add up.
+        joined = "".join(f"[sh{i}]" for i in range(len(cuts)))
+        parts.append(f"{joined}concat=n={len(cuts)}:v=1:a=0[shots]")
+        return ";".join(parts), "[shots]", sum(frames)
+
+    current = "[sh0]"
+    offset = 0.0
+    for i in range(1, len(cuts)):
+        chosen = fades[i] if fades[i] in TRANSITION_CHOICES else "fade"
+        offset += float(cuts[i - 1]["seconds"]) - inner
+        label = f"[shx{i}]"
+        parts.append(
+            f"{current}[sh{i}]xfade=transition={chosen}"
+            f":duration={inner}:offset={offset:.3f}{label}"
+        )
+        current = label
+
+    total = sum(float(c["seconds"]) for c in cuts) - inner * (len(cuts) - 1)
+    return ";".join(parts), current, max(2, int(round(total * fps)))
+
+
 async def make_scene_clip(
     *,
-    image: Path,
-    motion: str,
     duration: float,
     width: int,
     height: int,
     out_path: Path,
+    shots: list[dict] | None = None,
+    image: Path | None = None,
+    motion: str = "zoom_in",
     strength: float = 1.0,
+    inner_transition: float = 0.0,
     image_overlays: list[dict] | None = None,
     speed: dict | None = None,
 ) -> Path:
-    """Render one still into a moving, silent clip, with its picture layers on top."""
+    """Render a scene's picture: one still or several, animated and joined.
+
+    Multi-shot scenes are built in a single ffmpeg pass — animate, join, then
+    lay the overlays on top — so cutting a scene into three costs one encode
+    rather than four, and the overlays still see the whole scene rather than
+    whichever shot they happen to land on.
+    """
     fps = config.FPS
     profile = speed or config.speed_profile()
-    frames = max(2, int(round(duration * fps)))
-    vf = kenburns.build_filter(
-        motion=motion, frames=frames, width=width, height=height, fps=fps,
-        strength=strength, supersample=profile["supersample"],
-    )
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cuts = [dict(s) for s in (shots or []) if s.get("image")]
+    if not cuts:
+        if image is None:
+            raise RenderError("A scene clip needs at least one picture.")
+        cuts = [{"image": image, "motion": motion, "motion_strength": strength,
+                 "seconds": duration}]
+    if len(cuts) == 1:
+        cuts[0]["seconds"] = duration
 
+    inner = inner_transition if len(cuts) > 1 else 0.0
+    graph, label, frames = _shot_graph(
+        cuts, width, height, fps, inner, profile["supersample"])
+    inputs: list[str] = []
+    for cut in cuts:
+        inputs += ["-i", str(cut["image"])]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     tail = [
         "-frames:v", str(frames),
         "-r", str(fps),
@@ -129,35 +197,34 @@ async def make_scene_clip(
         str(out_path),
     ]
 
-    layers = [l for l in (image_overlays or []) if l.get("path")]
-    if not layers:
+    async def render(with_layers: bool) -> None:
+        parts = [graph]
+        final = label
+        extra: list[str] = []
+        if with_layers:
+            extra, chain, final = ov.image_chain(
+                layers, width=width, height=height, base_label=label,
+                first_input=len(cuts),
+            )
+            parts += chain
         await _run([
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(image), "-vf", vf, *tail,
+            *inputs, *extra,
+            "-filter_complex", ";".join(p for p in parts if p),
+            "-map", final, *tail,
         ])
+
+    layers = [l for l in (image_overlays or []) if l.get("path")]
+    if not layers:
+        await render(with_layers=False)
         return out_path
 
-    extra_inputs, parts, final = ov.image_chain(
-        layers, width=width, height=height, base_label="[bg]", first_input=1
-    )
-    graph = ";".join([f"[0:v]{vf}[bg]", *parts])
-
-    async def attempt(args: list[str]) -> None:
-        await _run(args)
-
     try:
-        await attempt([
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(image), *extra_inputs,
-            "-filter_complex", graph, "-map", final, *tail,
-        ])
+        await render(with_layers=True)
     except RenderError:
         # A broken layer must never cost someone the whole video: fall back to
         # the plain scene and let the render finish without it.
-        await attempt([
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-            "-i", str(image), "-vf", vf, *tail,
-        ])
+        await render(with_layers=False)
     return out_path
 
 

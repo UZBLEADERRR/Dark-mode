@@ -21,6 +21,8 @@ const state = {
   format: '16:9',
   mode: 'topic',
   speed: 'balanced',
+  pace: 'steady',
+  paces: [],
   cores: 0,
   view: 'create',
   activeId: null,
@@ -334,6 +336,10 @@ function drawSummary() {
     ['music', music.value ? music.selectedOptions[0].text : null],
     ['subtitle', $('#burn_subtitles').checked
       ? $('#subtitle_style').selectedOptions[0]?.text || 'subtitr' : 'subtitrsiz'],
+    // Only worth a chip when it is not the default — a steady pace is what a
+    // video has always done and says nothing about this one.
+    ['more', state.pace !== 'steady'
+      ? (state.paces.find((p) => p.id === state.pace)?.label || state.pace) : null],
   ]).filter(([, value]) => value);
 
   $('#summary').innerHTML = chips.map(([key, value]) =>
@@ -384,6 +390,18 @@ async function loadHealth() {
     syncSpeedNote();
   }));
   syncSpeedNote(h.cores);
+
+  // How often the picture changes. Every step up is more images to generate,
+  // which is the real cost, so the hint says so rather than only naming a feel.
+  state.paces = h.shot_paces || [];
+  $('#pace-seg').innerHTML = state.paces.map((p) =>
+    `<button type="button" data-pace="${esc(p.id)}" aria-pressed="${p.id === state.pace}">${esc(p.label)}</button>`).join('');
+  $$('#pace-seg button').forEach((b) => b.addEventListener('click', () => {
+    state.pace = b.dataset.pace;
+    $$('#pace-seg button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+    syncPaceNote();
+  }));
+  syncPaceNote();
 
   $('#dub_source').innerHTML = '<option value="">avtomatik aniqlansin</option>' +
     h.languages.map((l) => `<option value="${esc(l.id)}">${esc(l.label)}</option>`).join('');
@@ -896,6 +914,12 @@ const SPEED_NOTES = {
   quality: 'Eng tiniq, lekin sezilarli sekinroq.',
 };
 
+function syncPaceNote() {
+  const chosen = (state.paces || []).find((p) => p.id === state.pace);
+  $('#pace-note').textContent = chosen?.hint || '';
+  drawSummary();
+}
+
 function syncSpeedNote(cores) {
   if (cores) state.cores = cores;
   const note = SPEED_NOTES[state.speed] || '';
@@ -1027,6 +1051,7 @@ async function submitDub() {
   body.append('source_language', $('#dub_source').value);
   body.append('original_volume', $('#dub_original').value);
   body.append('render_speed', state.speed);
+  body.append('shot_pace', state.pace);
   body.append('topic', file.name.replace(/\.[^.]+$/, ''));
   if ($('#tts_provider').value) body.append('tts_provider', $('#tts_provider').value);
   if ($('#voice_id').value) body.append('voice_id', $('#voice_id').value);
@@ -1086,6 +1111,7 @@ $('#submit-btn').addEventListener('click', async () => {
     subtitle_style: $('#subtitle_style').value,
     burn_subtitles: $('#burn_subtitles').checked,
     render_speed: state.speed,
+    shot_pace: state.pace,
     auto_hook: $('#auto_hook').checked,
     brand_logo: $('#brand_logo').checked,
     auto_render: !$('#review_first').checked,
@@ -1283,6 +1309,7 @@ function drawStage(job) {
 const ED = {
   job: null, scenes: [], style: null, burn: true,
   i: 0, sel: null, tab: 'scene',
+  shot: 0,          // which shot of the current scene the panel is editing
   dirty: new Set(), styleDirty: false, timer: null, saving: 0, busy: false,
 };
 
@@ -1377,6 +1404,16 @@ async function flush() {
           sfx_id: s.sfx_id || '',
           sfx_volume: s.sfx_volume ?? 1,
           sfx_offset: s.sfx_offset ?? 0,
+          // The sid rides back untouched — it is what tells the server this is
+          // the same shot, so a reorder does not redraw pictures it already has.
+          shots: (s.shots || []).map((sh) => ({
+            sid: sh.sid || '',
+            prompt: sh.prompt || '',
+            motion: sh.motion || 'zoom_in',
+            motion_strength: sh.motion_strength ?? 1,
+            transition: sh.transition || '',
+            weight: sh.weight ?? 1,
+          })),
         }),
       });
     }
@@ -1434,7 +1471,7 @@ function buildStudio(job) {
   }));
   ED.style = { ...(job.caption_style || {}) };
   ED.burn = job.burn_subtitles !== false;
-  if (!sameJob) { ED.i = 0; ED.sel = null; ED.tab = 'scene'; }
+  if (!sameJob) { ED.i = 0; ED.sel = null; ED.tab = 'scene'; ED.shot = 0; }
   ED.i = Math.max(0, Math.min(ED.i, ED.scenes.length - 1));
   if (!selected()) ED.sel = null;
   stopPreview();
@@ -1459,6 +1496,8 @@ function drawFilmstrip() {
       ${s.image_url ? `<img src="${esc(s.image_url)}" alt="" loading="lazy" draggable="false" />` : '<i class="blank"></i>'}
       <b>${i + 1}</b>
       ${count ? `<em>${count}</em>` : ''}
+      ${(s.shots || []).length > 1
+        ? `<u class="cuts" title="${s.shots.length} kadr">${s.shots.length}</u>` : ''}
       ${s.sfx_id ? '<u class="cue" title="tovush effekti"></u>' : ''}
       <div class="move">
         <button data-move="-1"${i === 0 ? ' disabled' : ''} aria-label="Chapga surish">‹</button>
@@ -1480,6 +1519,7 @@ function drawFilmstrip() {
       if (e.target.closest('[data-move]')) return;
       if (ED.i === index) return;
       ED.i = index;
+      ED.shot = 0;
       ED.sel = null;
       stopPreview();
       drawAll();
@@ -1923,9 +1963,9 @@ function wire(root, target, after) {
   });
 }
 
-function slider(key, label, min, max, step, value, suffix = '') {
+function slider(key, label, min, max, step, value, suffix = '', attr = 'data-k') {
   return `<label class="f rng"><span>${esc(label)}<b>${Number(value).toFixed(2).replace(/\.?0+$/, '')}${suffix}</b></span>
-    <input type="range" data-k="${key}" min="${min}" max="${max}" step="${step}" value="${value}" /></label>`;
+    <input type="range" ${attr}="${key}" min="${min}" max="${max}" step="${step}" value="${value}" /></label>`;
 }
 
 function swatches(key, value) {
@@ -1947,6 +1987,149 @@ function wireSwatches(root, target, after) {
 }
 
 // ── panel: scene ──────────────────────────────────────────────────
+// ── shots ─────────────────────────────────────────────────────────
+// One line of narration can be covered by up to four pictures. An unsplit scene
+// shows exactly what it always did — a prompt and a camera move — and only grows
+// the strip once there is more than one picture to arrange.
+
+const MAX_SHOTS = 4;
+
+function shotList(s) {
+  // The single implicit shot is built here rather than on the server, so the
+  // editor can talk about "shot 1" before the scene has ever been split.
+  if (s.shots?.length) return s.shots;
+  return [{
+    sid: '', prompt: s.image_prompt || '', motion: s.motion || 'zoom_in',
+    motion_strength: s.motion_strength ?? 1, transition: '', weight: 1,
+    seconds: s.duration || 0, image_url: s.image_url, needs_image: s.needs_image,
+  }];
+}
+
+function shotBlock(s, motions, transitions) {
+  const list = shotList(s);
+  const split = list.length > 1;
+  const i = Math.min(ED.shot || 0, list.length - 1);
+  const shot = list[i];
+
+  // Worked out here rather than read back from the server, so dragging a share
+  // moves the numbers as you drag instead of on the next save.
+  const share = list.reduce((sum, sh) => sum + (Number(sh.weight) || 1), 0);
+  const seconds = (sh) => (s.duration || 0) * (Number(sh.weight) || 1) / (share || 1);
+
+  const tabs = list.map((sh, j) => `
+    <button type="button" class="shot-tab${j === i ? ' on' : ''}" data-shot="${j}">
+      ${sh.image_url ? `<img src="${esc(sh.image_url)}" alt="" loading="lazy" />`
+        : '<i class="shot-blank"></i>'}
+      <b>${j + 1}</b>
+      ${split ? `<em>${seconds(sh).toFixed(1)}s</em>` : ''}
+    </button>`).join('');
+
+  return `
+    <div class="f shots">
+      <span>Kadrlar — bitta matn ostida ${split ? `${list.length} ta rasm` : 'bitta rasm'}</span>
+      <div class="shot-strip">
+        ${tabs}
+        ${list.length < MAX_SHOTS
+          ? '<button type="button" class="shot-add" data-shot-add>+</button>' : ''}
+      </div>
+      ${split ? `<div class="shot-bar">${list.map((sh, j) => `
+        <i class="${j === i ? 'on' : ''}" style="flex:${sh.weight || 1}"></i>`).join('')}</div>` : ''}
+    </div>
+
+    <label class="f"><span>${split ? `${i + 1}-kadr prompti` : 'Rasm prompti'}</span>
+      <textarea data-sk="prompt" rows="3">${esc(shot.prompt || '')}</textarea></label>
+
+    <div class="f2">
+      <label class="f"><span>Kamera harakati</span>
+        <select data-sk="motion">${motions.map((m) =>
+          `<option value="${esc(m)}"${m === shot.motion ? ' selected' : ''}>${esc(MOTIONS[m] || m)}</option>`).join('')}</select></label>
+      ${split ? `<label class="f"><span>Bu kadr qanday kiradi</span>
+        <select data-sk="transition">
+          <option value=""${shot.transition ? '' : ' selected'}>tez kesish</option>
+          ${transitions.map((t) =>
+            `<option value="${esc(t)}"${t === shot.transition ? ' selected' : ''}>${esc(TRANSITIONS[t] || t)}</option>`).join('')}
+        </select></label>` : ''}
+    </div>
+    ${slider('motion_strength', 'Harakat kuchi', 0.3, 1.8, 0.05,
+             shot.motion_strength ?? 1, '×', 'data-sk')}
+    ${split ? `
+      ${slider('weight', 'Ekranda turish ulushi', 0.25, 4, 0.25, shot.weight ?? 1, '×', 'data-sk')}
+      <div class="sc-acts tight">
+        <button class="btn ghost" data-shot-move="-1"${i === 0 ? ' disabled' : ''}>‹ chapga</button>
+        <button class="btn ghost" data-shot-move="1"${i === list.length - 1 ? ' disabled' : ''}>o‘ngga ›</button>
+        <button class="btn ghost" data-shot-drop>Kadrni o‘chirish</button>
+      </div>` : ''}`;
+}
+
+function writeShots(s, list) {
+  // One shot is not a split scene: send an empty list and the server folds it
+  // back into a plain scene, so the editor never shows a lone tab.
+  s.shots = list.length > 1 ? list : [];
+  if (list.length === 1) {
+    s.image_prompt = list[0].prompt;
+    s.motion = list[0].motion;
+    s.motion_strength = list[0].motion_strength;
+  }
+  ED.shot = Math.min(ED.shot || 0, Math.max(0, list.length - 1));
+  drawScenePanel();
+  drawFilmstrip();
+  touch();
+}
+
+function wireShots(host, s) {
+  $$('[data-shot]', host).forEach((b) => b.addEventListener('click', () => {
+    ED.shot = Number(b.dataset.shot);
+    drawScenePanel();
+  }));
+
+  $$('[data-sk]', host).forEach((el) => el.addEventListener('input', () => {
+    const list = shotList(s).map((x) => ({ ...x }));
+    const i = Math.min(ED.shot || 0, list.length - 1);
+    const key = el.dataset.sk;
+    list[i][key] = el.type === 'range' || key === 'weight' ? Number(el.value) : el.value;
+    // A prompt edit changes what gets drawn, so redraw the strip to show the
+    // picture is now stale; the rest can update in place without a rebuild.
+    s.shots = list.length > 1 ? list : [];
+    if (list.length === 1) {
+      s.image_prompt = list[0].prompt;
+      s.motion = list[0].motion;
+      s.motion_strength = list[0].motion_strength;
+    }
+    if (key === 'weight') drawScenePanel();
+    touch();
+  }));
+
+  $('[data-shot-add]', host)?.addEventListener('click', () => {
+    const list = shotList(s).map((x) => ({ ...x }));
+    if (list.length >= MAX_SHOTS) return;
+    // A new shot inherits nothing but the scene's subject — the server fills in
+    // a framing so it is a different angle rather than the same picture again.
+    list.push({ sid: '', prompt: '', motion: 'zoom_out', motion_strength: 1,
+                transition: '', weight: 1, seconds: 0, needs_image: true });
+    ED.shot = list.length - 1;
+    writeShots(s, list);
+    toast('Kadr qo‘shildi — render qilganda rasmi chiziladi');
+  });
+
+  $('[data-shot-drop]', host)?.addEventListener('click', () => {
+    const list = shotList(s).map((x) => ({ ...x }));
+    if (list.length < 2) return;
+    list.splice(Math.min(ED.shot || 0, list.length - 1), 1);
+    ED.shot = Math.max(0, (ED.shot || 0) - 1);
+    writeShots(s, list);
+  });
+
+  $$('[data-shot-move]', host).forEach((b) => b.addEventListener('click', () => {
+    const list = shotList(s).map((x) => ({ ...x }));
+    const from = Math.min(ED.shot || 0, list.length - 1);
+    const to = from + Number(b.dataset.shotMove);
+    if (to < 0 || to >= list.length) return;
+    list.splice(to, 0, list.splice(from, 1)[0]);
+    ED.shot = to;
+    writeShots(s, list);
+  }));
+}
+
 function drawScenePanel() {
   const s = scene();
   const host = $('#tab-scene');
@@ -1959,20 +2142,16 @@ function drawScenePanel() {
   host.innerHTML = `
     <label class="f"><span>Matn — ovoz va subtitr shundan chiqadi</span>
       <textarea data-k="narration" rows="3">${esc(s.narration)}</textarea></label>
-    <label class="f"><span>Rasm prompti</span>
-      <textarea data-k="image_prompt" rows="3">${esc(s.image_prompt)}</textarea></label>
+
+    ${shotBlock(s, motions, transitions)}
 
     <div class="f2">
-      <label class="f"><span>Kamera harakati</span>
-        <select data-k="motion">${motions.map((m) =>
-          `<option value="${esc(m)}"${m === s.motion ? ' selected' : ''}>${esc(MOTIONS[m] || m)}</option>`).join('')}</select></label>
-      <label class="f"><span>O‘tish effekti</span>
+      <label class="f"><span>O‘tish effekti — oldingi sahnadan</span>
         <select data-k="transition"><option value="">avtomatik</option>
           ${transitions.map((t) =>
             `<option value="${esc(t)}"${t === s.transition ? ' selected' : ''}>${esc(TRANSITIONS[t] || t)}</option>`).join('')}
         </select></label>
     </div>
-    ${slider('motion_strength', 'Harakat kuchi', 0.3, 1.8, 0.05, s.motion_strength ?? 1, '×')}
 
     <label class="f"><span>Ekran yozuvi — sahna boshida chiqadi</span>
       <input data-k="on_screen_text" value="${esc(s.on_screen_text || '')}" placeholder="ixtiyoriy" /></label>
@@ -2006,6 +2185,7 @@ function drawScenePanel() {
     if (key === 'sfx_id') drawFilmstrip();
     touch();
   });
+  wireShots(host, s);
 
   $('[data-a="drop-scene"]', host)?.addEventListener('click', async () => {
     if (!confirm(`${s.index + 1}-sahnani o‘chirasizmi?`)) return;
