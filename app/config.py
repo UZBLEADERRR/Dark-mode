@@ -130,6 +130,15 @@ TTS_RATE_LIMIT = _int("TTS_RATE_LIMIT", _TTS_RATE_DEFAULTS["gemini"])
 _TTS_RATE_FOR_ALL = bool(_env("TTS_RATE_LIMIT"))
 TTS_RATE_PATIENCE = float(_env("TTS_RATE_PATIENCE", "900"))
 
+# Reading a whole passage in one request rather than a line at a time. Only
+# ElevenLabs can do this honestly: it returns a timing for every character, so
+# the recording can be cut back into scenes at the exact place each line ends.
+# Fifty-eight requests become three, and the narrator carries its intonation
+# across sentences instead of restarting at every full stop.
+TTS_BATCH = _flag("TTS_BATCH", True)
+TTS_BATCH_CHARS = _int("TTS_BATCH_CHARS", 4200)   # provider cap is ~5000
+TTS_BATCH_LINES = _int("TTS_BATCH_LINES", 12)
+
 
 def tts_rate_limit(provider: str) -> int:
     """Calls a minute for this provider. 0 means no pacing at all.

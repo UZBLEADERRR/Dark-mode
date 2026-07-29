@@ -705,3 +705,24 @@ async def assemble(
             raise
         # Losing the stings is a far smaller failure than losing the video.
         return await attempt(with_music=False, duck=False, with_sfx=False)
+
+
+async def slice_audio(source: Path, out_path: Path, start: float, end: float) -> Path:
+    """Cut one span out of a longer recording, sample-accurately.
+
+    The span is re-encoded rather than stream-copied: a copy can only cut on a
+    frame boundary, which for MP3 is up to 26ms out and would drift the picture
+    off the words it is cut to. These files are inputs to the final encode
+    anyway, so decoding once here costs nothing that survives to the output.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    await _run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(source),
+        # After -i, not before: seeking the input would land on the nearest
+        # frame and quietly shift every timing that follows.
+        "-ss", f"{max(0.0, start):.3f}", "-to", f"{max(start + 0.05, end):.3f}",
+        "-ar", "48000", "-ac", "1",
+        str(out_path),
+    ])
+    return out_path

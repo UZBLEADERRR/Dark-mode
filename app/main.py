@@ -716,8 +716,52 @@ async def edit_job(job_id: str, patch: JobPatch) -> dict[str, Any]:
     if patch.music_start is not None:
         request["music_start"] = float(patch.music_start)
 
+    revoice = _apply_voice(job_id, request, patch.tts_provider, patch.voice_id)
+
     store.replace_request(job_id, request)
+    if revoice:
+        # The narrator belongs to the video, so every line is stale at once.
+        # They are marked rather than re-recorded here: the render stage already
+        # knows how to rebuild what is stale, and doing it now would make a
+        # settings change take minutes and cost a voice quota unasked.
+        scenes = (store.get_job(job_id).get("result") or {}).get("scenes") or []
+        for scene in scenes:
+            scene["needs_voice"] = True
+        store.update_job(job_id, result={"scenes": scenes},
+                         log=f"Voice changed — {len(scenes)} scene(s) will be re-recorded")
     return _job_payload(_get_job_or_404(job_id), with_scenes=False)
+
+
+def _apply_voice(job_id: str, request: dict[str, Any],
+                 provider: str | None, voice_id: str | None) -> bool:
+    """Point the job at a different narrator. True when something changed.
+
+    An uploaded voice-over is fixed audio — there is no narrator to swap — so
+    the request is refused rather than silently ignored.
+    """
+    if provider is None and voice_id is None:
+        return False
+    if request.get("narration_audio"):
+        raise HTTPException(
+            status_code=400,
+            detail="Bu videoda o'z audiongiz ishlatilgan — ovozni almashtirib bo'lmaydi.")
+
+    changed = False
+    if provider is not None:
+        chosen = (provider or "").strip().lower()
+        if chosen and not config.tts_provider_ready(chosen):
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{chosen}' ovoz provayderi uchun API kalit yo'q.")
+        if chosen != (request.get("tts_provider") or ""):
+            request["tts_provider"] = chosen or None
+            changed = True
+    if voice_id is not None:
+        chosen = (voice_id or "").strip()
+        if chosen != (request.get("voice_id") or ""):
+            request["voice_id"] = chosen or None
+            changed = True
+    return changed
 
 
 @app.patch("/api/jobs/{job_id}/scenes/{index}")
@@ -843,9 +887,26 @@ async def regenerate_scene(job_id: str, index: int, body: RegenerateRequest) -> 
         raise HTTPException(status_code=400, detail="Nothing to regenerate.")
 
     redo_voice = body.voice and not job["request"].get("narration_audio")
+
+    # Re-recording is exactly when you notice the voice was wrong, so it can be
+    # changed here. It applies to the whole video — a narrator who changes
+    # halfway through is a defect — and the other scenes are marked rather than
+    # re-recorded now, so one scene's fix does not quietly become a whole
+    # re-record you did not ask for.
+    request = dict(job["request"])
+    if _apply_voice(job_id, request, body.tts_provider, body.voice_id):
+        store.replace_request(job_id, request)
+        for scene in scenes:
+            if scene["index"] != index:
+                scene["needs_voice"] = True
+        store.update_job(job_id, result={"scenes": scenes},
+                         log="Voice changed — other scenes will follow on render")
+        redo_voice = redo_voice or bool(body.voice)
+
     store.update_job(job_id, status="running", step="regenerate", progress=10)
     _launch(lambda: pipeline.regenerate_scene(
-        job_id, index, redo_image=body.image, redo_voice=redo_voice), job_id)
+        job_id, index, redo_image=body.image, redo_voice=redo_voice,
+        redo_all_voices=body.all_scenes), job_id)
     return {"id": job_id, "status": "running"}
 
 

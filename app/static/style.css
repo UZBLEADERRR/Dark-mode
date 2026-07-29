@@ -1071,6 +1071,10 @@ input[type="range"]::-moz-range-thumb {
 /* ── voice picker ──────────────────────────────────────────────── */
 .voice-row { display: flex; gap: 7px; align-items: stretch; }
 .voice-row select { flex: 1; min-width: 0; }
+/* The same select-plus-audition pair, but sitting under its own label rather
+   than beside one — which is what a dialog has room for. */
+.voice-pick { display: flex; gap: 7px; align-items: stretch; }
+.voice-pick select { flex: 1; min-width: 0; }
 .hear {
   flex: 0 0 auto; width: 40px;
   border-radius: var(--r-sm);
