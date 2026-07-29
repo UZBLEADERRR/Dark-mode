@@ -726,3 +726,70 @@ async def slice_audio(source: Path, out_path: Path, start: float, end: float) ->
         str(out_path),
     ])
     return out_path
+
+
+# The colour a cut-out is generated against before it is keyed away. Magenta
+# because almost nothing in a drawn character is that hue — green fights foliage
+# and clothing, blue fights skies and eyes, and either one eats part of the
+# subject along with the background.
+CHROMA = "0xFF00FF"
+
+
+async def cut_out(source: Path, out_path: Path, *, similarity: float = 0.24,
+                  blend: float = 0.08) -> Path:
+    """Key a flat background colour away, leaving the subject on transparency.
+
+    The generator is asked for the character alone on a solid magenta field, so
+    all that is needed here is to remove that field. `blend` is what softens the
+    boundary: with a hard key every edge pixel is either fully kept or fully
+    dropped, and a cut-out with a one-pixel staircase around it looks pasted on
+    rather than drawn. ffmpeg's `despill` only knows green and blue, so the
+    blend is doing this job alone — which is why it is a little wider here than
+    a green-screen key would use.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    await _run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(source),
+        "-vf", f"format=rgba,colorkey={CHROMA}:{similarity}:{blend},format=rgba",
+        "-frames:v", "1",
+        str(out_path),
+    ])
+    return out_path
+
+
+async def alpha_coverage(path: Path) -> float:
+    """How much of this picture is opaque, 0 to 1.
+
+    An RGBA pixel format proves nothing — `cut_out` always writes RGBA, whether
+    or not it removed anything — so the alpha channel is averaged instead. The
+    whole image is collapsed to a single pixel by ffmpeg and that one byte is
+    read back, which costs one decode and no image library.
+    """
+    probe = path.with_name(f"{path.stem}-alpha.raw")
+    try:
+        await _run([
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
+            # `area` is the one scaler that is a plain average; the default
+            # would weight the centre and report the wrong number.
+            "-vf", "format=rgba,alphaextract,scale=1:1:flags=area", "-frames:v", "1",
+            "-f", "rawvideo", "-pix_fmt", "gray", str(probe),
+        ])
+        data = probe.read_bytes()
+    except (RenderError, OSError):
+        return 1.0
+    finally:
+        probe.unlink(missing_ok=True)
+    return (data[0] / 255.0) if data else 1.0
+
+
+async def has_alpha(path: Path) -> bool:
+    """Did the key actually cut something out — without eating the subject?
+
+    Both ends matter. A picture whose background never keyed away comes back
+    fully opaque and would be pasted onto the scene as a rectangle; one where
+    the key took the character too comes back nearly empty. Either way the
+    caller should say so rather than hand back a cut-out that is not one.
+    """
+    coverage = await alpha_coverage(path)
+    return 0.02 < coverage < 0.97

@@ -211,6 +211,7 @@ const ICONS = {
   play: '<path d="M8 5.5l11 6.5-11 6.5z"/>',
   text: '<path d="M5 6.5h14M12 6.5v11"/>',
   image: '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M3 15l5-4 4 3 3-2 6 5"/>',
+  actor: '<circle cx="12" cy="5.5" r="2.6"/><path d="M12 8.5v6M12 14.5l-3 5M12 14.5l3 5M7.5 11h9"/>',
   scene: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 9.5h18M8 5v4M16 5v4"/>',
   layers: '<path d="M12 3.5l8.5 4.5L12 12.5 3.5 8zM3.5 12.5L12 17l8.5-4.5"/>',
   render: '<path d="M12 3.5v11M8 11l4 3.5 4-3.5M4.5 19.5h15"/>',
@@ -239,6 +240,7 @@ const DOCK = {
     { id: 'play', label: 'Eshitish', icon: ICONS.play, act: () => togglePreview() },
     { id: 'text', label: 'Matn', icon: ICONS.text, act: () => addLayer(TEXT_DEFAULTS) },
     { id: 'image', label: 'Rasm', icon: ICONS.image, act: () => $('#layer-file').click() },
+    { id: 'actor', label: 'Aktyor', icon: ICONS.actor, act: () => addActor() },
     { id: 'scene', label: 'Sahna', icon: ICONS.scene, act: () => showPanel('scene') },
     { id: 'layers', label: 'Qatlam', icon: ICONS.layers, act: () => showPanel('layers') },
     { id: 'subtitle', label: 'Subtitr', icon: ICONS.subtitle, act: () => showPanel('caption') },
@@ -1462,6 +1464,38 @@ const LAYER_ANIMS = {
   slide_left: 'Chapdan', slide_right: "O‘ngdan", float: 'Suzish', drift: 'Siljish',
 };
 
+// Where a cut-out actor starts and ends, as a fraction of the frame width away
+// from where it was placed. The same numbers live in `app/render/overlays.py`;
+// they are repeated here so the preview walks the character along exactly the
+// path the render will, instead of approximating it.
+const ACTOR_MOVES = {
+  walk_right: { from: -0.22, to: 0.22, label: "O‘ngga yuradi" },
+  walk_left: { from: 0.22, to: -0.22, label: 'Chapga yuradi' },
+  enter_left: { from: -0.85, to: 0, label: 'Chapdan kiradi' },
+  enter_right: { from: 0.85, to: 0, label: "O‘ngdan kiradi" },
+  exit_left: { from: 0, to: -0.85, label: 'Chapga chiqib ketadi' },
+  exit_right: { from: 0, to: 0.85, label: "O‘ngga chiqib ketadi" },
+  cross_right: { from: -0.85, to: 0.85, label: "Chapdan o‘ngga o‘tadi" },
+  cross_left: { from: 0.85, to: -0.85, label: "O‘ngdan chapga o‘tadi" },
+  hop: { from: 0, to: 0, label: 'Sakraydi' },
+  sway: { from: 0, to: 0, label: 'Tebranadi' },
+};
+
+const TRAVELLING = new Set(['enter_left', 'enter_right', 'exit_left', 'exit_right',
+  'cross_right', 'cross_left']);
+const WALKING = new Set(['walk_right', 'walk_left', 'cross_right', 'cross_left']);
+
+// The server is the authority on which moves exist, but it can only offer the
+// ones this build knows how to preview.
+function moveIds() {
+  const served = (state.health?.overlay_animations?.actor || [])
+    .map((m) => m.id).filter((id) => ACTOR_MOVES[id]);
+  return served.length ? served : Object.keys(ACTOR_MOVES);
+}
+
+const actorLabel = (id) => (state.health?.overlay_animations?.actor || [])
+  .find((m) => m.id === id)?.label || ACTOR_MOVES[id]?.label || id;
+
 const CAP_ANIMS = { none: 'yo‘q', fade: 'Yumshoq', pop: 'Sakrash', rise: 'Pastdan' };
 const BOX_MODES = { none: 'Yalang‘och', outline: 'Kontur', shadow: 'Soya', box: 'Fon' };
 const POSITIONS = { top: 'Yuqorida', middle: "O‘rtada", bottom: 'Pastda' };
@@ -1483,6 +1517,9 @@ const IMAGE_DEFAULTS = {
   colour: '#FFFFFF', outline_colour: '#000000', box: false,
   box_colour: '#000000', box_opacity: 0.6, bold: true, italic: false,
 };
+// An actor stands on the ground and is tall enough to read as a character
+// rather than as a sticker, so it lands lower and larger than a plain picture.
+const ACTOR_DEFAULTS = { ...IMAGE_DEFAULTS, x: 0.5, y: 0.66, size: 0.34, anim: 'walk_right' };
 
 const scene = () => ED.scenes[ED.i] || null;
 const layers = () => scene()?.overlays || [];
@@ -1851,8 +1888,26 @@ function layerAt(l, t, duration) {
   const p = Math.min(1, into / 0.42);
   const eased = p * p * (3 - 2 * p);
 
-  const out = { show: true, opacity: (l.opacity ?? 1) * fade, dx: 0, dy: 0, scale: 1 };
+  const out = { show: true, opacity: (l.opacity ?? 1) * fade, dx: 0, dy: 0, fx: 0, fy: 0, scale: 1 };
   if (l.anim === 'none') { out.opacity = l.opacity ?? 1; return out; }
+  if (ACTOR_MOVES[l.anim]) {
+    // A travelling actor arrives from off-screen, so it must not also fade in
+    // at the edge of the frame — the renderer makes the same exception.
+    if (TRAVELLING.has(l.anim)) out.opacity = l.opacity ?? 1;
+    const move = ACTOR_MOVES[l.anim];
+    const span = Math.max(0.3, end - start);
+    const p = Math.min(1, Math.max(0, into / span));
+    if (move.from !== move.to) out.fx = move.from + (move.to - move.from) * (p * p * (3 - 2 * p));
+    if (l.anim === 'hop') {
+      out.fx = 0;
+      out.fy = -0.05 * Math.abs(Math.sin((2 * Math.PI * into) / Math.max(0.9, span / 2)));
+    } else if (l.anim === 'sway') {
+      out.fx = 0.006 * Math.sin((2 * Math.PI * into) / 2.4);
+    } else if (WALKING.has(l.anim)) {
+      out.fy = -0.008 * Math.abs(Math.sin((2 * Math.PI * into) / 0.65));
+    }
+    return out;
+  }
   if (l.anim === 'pop') out.scale = 0.72 + 0.28 * eased;
   else if (l.anim === 'rise') out.dy = (1 - eased) * 5;
   else if (l.anim === 'slide_left') out.dx = (1 - eased) * 8;
@@ -1906,7 +1961,11 @@ function drawLayers(time = null) {
   host.innerHTML = (s.overlays || []).map((l) => {
     const a = layerAt(l, time, s.duration || 0);
     if (!a.show) return '';
-    const pos = `left:${(l.x * 100).toFixed(2)}%;top:${(l.y * 100).toFixed(2)}%;` +
+    // `fx`/`fy` are fractions of the frame, exactly as the renderer measures
+    // them, so they belong in left/top rather than in the element-relative
+    // translate the older animations use.
+    const pos = `left:${((l.x + (a.fx || 0)) * 100).toFixed(2)}%;` +
+      `top:${((l.y + (a.fy || 0)) * 100).toFixed(2)}%;` +
       `transform:translate(calc(-50% + ${a.dx}%),calc(-50% + ${a.dy}%)) ` +
       `rotate(${l.rotate || 0}deg) scale(${a.scale.toFixed(3)});opacity:${a.opacity.toFixed(3)};`;
     const on = !playing && l.id === ED.sel ? ' on' : '';
@@ -2476,7 +2535,10 @@ function drawLayersPanel() {
 
       <label class="f"><span>Animatsiya</span>
         <select data-k="anim">${anims.map((a) =>
-          `<option value="${a}"${a === l.anim ? ' selected' : ''}>${esc(LAYER_ANIMS[a] || a)}</option>`).join('')}</select></label>
+          `<option value="${a}"${a === l.anim ? ' selected' : ''}>${esc(LAYER_ANIMS[a] || a)}</option>`).join('')}
+          ${l.type === 'image' ? `<optgroup label="Harakat (aktyor)">${moveIds().map((m) =>
+            `<option value="${esc(m)}"${m === l.anim ? ' selected' : ''}>${esc(actorLabel(m))}</option>`).join('')}</optgroup>` : ''}
+        </select></label>
 
       <div class="f2">
         ${slider('start', 'Boshlanish', 0, Math.max(0.5, s.duration - 0.2), 0.1, l.start || 0, 's')}
@@ -2556,6 +2618,58 @@ function addLayer(base) {
 }
 
 $('.canvas-tools [data-add="text"]').addEventListener('click', () => addLayer(TEXT_DEFAULTS));
+$('.canvas-tools [data-add="actor"]').addEventListener('click', () => addActor());
+
+/** Cut a character out of its background and drop it onto the scene.
+ *
+ * Three ways in, because the character you want may already exist: a hero from
+ * the library, a description of somebody new, or a picture from the phone. The
+ * server does the keying either way and hands back a transparent PNG.
+ */
+async function addActor() {
+  if (!scene()) { toast('Avval sahnani oching'); return; }
+  const heroes = state.heroes || [];
+  // The modal resolves to field values, and a file input has none worth having,
+  // so the chosen file is caught as it is picked.
+  let picked = null;
+  const answer = await ask({
+    onOpen: () => $('#modal-body [name="file"]').addEventListener(
+      'change', (e) => { picked = e.target.files[0] || null; }),
+    title: 'Aktyor qo‘shish',
+    ok: 'Kesib olish',
+    html: `
+      <p class="hint">Fon kesiladi va qahramon sahna ustida yuradi.</p>
+      ${heroes.length ? `<label class="f"><span>Herolardan</span>
+        <select name="hero_id"><option value="">— yangi chizilsin —</option>
+          ${heroes.map((h) => `<option value="${esc(h.id)}">${esc(h.name)}</option>`).join('')}
+        </select></label>` : ''}
+      <label class="f"><span>Yoki kim chizilsin</span>
+        <textarea name="prompt" rows="2" placeholder="masalan: yashil dinozavr, og‘zi ochiq, yon tomondan"></textarea></label>
+      <label class="f"><span>Yoki tayyor rasm</span>
+        <input type="file" name="file" accept="image/*" /></label>
+      <p class="hint">Yuklangan rasmning orqa foni tekis magenta (#FF00FF) bo‘lsa toza kesiladi.</p>`,
+  });
+  if (!answer) return;
+  if (!picked && !answer.prompt?.trim() && !answer.hero_id) {
+    toast('Hero tanlang, matn yozing yoki rasm yuklang');
+    return;
+  }
+
+  const body = new FormData();
+  if (picked) body.append('image', picked);
+  if (answer.hero_id) body.append('hero_id', answer.hero_id);
+  if (answer.prompt) body.append('prompt', answer.prompt.trim());
+
+  toast('Aktyor tayyorlanmoqda…');
+  try {
+    const asset = await api('/api/actors', { method: 'POST', body });
+    await loadAssets();
+    addLayer({ ...ACTOR_DEFAULTS, asset_id: asset.id });
+    toast('Aktyor qo‘shildi — harakatini tanlang');
+  } catch (err) {
+    editorError(err.message);
+  }
+}
 
 $('#layer-file').addEventListener('change', async (e) => {
   const file = e.target.files[0];
