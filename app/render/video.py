@@ -728,33 +728,92 @@ async def slice_audio(source: Path, out_path: Path, start: float, end: float) ->
     return out_path
 
 
-# The colour a cut-out is generated against before it is keyed away. Magenta
-# because almost nothing in a drawn character is that hue — green fights foliage
-# and clothing, blue fights skies and eyes, and either one eats part of the
-# subject along with the background.
+# The colour a cut-out is asked to be drawn against. It is a hint to the
+# generator, not something the cutter depends on: magenta is rare in a drawn
+# character, so it makes a clean edge when it arrives, and `cut_out` copes when
+# it does not arrive at all.
 CHROMA = "0xFF00FF"
 
 
-async def cut_out(source: Path, out_path: Path, *, similarity: float = 0.24,
-                  blend: float = 0.08) -> Path:
-    """Key a flat background colour away, leaving the subject on transparency.
+def _lift_subject(source: Path, out_path: Path, *, work: int = 384,
+                  tolerance: int = 46) -> None:
+    """Remove the background by flooding in from the edges, not by colour.
 
-    The generator is asked for the character alone on a solid magenta field, so
-    all that is needed here is to remove that field. `blend` is what softens the
-    boundary: with a hard key every edge pixel is either fully kept or fully
-    dropped, and a cut-out with a one-pixel staircase around it looks pasted on
-    rather than drawn. ffmpeg's `despill` only knows green and blue, so the
-    blend is doing this job alone — which is why it is a little wider here than
-    a green-screen key would use.
+    Keying a named colour was the wrong instrument. The generator is asked for a
+    flat magenta field and does not deliver one: what comes back is a textured,
+    lit, gradient pink, and `colorkey` at any tolerance either leaves most of it
+    or eats the character. The visible result was a bright pink rectangle pasted
+    over every scene.
+
+    Flooding from the border asks a different question — not "is this pixel the
+    colour I named?" but "is this pixel connected to the edge of the frame by a
+    run of similar pixels?" — and that holds for a gradient, a texture, a studio
+    backdrop, or a colour nobody agreed on in advance. The subject is asked for
+    full-length and centred with a margin, so the border is background by
+    construction, and a character enclosed by its own outline is never reached.
+
+    Connectivity is what makes it safe. A pink shirt in the middle of the frame
+    is not touched however close to the background it is, because nothing joins
+    it to the edge.
     """
+    from PIL import Image, ImageFilter
+
+    with Image.open(source) as opened:
+        full = opened.convert("RGB")
+    size = full.size
+    small = full.copy()
+    small.thumbnail((work, work), Image.LANCZOS)
+    width, height = small.size
+    pixels = small.load()
+
+    # What the background actually is, taken from the border rather than assumed.
+    edge = ([pixels[x, 0] for x in range(width)]
+            + [pixels[x, height - 1] for x in range(width)]
+            + [pixels[0, y] for y in range(height)]
+            + [pixels[width - 1, y] for y in range(height)])
+    ref = tuple(sorted(c[i] for c in edge)[len(edge) // 2] for i in range(3))
+
+    def near(colour: tuple[int, int, int]) -> bool:
+        return sum(abs(colour[i] - ref[i]) for i in range(3)) <= tolerance * 3
+
+    # Scanline flood from every border pixel at once. Iterative, because a
+    # thousand-pixel run of background would blow a recursive stack.
+    seen = bytearray(width * height)
+    stack = [(x, y) for x in range(width) for y in (0, height - 1)]
+    stack += [(x, y) for y in range(height) for x in (0, width - 1)]
+    while stack:
+        x, y = stack.pop()
+        index = y * width + x
+        if seen[index] or not near(pixels[x, y]):
+            continue
+        seen[index] = 1
+        if x > 0:
+            stack.append((x - 1, y))
+        if x < width - 1:
+            stack.append((x + 1, y))
+        if y > 0:
+            stack.append((x, y - 1))
+        if y < height - 1:
+            stack.append((x, y + 1))
+
+    mask = Image.frombytes("L", (width, height),
+                           bytes(0 if flag else 255 for flag in seen))
+    # Grown back to full size and softened: a hard edge at working resolution
+    # would arrive as a staircase, and a cut-out with a staircase around it looks
+    # pasted on rather than drawn.
+    mask = mask.resize(size, Image.LANCZOS).filter(ImageFilter.GaussianBlur(1.2))
+
+    cut = full.convert("RGBA")
+    cut.putalpha(mask)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    await _run([
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(source),
-        "-vf", f"format=rgba,colorkey={CHROMA}:{similarity}:{blend},format=rgba",
-        "-frames:v", "1",
-        str(out_path),
-    ])
+    cut.save(out_path, format="PNG")
+
+
+async def cut_out(source: Path, out_path: Path, *, work: int = 384,
+                  tolerance: int = 46) -> Path:
+    """Lift the subject off its background, whatever that background is."""
+    await asyncio.to_thread(_lift_subject, source, out_path, work=work,
+                            tolerance=tolerance)
     return out_path
 
 
@@ -792,4 +851,8 @@ async def has_alpha(path: Path) -> bool:
     caller should say so rather than hand back a cut-out that is not one.
     """
     coverage = await alpha_coverage(path)
-    return 0.02 < coverage < 0.97
+    # The ceiling used to be 0.97, which let through a plate the key had barely
+    # touched — a bright rectangle with a character on it, pasted over the scene.
+    # A full-length figure asked for with a margin never fills more than about
+    # half the frame, so anything above that is a background that did not go.
+    return 0.02 < coverage < 0.62

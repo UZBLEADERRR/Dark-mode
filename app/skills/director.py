@@ -119,6 +119,7 @@ async def direct_script(
     video_format: str,
     heroes: list[dict],
     action: str = "",
+    cartoon: bool = False,
 ) -> dict:
     scene_count = max(3, min(config.MAX_SCENES, round(target_seconds / config.SECONDS_PER_SCENE)))
     per_scene = target_seconds / scene_count
@@ -131,6 +132,30 @@ async def direct_script(
 WHAT MUST HAPPEN (the user's own words — follow this, do not replace it)
 {action.strip()}
 """ if action.strip() else ""
+
+    # A cartoon is characters speaking. Left to itself the Director writes
+    # narration *about* them — "Tarzan hesitated" — and every line comes back in
+    # the narrator's voice, which is a slideshow with a commentary.
+    if cartoon:
+        talkers = [h for h in heroes if h.get("voice_id")]
+        if talkers:
+            names = ", ".join(h["name"] for h in talkers)
+            action_block += f"""
+THIS IS A CARTOON
+Write it as a story the characters act out, not as a documentary about them.
+{names} have voices of their own. Give most of the lines to them, as dialogue:
+set `speaker` to that character's id and write the narration field as the words
+they actually say — "Bu yerda nimadir bor" — never as narration about them
+("Tarzan hesitated"). Keep the narrator for scene-setting only, a few lines at
+most, and none at all if the story carries itself.
+"""
+        else:
+            action_block += """
+THIS IS A CARTOON
+Write it as a story with action in it rather than a description of one. No
+character has been given a voice, so the narrator reads every line — keep the
+narration close to what is happening on screen.
+"""
 
     user = f"""TOPIC
 {topic}

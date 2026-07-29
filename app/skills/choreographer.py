@@ -34,9 +34,14 @@ every scene, plus a cast of characters the studio has reference art for. You dec
 the staging: who is on screen in each scene, where they stand, and how they move.
 
 How the render works, because it constrains what you can ask for:
-- Each character is cut out of its background once and reused. The cut-out does not
-  animate — it does not walk its legs or change expression. It MOVES across a still
-  background, and that movement is the only animation there is.
+- A character is drawn once per POSE you ask for, cut out of its background, and
+  then MOVED across a still background. Within a scene the drawing does not change —
+  it does not walk its legs or blink. The movement across the frame is the only
+  animation there is; the change between scenes comes from asking for a different
+  pose.
+- Every distinct pose costs one generated picture, so ask for a new one when the
+  character's attitude genuinely changes, and repeat an earlier one word for word
+  when it does not.
 - The background is generated separately, from your `background` prompt, and the
   characters are laid on top of it.
 
@@ -47,6 +52,15 @@ Rules that matter:
   the scene will show two of everybody. Write it in English.
 - `actors` lists who is on screen. Use only ids from the cast. Most scenes have one
   or two; a scene can have none, and an establishing shot of a place usually should.
+- `pose` is what the character LOOKS like in this scene: the body attitude and the
+  face. This is drawn fresh for each distinct pose, so it is how a scene gets a
+  frightened character rather than the same smiling one every time. Write it in
+  English, 4-12 words, describing only the character: "running, terrified, looking
+  back over one shoulder", "standing tall, arms crossed, confident smile",
+  "crouching low behind a rock, wide-eyed". Never mention the setting, the
+  background, other characters, or a camera. Reuse the exact same wording when the
+  attitude genuinely repeats — an identical pose costs nothing, a slightly reworded
+  one is drawn again.
 - `move` is what the character does. Read the narration and choose the one that
   matches the action being described:
   walk_right / walk_left — crossing part of the frame, going somewhere
@@ -87,9 +101,11 @@ SCHEMA = {
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
-                            "required": ["hero_id", "move", "x", "y", "size", "enters_at"],
+                            "required": ["hero_id", "pose", "move", "x", "y", "size",
+                                         "enters_at"],
                             "properties": {
                                 "hero_id": {"type": "string"},
+                                "pose": {"type": "string"},
                                 "move": {"type": "string", "enum": MOVES},
                                 "x": {"type": "number"},
                                 "y": {"type": "number"},
@@ -190,6 +206,8 @@ including scenes where nobody is on screen (empty `actors`)."""
             move = entry.get("move")
             actors.append({
                 "hero_id": hero_id,
+                "pose": (str(entry.get("pose") or "").strip()[:160]
+                         or "standing, calm, facing the viewer"),
                 "move": move if move in ov.ACTOR_MOVES else "sway",
                 "x": _clamp(entry.get("x"), 0.08, 0.92, 0.5),
                 "y": _clamp(entry.get("y"), 0.35, 0.9, 0.68),
