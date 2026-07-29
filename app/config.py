@@ -115,12 +115,39 @@ IMAGE_CONCURRENCY = _int("IMAGE_CONCURRENCY", 3)
 TTS_TIMEOUT = float(_env("TTS_TIMEOUT", "90"))
 TTS_DEADLINE = float(_env("TTS_DEADLINE", "180"))
 
-# Voice keys are commonly sold ten requests to the minute. Pacing ourselves
-# beats being throttled, so the limiter holds calls back rather than spending
-# them on 429s. A 429 that arrives anyway is waited out, not counted as a
-# failure — TTS_RATE_PATIENCE caps how long one line may spend queueing.
-TTS_RATE_LIMIT = _int("TTS_RATE_LIMIT", 10)
+# Pacing ourselves beats being throttled: a refused call still costs a round
+# trip, and its retry lands in the same full window. A 429 that arrives anyway
+# is waited out rather than counted as a failure, and TTS_RATE_PATIENCE caps how
+# long one line may spend queueing.
+#
+# The number is per provider, because the providers are not alike. Gemini's free
+# tier sells voice by the minute; ElevenLabs and OpenAI limit how many calls run
+# at once, not how many start, so pacing them only makes a long video slower for
+# no reason. One shared ceiling meant connecting ElevenLabs to escape Gemini's
+# limit left you queueing behind Gemini's limit anyway.
+_TTS_RATE_DEFAULTS = {"gemini": 10, "elevenlabs": 0, "openai": 0}
+TTS_RATE_LIMIT = _int("TTS_RATE_LIMIT", _TTS_RATE_DEFAULTS["gemini"])
+_TTS_RATE_FOR_ALL = bool(_env("TTS_RATE_LIMIT"))
 TTS_RATE_PATIENCE = float(_env("TTS_RATE_PATIENCE", "900"))
+
+
+def tts_rate_limit(provider: str) -> int:
+    """Calls a minute for this provider. 0 means no pacing at all.
+
+    `TTS_RATE_LIMIT_<PROVIDER>` is the specific answer; a bare `TTS_RATE_LIMIT`
+    still applies to everything, so the old single knob keeps working for anyone
+    who set it deliberately.
+    """
+    provider = (provider or "").lower()
+    specific = _env(f"TTS_RATE_LIMIT_{provider.upper()}")
+    if specific:
+        try:
+            return max(0, int(specific))
+        except ValueError:
+            pass
+    if _TTS_RATE_FOR_ALL:
+        return TTS_RATE_LIMIT
+    return _TTS_RATE_DEFAULTS.get(provider, 0)
 IMAGE_TIMEOUT = float(_env("IMAGE_TIMEOUT", "150"))
 IMAGE_DEADLINE = float(_env("IMAGE_DEADLINE", "330"))
 TTS_CONCURRENCY = _int("TTS_CONCURRENCY", 3)

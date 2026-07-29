@@ -401,9 +401,12 @@ app/
   ettiriladi. Ketma-ket 2 marta uzilsa qo'lda render qilish uchun qoldiriladi
   (cheksiz qayta urinish halqasining oldini oladi). Hech narsa saqlanmagan job
   esa avvalgidek xato beradi.
-- Ovoz so'rovlari daqiqasiga `TTS_RATE_LIMIT` tadan oshmaydi (standart 10).
-  429 kelsa xato deb hisoblanmaydi — kutiladi va davom etadi, va bu kutish
-  `TTS_DEADLINE` hisobiga kirmaydi.
+- Ovoz so'rovlari **har provayder uchun alohida** cheklanadi: Gemini daqiqasiga
+  10 ta (bepul tarif shunday sotiladi), ElevenLabs va OpenAI esa cheklanmaydi —
+  ular bir vaqtda nechta so'rov ketishini cheklaydi, nechta boshlanishini emas.
+  `TTS_RATE_LIMIT_ELEVENLABS` bilan o'zgartirasiz; `TTS_RATE_LIMIT` esa hammasiga
+  birdek qo'llanadi. 429 kelsa xato deb hisoblanmaydi — kutiladi va davom etadi,
+  va bu kutish `TTS_DEADLINE` hisobiga kirmaydi.
 - Bitta sahna (bitta matn/ovoz) ostida 4 tagacha rasm bo'lishi mumkin — "kadr".
   Yaratishda `Kadr almashishi` ni tanlang: `Jonli` uzun sahnalarni 2-3 rasmga,
   `Tez` esa har ~3 soniyada bo'ladi. Har bir kadrning o'z kamera harakati va

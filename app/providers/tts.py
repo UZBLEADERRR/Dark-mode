@@ -37,15 +37,22 @@ class RateLimited(TTSError):
         self.retry_after = retry_after
 
 
-# One ceiling for the whole process. Scenes are voiced concurrently, so the
-# limit has to be shared or three workers would each get ten a minute.
-_limiter = ratelimit.RateLimiter(config.TTS_RATE_LIMIT)
+# One ceiling per provider, shared across the whole process. Shared because
+# scenes are voiced concurrently and three workers would otherwise get the full
+# allowance each; per provider because an allowance belongs to a key, and being
+# throttled by Gemini is no reason to hold back an ElevenLabs call.
+_limiters: dict[str, ratelimit.RateLimiter] = {}
 
 
-def limiter() -> ratelimit.RateLimiter:
-    """The shared limiter, resynced to config so a settings change takes hold."""
-    _limiter.reconfigure(config.TTS_RATE_LIMIT)
-    return _limiter
+def limiter(provider: str | None = None) -> ratelimit.RateLimiter:
+    """This provider's limiter, resynced to config so a settings change lands."""
+    provider = (provider or config.TTS_PROVIDER).lower()
+    gate = _limiters.get(provider)
+    if gate is None:
+        gate = _limiters[provider] = ratelimit.RateLimiter(config.tts_rate_limit(provider))
+    else:
+        gate.reconfigure(config.tts_rate_limit(provider))
+    return gate
 
 
 LANG_HINTS = {
@@ -266,7 +273,7 @@ async def synthesize(
     provider = (provider or config.TTS_PROVIDER).lower()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     timeout = httpx.Timeout(config.TTS_TIMEOUT, connect=20.0)
-    gate = limiter()
+    gate = limiter(provider)
     last_error: Exception | None = None
 
     async def run() -> tuple[Path, list[dict]]:

@@ -317,7 +317,9 @@ async def health() -> dict[str, Any]:
         # Heroes are the one thing a container restart must not lose, so where
         # they live — and whether that place is answering — is worth reporting.
         "hero_store": _hero_store(),
-        "tts_rate_limit": config.TTS_RATE_LIMIT,
+        # The pacing that applies to the provider actually configured — a number
+        # that belongs to some other provider's key would only mislead.
+        "tts_rate_limit": config.tts_rate_limit(config.TTS_PROVIDER),
         "image_providers": {n: config.image_provider_ready(n)
                             for n in ("gemini", "fal", "openai")},
         "tts_providers": {n: config.tts_provider_ready(n)
