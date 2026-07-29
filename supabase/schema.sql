@@ -9,14 +9,18 @@
 -- Ikkinchi marta ishga tushirsangiz ham hech narsa buzilmaydi.
 
 -- Qahramonlar: siz yuklagan surat. Bu qayta yaratib bo'lmaydigan yagona narsa.
+-- `voice_id` berilgan qahramon o'z gaplarini o'zi aytadi; bo'sh bo'lsa diktor
+-- o'qiydi. `tts_provider` bo'sh bo'lsa loyihaning provayderi ishlatiladi.
 CREATE TABLE IF NOT EXISTS heroes (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    mime        TEXT NOT NULL DEFAULT 'image/png',
-    ext         TEXT NOT NULL DEFAULT '.png',
-    image       BYTEA NOT NULL,
-    created_at  TEXT NOT NULL
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    description  TEXT NOT NULL DEFAULT '',
+    mime         TEXT NOT NULL DEFAULT 'image/png',
+    ext          TEXT NOT NULL DEFAULT '.png',
+    image        BYTEA NOT NULL,
+    voice_id     TEXT NOT NULL DEFAULT '',
+    tts_provider TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL
 );
 
 -- Musiqa va effektlar. `kind`: 'music' — fon, 'sfx' — bir martalik tovush.
@@ -68,3 +72,9 @@ CREATE INDEX IF NOT EXISTS jobs_created_idx ON jobs (created_at DESC);
 
 -- Bu jadvallarga faqat serverning o'zi (service key bilan) kiradi, brauzerdan
 -- emas. RLS yoqilmagan — anon key bu jadvallarni umuman ko'rmaydi.
+
+-- Baza avval yaratilgan bo'lsa, ustunlar shu yerda qo'shiladi. Ilova buni
+-- o'zi ham qiladi — bu faqat qo'lda ishga tushirganlar uchun.
+ALTER TABLE heroes ADD COLUMN IF NOT EXISTS voice_id     TEXT NOT NULL DEFAULT '';
+ALTER TABLE heroes ADD COLUMN IF NOT EXISTS tts_provider TEXT NOT NULL DEFAULT '';
+ALTER TABLE music  ADD COLUMN IF NOT EXISTS kind         TEXT NOT NULL DEFAULT 'music';

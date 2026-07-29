@@ -212,6 +212,8 @@ class ScenePatch(BaseModel):
     transition: str | None = None
     on_screen_text: str | None = Field(default=None, max_length=60)
     hero_ids: list[str] | None = None
+    # Who says this line: a hero id, or "" for the narrator.
+    speaker: str | None = Field(default=None, max_length=120)
     overlays: list[OverlayIn] | None = None
     # A one-shot sting cued inside this scene. "" removes it.
     sfx_id: str | None = None
@@ -236,6 +238,9 @@ class RegenerateRequest(BaseModel):
 class HeroPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=600)
+    # A character with its own voice. "" hands the line back to the narrator.
+    voice_id: str | None = Field(default=None, max_length=120)
+    tts_provider: str | None = Field(default=None, max_length=40)
 
 
 class Scene(BaseModel):
