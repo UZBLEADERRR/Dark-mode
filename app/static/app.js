@@ -1503,7 +1503,11 @@ function drawStage(job) {
   const stamp = `${job.id}:${job.updated_at}`;
   if (!busy) { state.mark = null; state.markAt = 0; }
   else if (state.mark !== stamp) { state.mark = stamp; state.markAt = Date.now(); }
-  const idle = busy && state.markAt ? Math.floor((Date.now() - state.markAt) / 1000) : 0;
+  // A job waiting for a slot is silent on purpose, so the silence must not be
+  // reported as a provider that has stopped answering.
+  const waiting = job.status === 'queued' && job.queue_place > 0;
+  const idle = busy && !waiting && state.markAt
+    ? Math.floor((Date.now() - state.markAt) / 1000) : 0;
 
   p.push(`<div class="stage-head">
       <h2>${esc(job.title || job.topic || 'Video')}</h2>
@@ -1511,6 +1515,13 @@ function drawStage(job) {
     </div>
     <div class="track ${esc(job.status)}${busy ? ' live' : ''}"><i style="width:${job.progress}%"></i></div>
     <p class="step${busy ? ' busy' : ''}">${esc(meta.join(' · '))}</p>`);
+
+  // Waiting for a slot is not the same as working, and a render that says
+  // "rendering" while it sits behind another one is how the app looked frozen.
+  if (job.status === 'queued' && job.queue_place) {
+    p.push(`<div class="stall queue"><span>Navbatda ${job.queue_place}-chi — oldingi
+      render tugagach o‘zi boshlanadi. Ilovani yopsangiz ham davom etadi.</span></div>`);
+  }
 
   if (busy && idle >= IDLE_WARN) {
     p.push(`<div class="stall${idle >= IDLE_STOP ? ' long' : ''}">
@@ -1644,6 +1655,8 @@ const ED = {
   i: 0, sel: null, tab: 'scene',
   shot: 0,          // which shot of the current scene the panel is editing
   dirty: new Set(), styleDirty: false, timer: null, saving: 0, busy: false,
+  // A render is running over these rows, so saving is held until it settles.
+  locked: false, held: false,
 };
 
 const LAYER_ANIMS = {
@@ -1732,6 +1745,14 @@ function setSaver(text, kind = '') {
 function touch(what = 'scene') {
   if (what === 'style') ED.styleDirty = true;
   else ED.dirty.add(ED.i);
+  // A render is reading the rows this would write to, and the server refuses on
+  // that basis. So the edit waits here — visible on the canvas, marked as
+  // pending — and goes up on its own when the render settles.
+  if (ED.locked) {
+    ED.held = true;
+    setSaver('render tugagach saqlanadi');
+    return;
+  }
   setSaver('saqlanmoqda…');
   clearTimeout(ED.timer);
   ED.timer = setTimeout(flush, 800);
@@ -1745,6 +1766,9 @@ function editorError(message) {
 
 async function flush() {
   if (!ED.job) return;
+  // Held, not dropped: the server refuses writes while it is rendering these
+  // rows, so the edits stay in `ED.dirty` and this runs again when it settles.
+  if (ED.locked) { ED.held = ED.dirty.size > 0 || ED.styleDirty; return; }
   const id = ED.job.id;
   const pending = [...ED.dirty];
   const styleChanged = ED.styleDirty;
@@ -1805,8 +1829,15 @@ async function flush() {
 
 // ── build ─────────────────────────────────────────────────────────
 function syncEditor(job) {
-  const on = job.kind !== 'dub'
-    && (job.status === 'review' || job.status === 'done') && job.scenes?.length;
+  // A render used to take the editor down with it: the moment the status left
+  // `review` the whole studio was unmounted, so pressing Render threw away the
+  // scene you were looking at, the layer you had selected and the place you had
+  // scrolled to — and gave back a progress bar. The work being rendered is the
+  // work you were just editing, so it stays on screen while it runs.
+  const usable = job.kind !== 'dub' && job.scenes?.length;
+  const rendering = job.status === 'rendering' || job.status === 'queued';
+  const on = usable && (job.status === 'review' || job.status === 'done'
+                        || (rendering && ED.job?.id === job.id));
   $('#editor').classList.toggle('hidden', !on);
   if (!on) {
     state.drawn = null;
@@ -1814,17 +1845,43 @@ function syncEditor(job) {
     return;
   }
 
+  // Edits are held rather than refused while a render runs. The server rejects
+  // them outright (the render is reading those very rows), so sending them
+  // would only produce an error the user cannot act on; held here, they go up
+  // by themselves the moment the render settles.
+  ED.locked = rendering;
+  $('#editor').classList.toggle('locked', rendering);
+  // The open job's own metadata is kept current even when the studio is not
+  // rebuilt below — status, progress and the finished video's URL all change
+  // under it, and anything reading `ED.job` would otherwise still be answering
+  // from before the render started. `ED.scenes` is the user's own copy and is
+  // deliberately left alone.
+  if (ED.job?.id === job.id) ED.job = job;
+
   $('#editor-title').textContent = `Sarideo · ${job.scenes.length} sahna`;
-  $('#editor-note').textContent = job.status === 'review'
-    ? 'Rasm ustidan sudrab joylashtiring. O‘zgarishlar o‘zi saqlanadi.'
-    : 'Video tayyor. O‘zgartirsangiz qayta render qiling.';
-  $('#render-btn').textContent = job.status === 'review' ? 'Render qilish' : 'Qayta render';
+  $('#editor-note').textContent = rendering
+    ? (job.status === 'queued'
+        ? `Navbatda${job.queue_place ? ` ${job.queue_place}-chi` : ''} — shu yerda ishlashda davom eting.`
+        : 'Render ketmoqda — ko‘rib turishingiz mumkin, o‘zgarishlar tugagach saqlanadi.')
+    : job.status === 'review'
+      ? 'Rasm ustidan sudrab joylashtiring. O‘zgarishlar o‘zi saqlanadi.'
+      : 'Video tayyor. O‘zgartirsangiz qayta render qiling.';
+  $('#render-btn').disabled = rendering;
+  $('#render-btn').textContent = rendering
+    ? (job.status === 'queued' ? 'Navbatda…' : 'Render ketmoqda…')
+    : job.status === 'review' ? 'Render qilish' : 'Qayta render';
+
+  // The render finished and there are edits waiting behind it.
+  if (!rendering && ED.held) { ED.held = false; touch('scene'); }
 
   const stamp = `${job.id}:${job.updated_at}`;
   if (state.drawn === stamp) return;
   // Never redraw over work that has not reached the server yet, or over
-  // someone who is mid-sentence in one of the fields.
+  // someone who is mid-sentence in one of the fields. A render writes to the row
+  // every few seconds, and rebuilding the studio under a playing preview each
+  // time would make watching it back impossible.
   if (ED.dirty.size || ED.styleDirty || ED.saving) return;
+  if (PREVIEW.chain || PREVIEW.raf) return;
   if (state.drawn?.startsWith(`${job.id}:`) && document.activeElement?.closest('.panel')) return;
   state.drawn = stamp;
   buildStudio(job);
@@ -1887,6 +1944,13 @@ function drawFilmstrip() {
     b.addEventListener('click', (e) => {
       if (e.target.closest('[data-move]')) return;
       if (ED.i === index) return;
+      // Picking a scene while the whole video is playing is a seek, not a stop:
+      // it carries on from there. Only a single-scene preview ends here.
+      if (PREVIEW.chain && ED.scenes[index]?.audio_url) {
+        ED.shot = 0;
+        playFrom(index, { chain: true });
+        return;
+      }
       ED.i = index;
       ED.shot = 0;
       ED.sel = null;
@@ -2016,41 +2080,100 @@ $('#add-scene').addEventListener('click', async () => {
 // ── scene preview ─────────────────────────────────────────────────
 // Playing the scene's own voice-over and driving the canvas from its clock is
 // the only way to check that a layer lands on the word it is meant to land on.
-const PREVIEW = { audio: null, raf: 0, index: -1 };
+// `chain` is what makes this a player rather than a scene auditioner: with it
+// set, the end of one scene moves to the next and keeps going. `spare` is the
+// element the *next* scene is loaded into while the current one is still
+// playing, which is the whole trick — asking one element to change src at the
+// moment of the handover is what puts a gap between every scene.
+const PREVIEW = { audio: null, spare: null, raf: 0, index: -1, chain: false, ready: '' };
 
 function stopPreview() {
   PREVIEW.audio?.pause();
   cancelAnimationFrame(PREVIEW.raf);
   PREVIEW.raf = 0;
   PREVIEW.index = -1;
+  PREVIEW.chain = false;
+  PREVIEW.ready = '';
   $('#play-icon').innerHTML = '<path d="M8 5.5l11 6.5-11 6.5z"/>';
   $('#play-btn span').textContent = 'Eshitish';
+  $('#playall-icon').innerHTML = '<path d="M4 5.5l9 6.5-9 6.5z"/><path d="M17 5v14"/>';
+  $('#playall-btn span').textContent = 'Hammasi';
+  $('#playall-btn').classList.remove('on');
   $('#scrub-fill').style.width = '0%';
   if (ED.job) { drawLayers(); drawCaptionSample(); }
 }
 
-function togglePreview() {
-  const s = scene();
-  if (!s?.audio_url) { toast('Bu sahnada hali ovoz yo‘q'); return; }
-  if (PREVIEW.raf && PREVIEW.index === ED.i) { stopPreview(); return; }
+/** Load the scene after `i` into the spare element, so the handover is instant. */
+function preload(i) {
+  const next = ED.scenes[i + 1];
+  if (!next?.audio_url) { PREVIEW.ready = ''; return; }
+  PREVIEW.spare = PREVIEW.spare || new Audio();
+  if (PREVIEW.spare.src !== next.audio_url) {
+    PREVIEW.spare.src = next.audio_url;
+    PREVIEW.spare.load();
+  }
+  PREVIEW.ready = next.audio_url;
+}
 
-  stopPreview();
+/** The first scene at or after `from` that has a recording. */
+function nextVoiced(from) {
+  for (let i = from; i < ED.scenes.length; i += 1) {
+    if (ED.scenes[i]?.audio_url) return i;
+  }
+  return -1;
+}
+
+function playFrom(i, { chain }) {
+  const s = ED.scenes[i];
+  if (!s?.audio_url) { stopPreview(); return; }
+
+  ED.i = i;
+  ED.sel = null;
+  PREVIEW.index = i;
+  PREVIEW.chain = chain;
+  // Redrawing the whole studio between every scene would rebuild the panel and
+  // steal focus mid-playback; the canvas and the strip are all that change.
+  drawCanvas();
+  drawFilmstrip();
+  // A fifty-scene strip scrolls, so the frame being played has to be brought to
+  // where it can be seen — otherwise the picture moves and the strip does not.
+  $(`#filmstrip [data-scene="${i}"]`)
+    ?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+
   PREVIEW.audio = PREVIEW.audio || new Audio();
-  PREVIEW.audio.src = s.audio_url;
+  if (PREVIEW.audio.src !== s.audio_url) PREVIEW.audio.src = s.audio_url;
   PREVIEW.audio.currentTime = 0;
-  PREVIEW.index = ED.i;
-  $('#play-icon').innerHTML = '<path d="M8 5h3v14H8zM13 5h3v14h-3z"/>';
-  $('#play-btn span').textContent = 'To‘xtatish';
+  if (chain) preload(i);
 
   PREVIEW.audio.play().then(() => {
     const step = () => {
-      if (PREVIEW.index !== ED.i) { stopPreview(); return; }
+      // Someone clicked another scene while it was playing. In chain mode that
+      // is a seek, not a stop — carry on from wherever they went.
+      if (PREVIEW.index !== ED.i) {
+        if (PREVIEW.chain && ED.scenes[ED.i]?.audio_url) { playFrom(ED.i, { chain: true }); return; }
+        stopPreview();
+        return;
+      }
       const t = PREVIEW.audio.currentTime;
       const span = Math.max(0.1, s.duration || PREVIEW.audio.duration || 1);
       $('#scrub-fill').style.width = `${Math.min(100, (t / span) * 100)}%`;
       drawLayers(t);
       drawCaptionSample(t);
-      if (PREVIEW.audio.ended) { stopPreview(); return; }
+      if (PREVIEW.audio.ended) {
+        if (!PREVIEW.chain) { stopPreview(); return; }
+        const following = nextVoiced(i + 1);
+        if (following === -1) { stopPreview(); toast('Video tugadi'); return; }
+        // Swap in the element that has already buffered, and hand the drained
+        // one back to be the next spare.
+        if (PREVIEW.ready === ED.scenes[following].audio_url) {
+          const drained = PREVIEW.audio;
+          PREVIEW.audio = PREVIEW.spare;
+          PREVIEW.spare = drained;
+          PREVIEW.ready = '';
+        }
+        playFrom(following, { chain: true });
+        return;
+      }
       PREVIEW.raf = requestAnimationFrame(step);
     };
     PREVIEW.raf = requestAnimationFrame(step);
@@ -2060,7 +2183,38 @@ function togglePreview() {
   });
 }
 
+function togglePreview() {
+  const s = scene();
+  if (!s?.audio_url) { toast('Bu sahnada hali ovoz yo‘q'); return; }
+  if (PREVIEW.raf && PREVIEW.index === ED.i && !PREVIEW.chain) { stopPreview(); return; }
+  stopPreview();
+  $('#play-icon').innerHTML = '<path d="M8 5h3v14H8zM13 5h3v14h-3z"/>';
+  $('#play-btn span').textContent = 'To‘xtatish';
+  playFrom(ED.i, { chain: false });
+}
+
+function togglePlayAll() {
+  if (PREVIEW.chain) { stopPreview(); return; }
+  const start = nextVoiced(ED.i) === -1 ? nextVoiced(0) : nextVoiced(ED.i);
+  if (start === -1) { toast('Hali hech qaysi sahnada ovoz yo‘q'); return; }
+  stopPreview();
+  $('#playall-icon').innerHTML = '<path d="M8 5h3v14H8zM13 5h3v14h-3z"/>';
+  $('#playall-btn span').textContent = 'To‘xtatish';
+  $('#playall-btn').classList.add('on');
+  playFrom(start, { chain: true });
+}
+
 $('#play-btn').addEventListener('click', togglePreview);
+$('#playall-btn').addEventListener('click', togglePlayAll);
+
+// Space is what every player in the world uses, and reviewing a long video is
+// exactly when reaching for a small button gets tiring. Never while typing.
+addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || !ED.job || $('#editor').classList.contains('hidden')) return;
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  e.preventDefault();
+  togglePlayAll();
+});
 
 /** How a layer looks `t` seconds into the scene, per its own animation. */
 function layerAt(l, t, duration) {
