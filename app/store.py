@@ -113,6 +113,15 @@ CREATE TABLE IF NOT EXISTS profiles (
     platform   TEXT NOT NULL,
     handle     TEXT NOT NULL DEFAULT '',
     summary    TEXT NOT NULL DEFAULT '',
+    -- The specifics, kept apart from the prose. A summary is what a person reads
+    -- back; these are what the assistant is actually held to when it proposes
+    -- something, and an idea that ignores them is the generic idea this exists
+    -- to prevent.
+    niche      TEXT NOT NULL DEFAULT '',
+    audience   TEXT NOT NULL DEFAULT '',
+    language   TEXT NOT NULL DEFAULT '',
+    pillars    TEXT NOT NULL DEFAULT '',
+    style      TEXT NOT NULL DEFAULT '',
     mime       TEXT NOT NULL DEFAULT 'image/png',
     ext        TEXT NOT NULL DEFAULT '.png',
     image      {blob} NOT NULL,
@@ -255,6 +264,11 @@ _ADDED_COLUMNS = (
     ("music", "kind", "TEXT NOT NULL DEFAULT 'music'"),
     ("heroes", "voice_id", "TEXT NOT NULL DEFAULT ''"),
     ("heroes", "tts_provider", "TEXT NOT NULL DEFAULT ''"),
+    ("profiles", "niche", "TEXT NOT NULL DEFAULT ''"),
+    ("profiles", "audience", "TEXT NOT NULL DEFAULT ''"),
+    ("profiles", "language", "TEXT NOT NULL DEFAULT ''"),
+    ("profiles", "pillars", "TEXT NOT NULL DEFAULT ''"),
+    ("profiles", "style", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -447,20 +461,26 @@ def delete_asset(asset_id: str) -> bool:
 
 # --- channel profiles --------------------------------------------------------
 
-_PROFILE_COLS = "id, platform, handle, summary, mime, ext, created_at"
+_PROFILE_FIELDS = ("niche", "audience", "language", "pillars", "style")
+_PROFILE_COLS = ("id, platform, handle, summary, niche, audience, language, "
+                 "pillars, style, mime, ext, created_at")
 
 
 def add_profile(platform: str, handle: str, summary: str, data: bytes,
-                mime: str, ext: str) -> dict[str, Any]:
+                mime: str, ext: str, **read: str) -> dict[str, Any]:
+    """Keep a channel screenshot and everything that was read off it."""
     profile_id = new_id("prf")
+    extra = {field: str(read.get(field) or "") for field in _PROFILE_FIELDS}
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO profiles (id, platform, handle, summary, mime, ext, image, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (profile_id, platform, handle, summary, mime, ext, data, _now()),
+            "INSERT INTO profiles (id, platform, handle, summary, niche, audience,"
+            " language, pillars, style, mime, ext, image, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (profile_id, platform, handle, summary, extra["niche"], extra["audience"],
+             extra["language"], extra["pillars"], extra["style"], mime, ext, data, _now()),
         )
     return {"id": profile_id, "platform": platform, "handle": handle,
-            "summary": summary, "mime": mime, "ext": ext}
+            "summary": summary, "mime": mime, "ext": ext, **extra}
 
 
 def list_profiles(platform: str = "") -> list[dict[str, Any]]:
@@ -483,7 +503,7 @@ def get_profile_image(profile_id: str) -> tuple[bytes, str, str] | None:
 
 
 def update_profile(profile_id: str, *, handle: str | None = None,
-                   summary: str | None = None) -> bool:
+                   summary: str | None = None, **read: str | None) -> bool:
     sets, values = [], []
     if handle is not None:
         sets.append("handle = ?")
@@ -491,6 +511,10 @@ def update_profile(profile_id: str, *, handle: str | None = None,
     if summary is not None:
         sets.append("summary = ?")
         values.append(summary)
+    for field in _PROFILE_FIELDS:
+        if read.get(field) is not None:
+            sets.append(f"{field} = ?")
+            values.append(read[field])
     if not sets:
         return False
     values.append(profile_id)

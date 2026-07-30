@@ -31,10 +31,21 @@ katagini olib tashlang — u holda hammasi bir yo'la tugaydi.
 Forma to'ldirishning o'rniga aytib ham bo'ladi. **Suhbat** bo'limida:
 
 1. **Kanalingiz skrinshotini yuklaysiz** — Instagram, YouTube yoki TikTok. AI
-   uni bir marta o'qiydi: nima haqida kanal, kim ko'radi, qanday yozilgan. O'qigani
-   saqlanadi, ya'ni keyingi har savolda rasm qayta yuborilmaydi.
+   uni bir marta o'qiydi va **aniq narsalarni** yozib qo'yadi: mavzu, kim ko'radi,
+   postlar tili, nima post qilasiz, qanday olinadi. O'qigani saqlanadi, ya'ni
+   keyingi har savolda rasm qayta yuborilmaydi.
+
+   Kartochkadagi **✎** tugmasi bilan har birini qo'lda tuzatasiz. Bu muhim:
+   g'oyalar aynan shu ma'lumotlarga tayanib beriladi, noto'g'ri bo'lsa g'oyalar
+   ham umumiy chiqadi.
 2. **G'oya so'raysiz** — «YouTube Shorts uchun g'oyalar ber». Javob kartalar bilan
-   keladi: sarlavha, ilk jumla, nega shu kanalda ishlaydi, va necha soniya.
+   keladi: sarlavha, ilk jumla, nega shu kanalda ishlaydi, **nimaga tayangani**
+   (qaysi ruknni davom ettiradi yoki qaysi bo'shliqni to'ldiradi), va necha soniya.
+
+   Har bir g'oya bitta sinovdan o'tishi kerak: **shu platformadagi har qanday
+   kanalga to'g'ri keladigan g'oya — g'oya emas.** Agar AI g'oya nimaga tayanganini
+   yozib bera olmasa, u g'oya ro'yxatga tushmaydi. Kanal ko'rsatilmagan bo'lsa
+   taxmin qilmaydi — nima haqida kanal ekanini so'raydi.
 3. **Yoqqanini bosasiz** — AI qolgan narsalarni so'raydi (uzunlik, shakl, qaysi
    personajlar, harakatlanadimi), tugmalar ko'rinishida. Hammasi ma'lum bo'lgach
    videoni o'zi boshlaydi.
