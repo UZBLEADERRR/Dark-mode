@@ -978,6 +978,7 @@ input[type="range"]::-moz-range-thumb {
   scrollbar-width: none;
 }
 .projects::-webkit-scrollbar { display: none; }
+
 .proj {
   position: relative; flex: 0 0 auto;
   width: 168px; padding: 11px 12px 12px;
@@ -1182,7 +1183,19 @@ input[type="range"]::-moz-range-thumb {
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--r);
 }
-.model-row > span { display: flex; align-items: center; gap: 8px; }
+/* A grid item is `min-width: auto`, and a text input's intrinsic minimum is
+   about twenty characters wide — so these rows refused to shrink and pushed the
+   library off the side of a narrow phone. Grid may now make them as narrow as
+   the column is. */
+.models-box > *, .brand-box > *, .lib-body > * { min-width: 0; }
+/* An error from a provider carries the URL it called, and a sixty-character URL
+   has no spaces in it — so it painted straight off the side of the phone and
+   took the whole page's horizontal scroll with it. Anything that reports back
+   from somewhere else is allowed to break mid-word. */
+.note, .hint, .msg, .row .model, .logs { overflow-wrap: anywhere; }
+.models-box input, .models-box select,
+.brand-box input, .brand-box select { width: 100%; min-width: 0; }
+.model-row > span { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .model-row b {
   padding: 2px 7px; border-radius: 99px;
   background: rgba(61, 220, 145, .14); color: var(--ok);
@@ -1493,3 +1506,67 @@ input[type="range"]::-moz-range-thumb {
 .chat-bar .go.slim svg {
   width: 17px; height: 17px; fill: currentColor; stroke: none;
 }
+
+/* ── the library, folded ──────────────────────────────────────────────────────
+   Six sections on one page put the model settings and the health list three
+   thousand pixels down on a phone. Each one folds; the heading carries what is
+   inside it, so a closed section still answers "how many" and "is anything
+   wrong" without being opened. */
+
+.lib-sec {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r); margin-top: 10px;
+}
+.lib-sec > summary {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 15px; cursor: pointer; list-style: none;
+  font-size: .88rem; font-weight: 600;
+}
+.lib-sec > summary::-webkit-details-marker { display: none; }
+.lib-sec > summary em {
+  margin-left: auto; font-style: normal; font-size: .74rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.lib-sec > summary em.warn { color: var(--warn); }
+/* The chevron is drawn on the summary rather than as an element, so it cannot be
+   left behind by a section whose contents were re-rendered. */
+.lib-sec > summary::after {
+  content: ''; width: 7px; height: 7px; flex: none;
+  border-right: 1.8px solid var(--faint); border-bottom: 1.8px solid var(--faint);
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform .2s var(--ease);
+}
+.lib-sec[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
+.lib-sec > summary:hover::after { border-color: var(--muted); }
+.lib-body { padding: 0 15px 15px; }
+.lib-body > .lib-grid, .lib-body > .lib-list { margin-top: 10px; }
+
+/* A tab or a project you cannot see is one you do not know is there, and five
+   sections do not fit across a phone. The fade is applied only on the side there
+   is actually something on — a strip whose contents fit is not faded at all, and
+   one scrolled to its end stops promising more. */
+.fade-l {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 20px);
+          mask-image: linear-gradient(to right, transparent, #000 20px);
+}
+.fade-r {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 20px);
+          mask-image: linear-gradient(to left, transparent, #000 20px);
+}
+.fade-l.fade-r {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 20px,
+                      #000 calc(100% - 20px), transparent);
+          mask-image: linear-gradient(to right, transparent, #000 20px,
+                      #000 calc(100% - 20px), transparent);
+}
+
+/* Nothing open: say so, and offer the thing to open. */
+.nothing {
+  margin-top: 12px; padding: 30px 20px 34px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r); text-align: center;
+}
+.nothing h2 { font-size: 1.05rem; margin: 0 0 6px; }
+.nothing p { color: var(--muted); font-size: .85rem; margin: 0 auto 18px; max-width: 32ch; }
+.nothing-acts { display: grid; gap: 7px; max-width: 300px; margin: 0 auto; }
+.nothing-acts .btn { width: 100%; justify-content: center; }

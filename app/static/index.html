@@ -142,6 +142,14 @@
 
     <section class="stage hidden" id="stage"></section>
 
+    <!-- With nothing open this screen used to be a blank page under a dead row
+         of tools. It says what to do, and offers the obvious thing to do it to. -->
+    <div class="nothing hidden" id="edit-empty">
+      <h2>Ochilgan loyiha yo‘q</h2>
+      <p>Yuqoridagi ro‘yxatdan birini tanlang, yoki yangi video yarating.</p>
+      <div class="nothing-acts" id="edit-empty-acts"></div>
+    </div>
+
     <section class="editor hidden" id="editor">
       <div class="editor-bar">
         <div>
@@ -218,43 +226,64 @@
   <section class="view" id="view-library">
     <h1 class="view-title">Kutubxona</h1>
 
-    <h3>Herolar</h3>
-    <form id="hero-form" class="mini">
-      <input name="name" placeholder="Ism" required />
-      <input name="description" placeholder="Tavsif — 30 yosh, ko'k chopon" />
-      <label class="file"><input type="file" name="image" accept="image/*" required /><span>Rasm tanlash</span></label>
-      <button>Qo'shish</button>
-    </form>
-    <div class="lib-grid" id="hero-list"></div>
+    <!-- Six sections on one page put the model settings three thousand pixels
+         below the fold. Each one folds instead, and which are open is
+         remembered, so the library is a list of places rather than a scroll. -->
+    <details class="lib-sec" id="sec-heroes" open>
+      <summary><span>Herolar</span><em id="count-heroes"></em></summary>
+      <div class="lib-body">
+        <form id="hero-form" class="mini">
+          <input name="name" placeholder="Ism" required />
+          <input name="description" placeholder="Tavsif — 30 yosh, ko'k chopon" />
+          <label class="file"><input type="file" name="image" accept="image/*" required /><span>Rasm tanlash</span></label>
+          <button>Qo'shish</button>
+        </form>
+        <div class="lib-grid" id="hero-list"></div>
+      </div>
+    </details>
 
-    <h3>Brend</h3>
-    <div class="brand-box" id="brand-box"></div>
+    <details class="lib-sec" id="sec-brand">
+      <summary><span>Brend</span><em></em></summary>
+      <div class="lib-body"><div class="brand-box" id="brand-box"></div></div>
+    </details>
 
-    <h3>Qatlam rasmlari</h3>
-    <form id="asset-form" class="mini">
-      <input name="name" placeholder="Nomi" />
-      <label class="file"><input type="file" name="image" accept="image/*" required /><span>Rasm tanlash</span></label>
-      <button>Qo'shish</button>
-    </form>
-    <div class="lib-grid" id="asset-list"></div>
+    <details class="lib-sec" id="sec-assets">
+      <summary><span>Qatlam rasmlari</span><em id="count-assets"></em></summary>
+      <div class="lib-body">
+        <form id="asset-form" class="mini">
+          <input name="name" placeholder="Nomi" />
+          <label class="file"><input type="file" name="image" accept="image/*" required /><span>Rasm tanlash</span></label>
+          <button>Qo'shish</button>
+        </form>
+        <div class="lib-grid" id="asset-list"></div>
+      </div>
+    </details>
 
-    <h3>Musiqa va effektlar</h3>
-    <form id="music-form" class="mini">
-      <input name="name" placeholder="Nomi" required />
-      <select name="kind">
-        <option value="music">Fon musiqasi</option>
-        <option value="sfx">Tovush effekti</option>
-      </select>
-      <label class="file"><input type="file" name="audio" accept="audio/*" required /><span>Audio tanlash</span></label>
-      <button>Qo'shish</button>
-    </form>
-    <div class="lib-list" id="music-list"></div>
+    <details class="lib-sec" id="sec-music">
+      <summary><span>Musiqa va effektlar</span><em id="count-music"></em></summary>
+      <div class="lib-body">
+        <form id="music-form" class="mini">
+          <input name="name" placeholder="Nomi" required />
+          <select name="kind">
+            <option value="music">Fon musiqasi</option>
+            <option value="sfx">Tovush effekti</option>
+          </select>
+          <label class="file"><input type="file" name="audio" accept="audio/*" required /><span>Audio tanlash</span></label>
+          <button>Qo'shish</button>
+        </form>
+        <div class="lib-list" id="music-list"></div>
+      </div>
+    </details>
 
-    <h3>Modellar</h3>
-    <div class="models-box" id="models-box"></div>
+    <details class="lib-sec" id="sec-models">
+      <summary><span>Modellar</span><em></em></summary>
+      <div class="lib-body"><div class="models-box" id="models-box"></div></div>
+    </details>
 
-    <h3>Holat</h3>
-    <div class="lib-list" id="health-list"></div>
+    <details class="lib-sec" id="sec-health">
+      <summary><span>Holat</span><em id="count-health"></em></summary>
+      <div class="lib-body"><div class="lib-list" id="health-list"></div></div>
+    </details>
   </section>
 
 </main>
