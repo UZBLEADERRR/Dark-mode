@@ -47,6 +47,24 @@ SUPABASE_URL = _env("SUPABASE_URL").rstrip("/")
 SUPABASE_SERVICE_KEY = _env("SUPABASE_SERVICE_KEY")
 SUPABASE_BUCKET = _env("SUPABASE_BUCKET", "videos")
 
+# --- YouTube -----------------------------------------------------------------
+# Publishing is OAuth, not an API key: the app acts as the user's own channel, so
+# it needs their consent and a refresh token — which is stored in the database
+# rather than the environment, because the person who grants it is not the person
+# who deploys the app.
+YOUTUBE_CLIENT_ID = _env("YOUTUBE_CLIENT_ID")
+YOUTUBE_CLIENT_SECRET = _env("YOUTUBE_CLIENT_SECRET")
+# Where Google sends the browser back to. Railway sets RAILWAY_PUBLIC_DOMAIN, so
+# a normal deployment needs no extra variable; anything else can say so directly.
+PUBLIC_URL = (_env("PUBLIC_URL")
+              or (f"https://{_env('RAILWAY_PUBLIC_DOMAIN')}"
+                  if _env("RAILWAY_PUBLIC_DOMAIN") else "")).rstrip("/")
+
+
+def youtube_ready() -> bool:
+    """Whether the app *could* publish — a channel still has to be connected."""
+    return bool(YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET)
+
 # --- LLM ---------------------------------------------------------------------
 # auto -> Claude when ANTHROPIC_API_KEY is set, otherwise Gemini. With only a
 # Gemini key configured the whole app (script, prompts, subtitles, images,

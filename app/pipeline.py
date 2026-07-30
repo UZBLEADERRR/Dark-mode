@@ -1556,6 +1556,63 @@ async def restyle_music(job_id: str, music_id: str | None, music_start: float) -
         _fail(job_id, exc, warnings)
 
 
+async def finished_file(job_id: str) -> Path | None:
+    """The rendered MP4, on this disk, whatever it took to get it there.
+
+    Publishing needs the bytes, not a URL — and the disk the render happened on
+    may well be gone. Anything that was kept is brought back first, which is the
+    difference between "publish it" and "render it again to publish it".
+    """
+    workdir = workdir_for(job_id)
+    local = _finished_video(workdir) if workdir.exists() else None
+    if local is not None:
+        return local
+
+    job = store.get_job(job_id) or {}
+    result = job.get("result") or {}
+    # The name is whatever the render wrote; the URL is the only place it survives
+    # once the disk has not.
+    for url in (result.get("download_url"), result.get("video_url")):
+        name = Path(str(url or "").split("?")[0]).name
+        if not name.endswith((".mp4", ".mov", ".mkv", ".webm")):
+            continue
+        target = workdir / name
+        if target.exists():
+            return target
+        key = f"{job_id}/{name}"
+        if await storage.fetch(key, target):
+            return target
+        data = await asyncio.to_thread(store.get_media, key)
+        if data is not None:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            return target
+    return None
+
+
+async def thumbnail_file(job_id: str) -> Path | None:
+    """The first generated cover, if there is one. Never worth failing over."""
+    job = store.get_job(job_id) or {}
+    shots = (job.get("result") or {}).get("thumbnails") or []
+    if not shots:
+        return None
+    name = Path(str(shots[0]).split("?")[0]).name
+    if not name:
+        return None
+    target = workdir_for(job_id) / "thumbs" / name
+    if target.exists():
+        return target
+    key = f"{job_id}/thumbs/{name}"
+    if await storage.fetch(key, target):
+        return target
+    data = await asyncio.to_thread(store.get_media, key)
+    if data is None:
+        return None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return target
+
+
 def _finished_video(workdir: Path) -> Path | None:
     # `fuse_` files are the half-joined batches a long project is assembled from.
     # They are ordinary MP4s and they are the newest thing in the folder when an

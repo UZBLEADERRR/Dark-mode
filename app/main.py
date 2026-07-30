@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
 
 from . import config, pgstore, pipeline, skills, store
@@ -23,6 +24,7 @@ from .models import (
     ModelSettings,
     MusicSwap,
     ProfilePatch,
+    PublishRequest,
     RegenerateRequest,
     RepurposeRequest,
     SceneInsert,
@@ -31,7 +33,7 @@ from .models import (
     ShotIn,
     TranslateRequest,
 )
-from .providers import catalog, images, storage, tts
+from .providers import catalog, images, storage, tts, youtube
 from .skills import llm, strategist
 from .render import kenburns, overlays as ov
 from .render import shots
@@ -232,6 +234,9 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "scene_count": result.get("scene_count") or len(scenes),
         "metadata": result.get("metadata"),
         "thumbnails": result.get("thumbnails") or [],
+        # Where it went, once it has gone somewhere. The gallery offers to open it
+        # rather than to publish it again.
+        "youtube": result.get("youtube") or None,
         "transcript": result.get("transcript") or [],
         "scenes": [pipeline.public_scene(job["id"], s) for s in scenes] if with_scenes else None,
         # What is still missing, so a job that stopped halfway can say how far
@@ -704,6 +709,114 @@ async def chat(body: ChatTurn) -> dict[str, Any]:
              "asks": answer["asks"], "job_id": job_id}]
     store.set_setting(CHAT_KEY, (history + turn)[-CHAT_KEEP:])
     return {**answer, "job_id": job_id}
+
+
+# ── publishing to your own channel ────────────────────────────────────────────
+
+@app.get("/api/youtube")
+async def youtube_status() -> dict[str, Any]:
+    return youtube.status()
+
+
+@app.get("/api/youtube/auth")
+async def youtube_auth() -> dict[str, str]:
+    """Where to send the browser. Returned rather than redirected to, because the
+    app is a single page and a redirect would take it off screen."""
+    try:
+        return {"url": youtube.auth_url()}
+    except youtube.YouTubeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/youtube/callback", include_in_schema=False)
+async def youtube_callback(code: str = "", error: str = "") -> HTMLResponse:
+    """Where Google sends the browser back. A page, not JSON — a person is looking."""
+    if error or not code:
+        said = error or "Google kod qaytarmadi."
+        return HTMLResponse(_closing_page(f"Ulanmadi: {said}", ok=False))
+    try:
+        who = await youtube.exchange(code)
+    except youtube.YouTubeError as exc:
+        return HTMLResponse(_closing_page(f"Ulanmadi: {exc}", ok=False))
+    name = who.get("channel_title") or "kanalingiz"
+    return HTMLResponse(_closing_page(f"{name} ulandi. Bu oynani yopsangiz bo'ladi."))
+
+
+def _closing_page(message: str, ok: bool = True) -> str:
+    colour = "#3ddc91" if ok else "#ff5c47"
+    return f"""<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sarideo · YouTube</title>
+<body style="margin:0;min-height:100vh;display:grid;place-items:center;
+  background:#08090c;color:#eef1f7;font:15px/1.6 -apple-system,BlinkMacSystemFont,sans-serif">
+<div style="max-width:30rem;padding:28px;text-align:center">
+  <div style="width:44px;height:44px;margin:0 auto 14px;border-radius:99px;
+    background:{colour};opacity:.16"></div>
+  <p style="color:{colour};font-weight:600;margin:0 0 8px">{"Tayyor" if ok else "Xatolik"}</p>
+  <p style="margin:0;color:#7c8497">{message}</p>
+</div>
+<script>
+  // The app opened this in another tab and is waiting to hear back.
+  try {{ window.opener && window.opener.postMessage(
+    {{ sarideo: 'youtube', ok: {str(ok).lower()} }}, '*'); }} catch (e) {{}}
+  {"setTimeout(() => window.close(), 1600);" if ok else ""}
+</script>
+</body>"""
+
+
+@app.delete("/api/youtube")
+async def youtube_disconnect() -> dict[str, bool]:
+    youtube.disconnect()
+    return {"disconnected": True}
+
+
+@app.post("/api/jobs/{job_id}/publish", status_code=202)
+async def publish_job(job_id: str, body: PublishRequest) -> dict[str, Any]:
+    """Put a finished video on the connected channel.
+
+    Only ever from a finished render, and only when asked: this is the one action
+    in the app that other people can see, so it is never a side effect of
+    something else.
+    """
+    job = _get_job_or_404(job_id)
+    if job["status"] != "done":
+        raise HTTPException(status_code=400,
+                            detail="Faqat tayyor video joylanadi — avval render qiling.")
+    if not youtube.connected():
+        raise HTTPException(status_code=400,
+                            detail="YouTube kanali ulanmagan — Kutubxonada ulang.")
+
+    result = job.get("result") or {}
+    meta = (result.get("metadata") or {}).get("youtube") or {}
+    local = await pipeline.finished_file(job_id)
+    if local is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Video fayli topilmadi — konteyner o'chgan bo'lsa «Qayta render» qiling.")
+
+    title = (body.title or meta.get("title") or result.get("title") or "Video").strip()
+    description = body.description if body.description is not None else meta.get("description", "")
+    tags = body.tags if body.tags is not None else (meta.get("tags") or [])
+
+    try:
+        made = await youtube.upload(
+            local, title=title, description=description or "", tags=tags,
+            privacy=body.privacy, publish_at=body.publish_at or None,
+            language=job["request"].get("language", ""),
+        )
+    except youtube.YouTubeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if body.with_thumbnail:
+        shot = await pipeline.thumbnail_file(job_id)
+        if shot is not None:
+            made["thumbnail_set"] = await youtube.set_thumbnail(made["id"], shot)
+
+    # Kept on the job, so the gallery can say "this one is up" rather than
+    # offering to publish it again.
+    store.update_job(job_id, result={**result, "youtube": made},
+                     log=f"YouTube'ga joylandi: {made['url']}")
+    return made
 
 
 @app.post("/api/actors", status_code=201)
@@ -1482,8 +1595,8 @@ async def repurpose_job(job_id: str, body: RepurposeRequest) -> dict[str, Any]:
 async def download(job_id: str) -> FileResponse:
     _get_job_or_404(job_id)
     folder = config.PROJECTS_DIR / job_id
-    videos = [v for v in folder.glob("*.mp4") if not v.name.startswith("clip_")] \
-        if folder.exists() else []
+    videos = [v for v in folder.glob("*.mp4")
+              if not v.name.startswith(("clip_", "fuse_"))] if folder.exists() else []
     if not videos:
         raise HTTPException(status_code=404, detail="This job has no rendered video yet.")
     newest = max(videos, key=lambda p: p.stat().st_mtime)

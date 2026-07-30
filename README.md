@@ -57,6 +57,46 @@ pul turadi.
 Suhbat va kanallar bazada saqlanadi, ya'ni telefonda boshlab kompyuterda davom
 ettirasiz.
 
+## YouTube'ga joylash
+
+Tayyor video kartochkasida **«YouTube'ga joylash»** tugmasi. Sarlavha, tavsif va
+teglar ilova o'zi yozgan publishing pack'dan to'ldirilgan bo'ladi — nimasi
+yoqmasa o'zgartirasiz.
+
+**Vaqt belgilasangiz** video YouTube'ga *private* holda chiqadi va YouTube uni
+o'sha paytda o'zi ochadi. Ya'ni ilova o'sha payt ishlab turishi shart emas.
+
+### Ulash
+
+Bu API kalit emas — ilova **sizning kanalingiz nomidan** ish qiladi, ya'ni sizning
+ruxsatingiz kerak (OAuth).
+
+1. [Google Cloud Console](https://console.cloud.google.com) → loyiha yarating →
+   **APIs & Services** → **Library** → **YouTube Data API v3** ni yoqing.
+2. **Credentials** → **Create credentials** → **OAuth client ID** →
+   *Web application*.
+3. **Authorized redirect URIs** ga ilovadagi manzilni qo'ying. Uni **Kutubxona →
+   YouTube** bo'limi ko'rsatib turadi, nusxalash tugmasi bilan.
+4. Client ID va secret'ni Railway'ga qo'ying:
+
+```
+YOUTUBE_CLIENT_ID=...apps.googleusercontent.com
+YOUTUBE_CLIENT_SECRET=...
+```
+
+`PUBLIC_URL` Railway'da o'zi topiladi (`RAILWAY_PUBLIC_DOMAIN` dan); boshqa joyda
+`PUBLIC_URL=https://sizning-domeningiz` deb yozing.
+
+5. **Kutubxona → YouTube → «Kanalni ulash»**. Bir marta ruxsat berasiz, keyin
+   ilova o'zi joylaydi. Ruxsat bazada saqlanadi — deploy qilinsa yo'qolmaydi.
+
+### Bilib qo'yish kerak
+
+| Nima | Nega |
+|---|---|
+| Kuniga ~6 ta video | Bitta yuklash YouTube kvotasidan 1600 birlik oladi, kunlik limit 10 000. Tugasa aniq xabar chiqadi, ertaga tiklanadi. |
+| Videolar `private` bo'lib chiqishi mumkin | Google tomonidan tasdiqlanmagan ilovalar faqat private yuklaydi. Bu Google qoidasi — ilova nima so'ragani va nima olganini aytib beradi. |
+
 ## AI skills
 
 | Skill | Vazifasi |
