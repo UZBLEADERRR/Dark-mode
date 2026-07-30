@@ -39,6 +39,9 @@
         <div class="chan-head">
           <span>Mening kanallarim</span>
           <em id="chan-count"></em>
+          <!-- A conversation that has wandered is worth ending rather than
+               steering: the assistant reads the history back on every turn. -->
+          <button class="linky" id="chat-new">Yangi suhbat</button>
         </div>
         <div class="chan-row" id="chan-row"></div>
         <div class="chan-add">
@@ -273,6 +276,11 @@
         </form>
         <div class="lib-list" id="music-list"></div>
       </div>
+    </details>
+
+    <details class="lib-sec" id="sec-youtube">
+      <summary><span>YouTube</span><em id="count-youtube"></em></summary>
+      <div class="lib-body"><div class="yt-box" id="yt-box"></div></div>
     </details>
 
     <details class="lib-sec" id="sec-models">

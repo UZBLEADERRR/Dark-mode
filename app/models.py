@@ -307,3 +307,21 @@ class ProfilePatch(BaseModel):
 
 class ChatTurn(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+
+
+class PublishRequest(BaseModel):
+    """What to publish a finished video as.
+
+    Every field is optional because the publishing pack the app already wrote is
+    the default — the point of the sheet is to change what you disagree with, not
+    to retype it.
+    """
+
+    title: str | None = Field(default=None, max_length=100)
+    description: str | None = Field(default=None, max_length=5000)
+    tags: list[str] | None = None
+    privacy: Literal["private", "unlisted", "public"] = "private"
+    # RFC3339. YouTube only honours it on a private video, which is what makes
+    # "prepare it now, publish it Tuesday at nine" work.
+    publish_at: str | None = Field(default=None, max_length=40)
+    with_thumbnail: bool = True

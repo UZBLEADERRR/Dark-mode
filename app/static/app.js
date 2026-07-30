@@ -3501,7 +3501,7 @@ function platformPacks(m) {
    .filter(([, , rows]) => rows.length || tags);
 }
 
-function drawReady(done) {
+function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
   if (!done.length) {
     $('#ready-list').innerHTML =
       '<p class="empty">Hali tayyor video yo‘q. Video render bo‘lgach shu yerda chiqadi.</p>';
@@ -3524,6 +3524,10 @@ function drawReady(done) {
           <button class="btn" data-music="${esc(j.id)}" data-track="${esc(j.music_id || '')}"
             data-at="${esc(String(j.music_start || 0))}">${j.music_id ? 'Musiqani almashtirish' : 'Musiqa qo‘shish'}</button>
           <button class="btn" data-thumbs="${esc(j.id)}">Muqova yaratish</button>
+          ${j.youtube?.url
+            ? `<a class="btn ok" href="${esc(j.youtube.url)}" target="_blank" rel="noopener">
+                 YouTube'da ochish${j.youtube.publish_at ? ' · rejalashtirilgan' : ''}</a>`
+            : `<button class="btn yt" data-publish="${esc(j.id)}">YouTube'ga joylash</button>`}
           <button class="btn" data-repurpose="${esc(j.id)}" data-fmt="${esc(j.video_format)}">Boshqa formatga</button>
           ${j.kind === 'dub' ? '' :
             `<button class="btn" data-translate="${esc(j.id)}" data-lang="${esc(j.language)}">Boshqa tilga</button>`}
@@ -3558,6 +3562,11 @@ function drawReady(done) {
 
   $$('#ready-list [data-copy]').forEach((b) =>
     b.addEventListener('click', () => copyText(b.dataset.copy, b)));
+
+  $$('#ready-list [data-publish]').forEach((b) => b.addEventListener('click', () => {
+    const job = state.jobs.find((j) => j.id === b.dataset.publish);
+    if (job) publishToYouTube(job);
+  }));
 
   // Only the audio is rebuilt, so a track can be tried and changed again in
   // seconds. That is what makes this worth having on a finished video at all —
@@ -3952,6 +3961,18 @@ function growChatInput() {
   box.style.height = `${Math.min(140, box.scrollHeight)}px`;
 }
 
+$('#chat-new').addEventListener('click', async () => {
+  if (!CHAT.messages.length) { toast('Suhbat allaqachon bo‘sh'); return; }
+  if (!confirm('Suhbatni tozalaymizmi? Kanallar va videolar joyida qoladi.')) return;
+  try {
+    await api('/api/chat', { method: 'DELETE' });
+    CHAT.messages = [];
+    drawChat();
+    $('#chat-input').focus();
+    toast('Yangi suhbat');
+  } catch (e) { toast(e.message); }
+});
+
 $('#chat-send').addEventListener('click', () => sendChat());
 $('#chat-input').addEventListener('input', growChatInput);
 $('#chat-input').addEventListener('keydown', (e) => {
@@ -3967,6 +3988,132 @@ async function loadChat() {
   drawChat();
 }
 
+// ══ YouTube ═══════════════════════════════════════════════════════
+// The one thing this app does that other people can see, so it is never a side
+// effect: a video goes up because it was published, not because it rendered.
+
+let YT = { configured: false, connected: false };
+
+async function loadYouTube() {
+  try { YT = await api('/api/youtube'); } catch (e) { YT = { configured: false, connected: false }; }
+  drawYouTube();
+  drawReady();
+}
+
+function drawYouTube() {
+  const box = $('#yt-box');
+  if (!box) return;
+  libCount('youtube', YT.connected ? (YT.channel_title || 'ulangan') : 'ulanmagan',
+           !YT.connected);
+  box.innerHTML = `
+    <div class="row">
+      <span>${YT.connected ? esc(YT.channel_title || 'Kanal') : 'Kanal ulanmagan'}</span>
+      <span class="tag ${YT.connected ? 'done' : 'failed'}">${YT.connected ? 'ulangan' : 'yo‘q'}</span>
+    </div>
+    ${YT.note ? `<p class="note">${esc(YT.note)}</p>` : ''}
+    ${YT.redirect_uri ? `
+      <div class="row">
+        <span style="font-size:.74rem;color:var(--muted)">Google'ga qo‘yiladigan manzil</span>
+        <button class="copy" data-copy="${esc(YT.redirect_uri)}">Nusxalash</button>
+      </div>
+      <pre>${esc(YT.redirect_uri)}</pre>` : ''}
+    <div class="model-acts">
+      ${YT.connected
+        ? '<button class="btn ghost" id="yt-off">Uzish</button>'
+        : `<button class="btn primary" id="yt-on"${YT.configured ? '' : ' disabled'}>Kanalni ulash</button>`}
+    </div>`;
+
+  $$('#yt-box [data-copy]').forEach((b) =>
+    b.addEventListener('click', () => copyText(b.dataset.copy, b)));
+  $('#yt-on')?.addEventListener('click', connectYouTube);
+  $('#yt-off')?.addEventListener('click', async () => {
+    if (!confirm('YouTube ulanishini uzamizmi?')) return;
+    await api('/api/youtube', { method: 'DELETE' });
+    await loadYouTube();
+    toast('Uzildi');
+  });
+}
+
+async function connectYouTube() {
+  try {
+    const { url } = await api('/api/youtube/auth');
+    // Another tab, not this one: coming back to a reloaded app mid-consent would
+    // lose whatever was open here.
+    const tab = open(url, 'sarideo-youtube', 'width=520,height=680');
+    if (!tab) { location.href = url; return; }
+    toast('Google oynasida ruxsat bering');
+  } catch (e) { toast(e.message); }
+}
+
+// The consent page tells us when it is done, so the section refreshes itself.
+addEventListener('message', (e) => {
+  if (e.data?.sarideo === 'youtube') loadYouTube();
+});
+
+/** Publish a finished video, with the publishing pack already filled in. */
+async function publishToYouTube(job) {
+  if (!YT.connected) {
+    go('library');
+    $('#sec-youtube') && ($('#sec-youtube').open = true);
+    toast('Avval YouTube kanalini ulang');
+    return;
+  }
+  const meta = job.metadata?.youtube || {};
+  const answer = await ask({
+    title: 'YouTube\'ga joylash',
+    ok: 'Joylash',
+    html: `
+      <label class="f"><span>Sarlavha</span>
+        <input name="title" maxlength="100" value="${esc(meta.title || job.title || '')}" /></label>
+      <label class="f"><span>Tavsif</span>
+        <textarea name="description" rows="5" maxlength="5000">${esc(meta.description || '')}</textarea></label>
+      <label class="f"><span>Teglar — vergul bilan</span>
+        <input name="tags" value="${esc((meta.tags || []).join(', '))}" /></label>
+      <label class="f"><span>Kim ko‘radi</span>
+        <select name="privacy">
+          <option value="private">Faqat men (private)</option>
+          <option value="unlisted">Havola bilan (unlisted)</option>
+          <option value="public">Hamma (public)</option>
+        </select></label>
+      <label class="f"><span>Qachon chiqsin — bo‘sh bo‘lsa darhol</span>
+        <input name="when" type="datetime-local" /></label>
+      <label class="sw"><input type="checkbox" name="with_thumbnail" checked /><i></i>
+        <span>Tayyorlangan muqovani qo‘yish</span></label>
+      <small class="note">Vaqt belgilasangiz YouTube videoni o‘sha paytda o‘zi
+        chiqaradi — ilova o‘sha payt ishlab turishi shart emas.</small>`,
+  });
+  if (!answer) return;
+
+  toast('YouTube\'ga yuklanmoqda…');
+  try {
+    const made = await api(`/api/jobs/${job.id}/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: answer.title.trim(),
+        description: answer.description,
+        tags: answer.tags.split(',').map((t) => t.trim()).filter(Boolean),
+        privacy: answer.privacy,
+        // A local wall-clock time means nothing to YouTube; it is sent as the
+        // instant it actually is.
+        publish_at: answer.when ? new Date(answer.when).toISOString() : null,
+        with_thumbnail: answer.with_thumbnail,
+      }),
+    });
+    await loadJobs();
+    drawReady();
+    // Asked for public and given private is Google's rule for an unverified app,
+    // and it is the kind of thing you find out weeks later if nobody says it.
+    if (made.asked_privacy !== 'private' && made.privacy === 'private' && !made.publish_at) {
+      toast('Joylandi, ammo private bo‘ldi — ilova Google tomonidan tasdiqlanmagan');
+    } else {
+      toast(made.publish_at ? 'Joylandi — belgilangan vaqtda chiqadi' : 'YouTube\'ga joylandi');
+    }
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
 // ── boot ──────────────────────────────────────────────────────────
 (async function boot() {
   try {
@@ -3977,7 +4124,7 @@ async function loadChat() {
     wireLibrarySections();
     wireFades();
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
-    await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat()]);
+    await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat(), loadYouTube()]);
     applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.
