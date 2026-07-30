@@ -14,8 +14,10 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
 
-from . import config, pgstore, pipeline, planner, skills, store
+from . import config, keys, pgstore, pipeline, planner, skills, store
 from .models import (
+    ApiKeyIn,
+    ApiKeyPatch,
     BrandKit,
     ChatTurn,
     CreateJobRequest,
@@ -429,7 +431,7 @@ async def health() -> dict[str, Any]:
                             for n in ("gemini", "fal", "openai")},
         "tts_providers": {n: config.tts_provider_ready(n)
                           for n in ("elevenlabs", "openai", "gemini")},
-        "transcription": bool(config.OPENAI_API_KEY),
+        "transcription": config.has_key("openai"),
         "defaults": {
             "image_provider": config.IMAGE_PROVIDER,
             "tts_provider": config.TTS_PROVIDER,
@@ -443,7 +445,7 @@ async def health() -> dict[str, Any]:
             "image": config.model(f"{config.IMAGE_PROVIDER}_image"),
             "tts": config.model(f"{config.TTS_PROVIDER}_tts"),
         },
-        "can_dub": bool(config.GEMINI_API_KEY or config.OPENAI_API_KEY),
+        "can_dub": config.has_key("gemini") or config.has_key("openai"),
         "speeds": [{"id": k, "label": v["label"]} for k, v in config.SPEED_PROFILES.items()],
         # How often the picture changes. The image count is what this really
         # costs, so it is spelled out rather than left to be discovered.
@@ -693,7 +695,8 @@ async def chat(body: ChatTurn) -> dict[str, Any]:
     if not config.llm_ready():
         raise HTTPException(
             status_code=400,
-            detail="Suhbat uchun AI kaliti kerak — ANTHROPIC_API_KEY yoki GEMINI_API_KEY qo'ying.")
+            detail="Suhbat uchun AI kaliti kerak — kutubxonadagi \"API kalitlari\" "
+                   "bo'limiga Gemini yoki Anthropic kalitini qo'shing.")
 
     history = store.get_setting(CHAT_KEY) or []
     try:
@@ -1084,6 +1087,126 @@ async def available_models(provider: str) -> dict[str, Any]:
     return await catalog.list_models(provider)
 
 
+# ── API keys ──────────────────────────────────────────────────────────────────
+
+def _key_out(row: dict[str, Any]) -> dict[str, Any]:
+    """One key as the page may see it: everything except the key.
+
+    The secret is never returned, not even to the client that just sent it. A
+    masked tail is enough to tell two keys apart, which is the only thing the
+    page actually needs it for.
+    """
+    left = keys.cooling(row)
+    return {
+        "id": row.get("id", ""),
+        "provider": row.get("provider", ""),
+        "label": row.get("label", ""),
+        "enabled": bool(row.get("enabled")),
+        "uses": int(row.get("uses") or 0),
+        "fails": int(row.get("fails") or 0),
+        "ok_at": row.get("ok_at", ""),
+        "failed_at": row.get("failed_at", ""),
+        "cooldown_seconds": round(left),
+        "last_error": row.get("last_error", ""),
+        "created_at": row.get("created_at", ""),
+    }
+
+
+def _keys_out() -> dict[str, Any]:
+    rows = store.list_keys()
+    return {
+        "providers": [
+            {
+                **keys.health(name),
+                "env_var": env,
+                # Which provider each stage will actually call, so a page can say
+                # what a missing key would break rather than just listing names.
+                "keys_list": [_key_out(r) for r in rows if r.get("provider") == name],
+            }
+            for name, env in keys.PROVIDERS.items()
+        ],
+        "in_use": {
+            "text": config.llm_provider(),
+            "image": config.IMAGE_PROVIDER,
+            "tts": config.TTS_PROVIDER,
+        },
+    }
+
+
+@app.get("/api/keys")
+async def get_keys() -> dict[str, Any]:
+    return _keys_out()
+
+
+@app.post("/api/keys", status_code=201)
+async def add_key(body: ApiKeyIn) -> dict[str, Any]:
+    secret = body.secret.strip()
+    if not secret:
+        raise HTTPException(status_code=400, detail="Kalit bo'sh.")
+    existing = {r.get("secret") for r in keys.stored(body.provider)}
+    if secret in existing:
+        raise HTTPException(status_code=409, detail="Bu kalit allaqachon qo'shilgan.")
+    row = store.add_key(body.provider, secret, body.label.strip())
+    return {"key": _key_out(row), "keys": _keys_out()}
+
+
+@app.patch("/api/keys/{key_id}")
+async def patch_key(key_id: str, body: ApiKeyPatch) -> dict[str, Any]:
+    if not store.get_key(key_id):
+        raise HTTPException(status_code=404, detail="Kalit topilmadi.")
+    fields: dict[str, Any] = {}
+    if body.label is not None:
+        fields["label"] = body.label.strip()
+    if body.enabled is not None:
+        fields["enabled"] = body.enabled
+    if body.secret is not None and body.secret.strip():
+        fields["secret"] = body.secret.strip()
+        # A new secret has its own allowance, so the old one's cooldown and
+        # remembered error do not apply to it.
+        fields["cooldown_until"] = ""
+        fields["last_error"] = ""
+    if body.clear_cooldown:
+        fields["cooldown_until"] = ""
+        fields["last_error"] = ""
+    if fields:
+        store.update_key(key_id, **fields)
+    return {"key": _key_out(store.get_key(key_id) or {}), "keys": _keys_out()}
+
+
+@app.post("/api/keys/{key_id}/test")
+async def test_key(key_id: str) -> dict[str, Any]:
+    """Try the key against its provider and say what happened.
+
+    The result is written back the same way a real call would write it, so a key
+    that fails here is benched for real work too — testing and using cannot be
+    allowed to disagree about whether a key works.
+    """
+    row = store.get_key(key_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Kalit topilmadi.")
+    provider = row["provider"]
+    secret = next((r.get("secret", "") for r in keys.stored(provider)
+                   if r.get("id") == key_id), "")
+    ok, detail, hold = await keys.probe(provider, secret)
+    if ok:
+        keys.bless(provider, secret)
+    else:
+        # A key the provider rejected is benched; one we simply could not reach is
+        # only written down, because the network is not the key's fault.
+        if hold > 0:
+            keys.penalise(provider, secret, seconds=hold, body=detail)
+        store.update_key(key_id, last_error=detail)
+    return {"ok": ok, "detail": detail,
+            "key": _key_out(store.get_key(key_id) or {}), "keys": _keys_out()}
+
+
+@app.delete("/api/keys/{key_id}")
+async def remove_key(key_id: str) -> dict[str, Any]:
+    if not store.delete_key(key_id):
+        raise HTTPException(status_code=404, detail="Kalit topilmadi.")
+    return {"deleted": key_id, "keys": _keys_out()}
+
+
 @app.get("/api/voices")
 async def list_voices(provider: str | None = None) -> dict[str, Any]:
     return await catalog.list_voices(provider or config.TTS_PROVIDER)
@@ -1126,9 +1249,9 @@ async def put_brand(kit: BrandKit) -> dict[str, Any]:
 def _validate(request: dict[str, Any]) -> None:
     if not config.llm_ready():
         provider = config.llm_provider()
-        key = "ANTHROPIC_API_KEY" if provider == "anthropic" else "GEMINI_API_KEY"
-        raise HTTPException(status_code=400,
-                            detail=f"{key} is not set — the AI skills cannot run.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No {provider} API key — add one in the library, under \"API kalitlari\".")
     if not video.ffmpeg_available():
         raise HTTPException(status_code=500, detail="ffmpeg is not installed in this container.")
 
@@ -1181,10 +1304,10 @@ async def create_job_with_audio(
     audio: UploadFile = File(...),
 ) -> dict[str, Any]:
     """Storyboard a voice-over the user already has, instead of generating one."""
-    if not config.OPENAI_API_KEY:
+    if not config.has_key("openai"):
         raise HTTPException(
             status_code=400,
-            detail="Uploaded voice-overs need an OPENAI_API_KEY — the subtitles are timed "
+            detail="Uploaded voice-overs need an OpenAI key — the subtitles are timed "
                    "from a transcription of your audio.",
         )
 
@@ -1687,7 +1810,7 @@ async def dub_video(
         raise HTTPException(status_code=400, detail=f"Unknown language '{language}'.")
     if not config.llm_ready():
         raise HTTPException(status_code=400, detail="The translator needs an AI key.")
-    if not (config.GEMINI_API_KEY or config.OPENAI_API_KEY):
+    if not (config.has_key("gemini") or config.has_key("openai")):
         raise HTTPException(
             status_code=400,
             detail="Transcribing the original needs a Gemini or OpenAI key.")

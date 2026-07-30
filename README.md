@@ -4,7 +4,9 @@ Mavzu nomini yozasiz — ilova skript yozadi, ovoz beradi, har bir sahna uchun r
 yaratadi, subtitr qo'shadi va tayyor MP4 ni render qiladi.
 
 **Bitta Gemini kaliti yetarli.** Skript, rasm promptlari, subtitr, ovoz va YouTube
-matnlari — hammasi o'sha bitta kalitdan ishlaydi.
+matnlari — hammasi o'sha bitta kalitdan ishlaydi. Bir nechta kalit qo'ysangiz esa
+ilova ularni navbat bilan ishlatadi va limitga urilganda kutmaydi —
+[API kalitlari](#api-kalitlari--bir-nechta-ilovaning-ozida).
 
 ---
 
@@ -176,6 +178,32 @@ Claude ham rasmni ko'radi, alohida kalit kerak emas.
 
 Qaysi kalit bor-yo'qligi UI tepasidagi yorliqlarda ko'rinadi; kalitsiz provayder
 tanlanmaydi va job yaratilganda aniq xabar beriladi.
+
+## API kalitlari — bir nechta, ilovaning o'zida
+
+Limit kalitga sotiladi: bitta Gemini kaliti daqiqasiga o'nta satr o'qiydi, ya'ni
+ellik sahnali video vaqtining ko'pini **ish emas, kutish** bilan o'tkazadi. O'nta
+kalit — o'nta limit.
+
+**Kutubxona → API kalitlari** da har provayderga xohlagancha kalit qo'shasiz.
+Deploy qilish, env o'zgartirish shart emas: qo'shdingiz — shu zahoti ishlatiladi.
+
+- **Navbat bilan** ishlatiladi (round-robin), ya'ni birinchi kalit hammasini
+  yutib, qolgan to'qqiztasi bo'sh turmaydi.
+- Kalit limitga urilsa, ilova **kutmaydi** — o'sha zahoti keyingi kalitga o'tadi.
+  Rad etgan kalit belgilanadi va limiti tugaguncha chetlab o'tiladi (daqiqalik
+  limit ~1 daqiqa, kunlik kvota 30 daqiqa, noto'g'ri kalit 1 soat).
+- Har kalitning yonida **necha marta ishlatilgani, nechta xatosi, qancha dam
+  olishi va oxirgi xato sababi** yoziladi. «Tekshirish» tugmasi kalitni
+  provayderning o'ziga urib ko'radi — video ishga tushmasdan avval bilinadi.
+- Kalitni **o'chirib-yoqib** qo'yish mumkin; o'chirilgani navbatda qatnashmaydi.
+- Kalit **hech qachon qaytarib ko'rsatilmaydi** — qo'shgandan keyin faqat nomi,
+  holati va statistikasi ko'rinadi.
+- Env o'zgaruvchilari (`GEMINI_API_KEY` va h.k.) ishlashda davom etadi: ilovada
+  kalit bo'lmasa, o'shalar ishlatiladi.
+
+Daqiqalik cheklov (`TTS_RATE_LIMIT`) kalit soniga ko'paytiriladi — uchta kalit
+uchta limit degani.
 
 ## Modellar
 

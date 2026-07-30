@@ -17,11 +17,38 @@ from typing import Callable
 import httpx
 from PIL import Image, ImageDraw, ImageFilter
 
-from .. import config
+from .. import config, keys
 
 
 class ImageError(RuntimeError):
     pass
+
+
+class Refused(ImageError):
+    """The provider answered, and said no. Carries the key it said no to.
+
+    Worth telling apart from every other failure because it is the one kind the
+    app can route around: another key has its own allowance, so the retry does
+    not have to wait for this one to recover. `benched` says whether that is what
+    happened — a provider's own 500 is nobody's key's fault, and rushing to the
+    next key would spend the good keys on a problem they cannot fix.
+    """
+
+    def __init__(self, message: str, key: str = "", benched: float = 0.0) -> None:
+        super().__init__(message)
+        self.key = key
+        self.benched = benched
+
+
+def _check(resp: httpx.Response, label: str, provider: str, secret: str) -> None:
+    """Record how this key did, then raise if the call was refused."""
+    if resp.status_code < 400:
+        keys.bless(provider, secret)
+        return
+    benched = keys.penalise(provider, secret, status=resp.status_code,
+                            body=resp.text[:400])
+    raise Refused(f"{label} error {resp.status_code}: {resp.text[:300]}",
+                  secret, benched)
 
 
 _OPENAI_SIZES = {
@@ -53,8 +80,10 @@ def _mime_for(path: Path) -> str:
 async def _gemini(
     client: httpx.AsyncClient, prompt: str, refs: list[Path], aspect: str
 ) -> bytes:
-    if not config.GEMINI_API_KEY:
-        raise ImageError("GEMINI_API_KEY is not set.")
+    secret = config.key("gemini")
+    if not secret:
+        raise ImageError("Gemini kaliti yo'q — kutubxonadan qo'shing yoki "
+                        "GEMINI_API_KEY ni sozlang.")
 
     parts: list[dict] = [{"text": prompt}]
     for ref in refs:
@@ -68,7 +97,7 @@ async def _gemini(
         )
 
     url = f"{config.GEMINI_BASE}/models/{config.model('gemini_image')}:generateContent"
-    headers = {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
+    headers = {"x-goog-api-key": secret, "Content-Type": "application/json"}
 
     async def _post(with_image_config: bool) -> httpx.Response:
         generation: dict = {"responseModalities": ["IMAGE"]}
@@ -81,8 +110,7 @@ async def _gemini(
     if resp.status_code == 400 and config.GEMINI_USE_IMAGE_CONFIG:
         # Older image models reject imageConfig; retry without it and crop later.
         resp = await _post(False)
-    if resp.status_code >= 400:
-        raise ImageError(f"Gemini image error {resp.status_code}: {resp.text[:300]}")
+    _check(resp, "Gemini image", "gemini", secret)
 
     payload = resp.json()
     for candidate in payload.get("candidates", []):
@@ -98,10 +126,12 @@ async def _gemini(
 async def _fal(
     client: httpx.AsyncClient, prompt: str, refs: list[Path], aspect: str, size: tuple[int, int]
 ) -> bytes:
-    if not config.FAL_KEY:
-        raise ImageError("FAL_KEY is not set.")
+    secret = config.key("fal")
+    if not secret:
+        raise ImageError("fal.ai kaliti yo'q — kutubxonadan qo'shing yoki "
+                        "FAL_KEY ni sozlang.")
 
-    headers = {"Authorization": f"Key {config.FAL_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Key {secret}", "Content-Type": "application/json"}
     if refs:
         model = config.model("fal_image")
         body = {
@@ -119,8 +149,7 @@ async def _fal(
         }
 
     resp = await client.post(f"https://fal.run/{model}", headers=headers, json=body)
-    if resp.status_code >= 400:
-        raise ImageError(f"fal.ai error {resp.status_code}: {resp.text[:300]}")
+    _check(resp, "fal.ai", "fal", secret)
 
     images = resp.json().get("images") or []
     if not images:
@@ -139,10 +168,12 @@ async def _fal(
 async def _openai(
     client: httpx.AsyncClient, prompt: str, refs: list[Path], aspect: str
 ) -> bytes:
-    if not config.OPENAI_API_KEY:
-        raise ImageError("OPENAI_API_KEY is not set.")
+    secret = config.key("openai")
+    if not secret:
+        raise ImageError("OpenAI kaliti yo'q — kutubxonadan qo'shing yoki "
+                        "OPENAI_API_KEY ni sozlang.")
 
-    headers = {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
+    headers = {"Authorization": f"Bearer {secret}"}
     size = _OPENAI_SIZES.get(aspect, "1536x1024")
 
     if refs:
@@ -161,8 +192,7 @@ async def _openai(
             json={"model": config.model("openai_image"), "prompt": prompt, "size": size, "n": 1},
         )
 
-    if resp.status_code >= 400:
-        raise ImageError(f"OpenAI image error {resp.status_code}: {resp.text[:300]}")
+    _check(resp, "OpenAI image", "openai", secret)
 
     items = resp.json().get("data") or []
     if not items:
@@ -285,7 +315,11 @@ async def generate_image(
                     if attempt < attempts - 1:
                         if on_retry:
                             on_retry(attempt + 1, exc)
-                        await asyncio.sleep(2 * (attempt + 1))
+                        # The refused key is already cooling, so the next attempt
+                        # picks a different one — there is nothing to wait for.
+                        if not (isinstance(exc, Refused) and exc.benched
+                                and keys.can_switch(provider, exc.key)):
+                            await asyncio.sleep(2 * (attempt + 1))
         raise ImageError(str(last_error))
 
     try:

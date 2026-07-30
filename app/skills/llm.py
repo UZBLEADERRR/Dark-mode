@@ -15,33 +15,54 @@ from typing import Any
 
 import httpx
 
-from .. import config
+from .. import config, keys
 
 
 class LLMError(RuntimeError):
     pass
 
 
+class Refused(LLMError):
+    """The model answered with a refusal that a different key might not give.
+
+    Carries the key and whether that key was benched, so the caller can tell
+    "this key is out of allowance" — worth trying the next one immediately —
+    from "the service is down", which no key of ours can fix.
+    """
+
+    def __init__(self, message: str, key: str = "", benched: float = 0.0) -> None:
+        super().__init__(message)
+        self.key = key
+        self.benched = benched
+
+
 # ── Claude ────────────────────────────────────────────────────────────────────
 
-_anthropic_client = None
+# Keyed by secret, because rotating keys must rotate clients: a client built
+# around the key that has just run out of allowance would keep using it.
+_anthropic_clients: dict[str, Any] = {}
 # Set once we learn the SDK/model rejects output_config, so we stop retrying it.
 _structured_outputs_ok = True
 
 
-def _client():
-    global _anthropic_client
-    if _anthropic_client is None:
+def _client(secret: str):
+    client = _anthropic_clients.get(secret)
+    if client is None:
         import anthropic
 
-        _anthropic_client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-    return _anthropic_client
+        client = _anthropic_clients[secret] = anthropic.Anthropic(api_key=secret)
+    return client
 
 
 def _claude_sync(system: str, user: str, schema: dict | None, max_tokens: int,
                  images: list[tuple[bytes, str]] | None = None) -> str:
     global _structured_outputs_ok
     import anthropic
+
+    secret = config.key("anthropic")
+    if not secret:
+        raise LLMError("Anthropic kaliti yo'q — kutubxonadan qo'shing yoki "
+                       "ANTHROPIC_API_KEY ni sozlang.")
 
     content: Any = user
     if images:
@@ -67,19 +88,27 @@ def _claude_sync(system: str, user: str, schema: dict | None, max_tokens: int,
         kwargs["output_config"]["format"] = {"type": "json_schema", "schema": schema}
 
     try:
-        with _client().messages.stream(**kwargs) as stream:
-            message = stream.get_final_message()
-    except (anthropic.BadRequestError, TypeError) as exc:
-        if not use_schema:
-            raise LLMError(f"Claude request failed: {exc}") from exc
-        # This SDK or model does not accept output_config.format — fall back to
-        # prompt-enforced JSON for this call and every later one.
-        _structured_outputs_ok = False
-        retry = dict(base)
-        retry["output_config"] = {"effort": config.LLM_EFFORT}
-        retry["system"] = system + _json_instruction(schema)
-        with _client().messages.stream(**retry) as stream:
-            message = stream.get_final_message()
+        try:
+            with _client(secret).messages.stream(**kwargs) as stream:
+                message = stream.get_final_message()
+        except (anthropic.BadRequestError, TypeError) as exc:
+            if not use_schema:
+                raise LLMError(f"Claude request failed: {exc}") from exc
+            # This SDK or model does not accept output_config.format — fall back to
+            # prompt-enforced JSON for this call and every later one.
+            _structured_outputs_ok = False
+            retry = dict(base)
+            retry["output_config"] = {"effort": config.LLM_EFFORT}
+            retry["system"] = system + _json_instruction(schema)
+            with _client(secret).messages.stream(**retry) as stream:
+                message = stream.get_final_message()
+    except anthropic.APIStatusError as exc:
+        # The SDK reports the status rather than handing back a response, so the
+        # keyring is told from the exception instead of from a status line.
+        held = keys.penalise("anthropic", secret,
+                             status=getattr(exc, "status_code", None), body=str(exc)[:400])
+        raise Refused(f"Claude refused the request: {exc}", secret, held) from exc
+    keys.bless("anthropic", secret)
 
     if getattr(message, "stop_reason", None) == "refusal":
         raise LLMError(
@@ -129,7 +158,7 @@ def _to_gemini_schema(schema: Any) -> Any:
 async def _gemini_call(
     client: httpx.AsyncClient, model: str, system: str, user: str,
     schema: dict | None, max_tokens: int,
-    images: list[tuple[bytes, str]] | None = None,
+    images: list[tuple[bytes, str]] | None = None, secret: str = "",
 ) -> httpx.Response:
     generation: dict[str, Any] = {"maxOutputTokens": max_tokens, "temperature": 0.9}
     if schema:
@@ -144,7 +173,8 @@ async def _gemini_call(
 
     return await client.post(
         f"{config.GEMINI_BASE}/models/{model}:generateContent",
-        headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
+        headers={"x-goog-api-key": secret or config.key("gemini"),
+                 "Content-Type": "application/json"},
         json={
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": parts}],
@@ -155,20 +185,26 @@ async def _gemini_call(
 
 async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int,
                   images: list[tuple[bytes, str]] | None = None) -> str:
-    if not config.GEMINI_API_KEY:
-        raise LLMError("GEMINI_API_KEY is not set.")
+    secret = config.key("gemini")
+    if not secret:
+        raise LLMError("Gemini kaliti yo'q — kutubxonadan qo'shing yoki "
+                       "GEMINI_API_KEY ni sozlang.")
 
     timeout = httpx.Timeout(300.0, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
+        # One key for the whole ladder below: the fallbacks are about the model
+        # not accepting the request, so changing key mid-ladder would confuse
+        # "this model won't do it" with "this key can't right now".
         resp = await _gemini_call(
-            client, config.model("gemini_text"), system, user, schema, max_tokens, images
+            client, config.model("gemini_text"), system, user, schema, max_tokens,
+            images, secret
         )
 
         if resp.status_code in (400, 404) and config.model("gemini_text_fallback"):
             # Unknown model name, or a schema this model won't accept.
             resp = await _gemini_call(
                 client, config.model("gemini_text_fallback"), system, user, schema,
-                max_tokens, images
+                max_tokens, images, secret
             )
             if resp.status_code >= 400 and schema:
                 # Last resort: no response schema, ask for JSON in the prompt.
@@ -180,10 +216,15 @@ async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int,
                     None,
                     max_tokens,
                     images,
+                    secret,
                 )
 
         if resp.status_code >= 400:
-            raise LLMError(f"Gemini error {resp.status_code}: {resp.text[:400]}")
+            held = keys.penalise("gemini", secret, status=resp.status_code,
+                                 body=resp.text[:400])
+            raise Refused(f"Gemini error {resp.status_code}: {resp.text[:400]}",
+                          secret, held)
+        keys.bless("gemini", secret)
 
         payload = resp.json()
 
@@ -252,10 +293,26 @@ async def call_json(
     have to know which model is behind it.
     """
     provider = config.llm_provider()
-    if provider == "anthropic":
-        if not config.ANTHROPIC_API_KEY:
-            raise LLMError("ANTHROPIC_API_KEY is not set.")
-        text = await asyncio.to_thread(_claude_sync, system, user, schema, max_tokens, images)
-    else:
-        text = await _gemini(system, user, schema, max_tokens, images)
-    return _extract_json(text)
+    if not config.has_key(provider):
+        raise LLMError(f"{provider} kaliti yo'q — kutubxonadan qo'shing.")
+
+    # One try per key, at most. A key that has just refused is in cooldown, so
+    # each pass through here reaches for a different one; the cap is what keeps a
+    # provider that refuses everything from turning one script into ten calls.
+    tries = max(1, min(keys.count(provider), 6))
+    for attempt in range(tries):
+        try:
+            if provider == "anthropic":
+                text = await asyncio.to_thread(
+                    _claude_sync, system, user, schema, max_tokens, images)
+            else:
+                text = await _gemini(system, user, schema, max_tokens, images)
+            return _extract_json(text)
+        except Refused as exc:
+            # Only a key that was actually set aside is worth walking away from.
+            # A model that is simply down refuses every key, and asking the other
+            # nine would spend them on the same answer.
+            if attempt == tries - 1 or not exc.benched \
+                    or not keys.can_switch(provider, exc.key):
+                raise
+    raise LLMError("The model could not be reached with any of the stored keys.")

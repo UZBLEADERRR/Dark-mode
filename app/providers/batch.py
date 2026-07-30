@@ -32,7 +32,7 @@ from typing import Any
 
 import httpx
 
-from .. import config
+from .. import config, keys
 
 DONE = "JOB_STATE_SUCCEEDED"
 PARTIAL = "JOB_STATE_PARTIALLY_SUCCEEDED"
@@ -52,11 +52,17 @@ class BatchError(RuntimeError):
 
 def available() -> bool:
     """Batching exists only on Gemini here, and only with a key for it."""
-    return bool(config.GEMINI_API_KEY)
+    return config.has_key("gemini")
 
 
-def _headers() -> dict[str, str]:
-    return {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
+# Which key submitted which batch. A batch belongs to the project that created
+# it, so key rotation has to stop at the submit call: polling with a different
+# key is a 403 on somebody else's job, not a fresh allowance.
+_owner: dict[str, str] = {}
+
+
+def _headers(secret: str) -> dict[str, str]:
+    return {"x-goog-api-key": secret, "Content-Type": "application/json"}
 
 
 async def submit(model: str, requests: list[dict[str, Any]], *, label: str = "sarideo") -> str:
@@ -67,7 +73,7 @@ async def submit(model: str, requests: list[dict[str, Any]], *, label: str = "sa
     silently put scene nine's picture on scene two.
     """
     if not available():
-        raise BatchError("GEMINI_API_KEY yo'q — batch ishlamaydi.")
+        raise BatchError("Gemini kaliti yo'q — batch ishlamaydi.")
     if not requests:
         raise BatchError("Batch bo'sh.")
 
@@ -82,22 +88,34 @@ async def submit(model: str, requests: list[dict[str, Any]], *, label: str = "sa
             },
         }
     }
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0)) as client:
-        resp = await client.post(
-            f"{config.GEMINI_BASE}/models/{model}:batchGenerateContent",
-            headers=_headers(), json=body)
-    if resp.status_code >= 400:
-        raise BatchError(f"Batch qabul qilinmadi {resp.status_code}: {resp.text[:300]}")
-    name = (resp.json() or {}).get("name") or ""
-    if not name:
-        raise BatchError("Batch nomi qaytmadi.")
-    return name
+    last = ""
+    # A refused submit is worth re-offering to another key: one key's day being
+    # spent says nothing about the next key's.
+    for _ in range(max(1, min(keys.count("gemini"), 6))):
+        secret = config.key("gemini")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0)) as client:
+            resp = await client.post(
+                f"{config.GEMINI_BASE}/models/{model}:batchGenerateContent",
+                headers=_headers(secret), json=body)
+        if resp.status_code < 400:
+            keys.bless("gemini", secret)
+            name = (resp.json() or {}).get("name") or ""
+            if not name:
+                raise BatchError("Batch nomi qaytmadi.")
+            _owner[name] = secret
+            return name
+        keys.penalise("gemini", secret, status=resp.status_code, body=resp.text[:400])
+        last = f"{resp.status_code}: {resp.text[:300]}"
+        if not keys.can_switch("gemini", secret):
+            break
+    raise BatchError(f"Batch qabul qilinmadi {last}")
 
 
 async def poll(name: str) -> dict[str, Any]:
     """One look. Returns `{state, results: {key: response}, errors: {key: text}}`."""
+    secret = _owner.get(name) or config.key("gemini")
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0)) as client:
-        resp = await client.get(f"{config.GEMINI_BASE}/{name}", headers=_headers())
+        resp = await client.get(f"{config.GEMINI_BASE}/{name}", headers=_headers(secret))
     if resp.status_code >= 400:
         raise BatchError(f"Batch holati o'qilmadi {resp.status_code}: {resp.text[:200]}")
 

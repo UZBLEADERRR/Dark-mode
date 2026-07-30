@@ -1244,6 +1244,53 @@ input[type="range"]::-moz-range-thumb {
 .model-acts .saver { text-align: left; }
 #models-note { margin: 0; }
 
+/* ── API keys ──────────────────────────────────────────────────── */
+/* Read top to bottom this is a supply report: per provider, how many keys and
+   how many are free, then a line per key. Everything is allowed to wrap and
+   nothing is allowed to set a minimum width — a provider's refusal text is
+   arbitrary length and used to push the whole library off a narrow phone. */
+.keys-box { display: grid; gap: 10px; min-width: 0; }
+.key-prov {
+  display: grid; gap: 7px;
+  padding: 13px; min-width: 0;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+.key-row {
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  justify-content: space-between; gap: 8px; min-width: 0;
+  padding: 9px 11px;
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 10px;
+}
+/* A disabled key is still shown — you turned it off on purpose and may want it
+   back — but it should not read as part of the working supply. */
+.key-row.off { opacity: .5; }
+.key-what { display: grid; gap: 3px; min-width: 0; flex: 1 1 150px; }
+.key-what b { font-size: .84rem; overflow-wrap: anywhere; }
+.key-stat { font-size: .72rem; color: var(--muted); }
+.key-cool { font-size: .72rem; color: var(--warn); }
+.key-err { font-size: .7rem; color: #ff8f7d; overflow-wrap: anywhere; }
+.key-acts { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.key-acts .chip {
+  padding: 5px 9px; font-size: .72rem;
+  color: var(--muted); background: transparent;
+  border: 1px solid var(--line); border-radius: 99px;
+  cursor: pointer; white-space: nowrap;
+}
+.key-acts .chip:hover { color: var(--text); border-color: var(--line-2); }
+.key-acts .chip.danger:hover { color: #ff8f7d; border-color: rgba(255, 92, 71, .4); }
+.key-acts .chip[disabled] { opacity: .5; cursor: default; }
+/* Every key busy is not an error — it is a minute of waiting — so it gets its
+   own colour rather than borrowing the one that means "broken". */
+.tag.warn { background: rgba(255, 189, 82, .16); color: var(--warn); }
+/* "No keys yet" is a note, not a card — borrowing the big empty-state box made
+   it look like something to press. */
+.key-none {
+  margin: 0; padding: 2px 0 1px;
+  font-size: .76rem; color: var(--faint);
+}
+
 /* ── brand kit ─────────────────────────────────────────────────── */
 .brand-box {
   display: grid; gap: 12px;

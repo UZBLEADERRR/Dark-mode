@@ -376,3 +376,32 @@ class PlanPatch(BaseModel):
     approve: bool | None = None
     batch: Literal["auto", "on", "off"] | None = None
     status: Literal["planned", "cancelled"] | None = None
+
+
+# ── API keys ──────────────────────────────────────────────────────────────────
+
+KeyProvider = Literal["gemini", "anthropic", "openai", "elevenlabs", "fal"]
+
+
+class ApiKeyIn(BaseModel):
+    """One key to store. Several per provider is the point, so nothing is unique.
+
+    The secret is generous in length because providers disagree about it wildly,
+    and stripped because a key pasted from a dashboard almost always arrives with
+    a newline attached — which the provider then rejects as a wrong key.
+    """
+
+    provider: KeyProvider
+    secret: str = Field(min_length=8, max_length=500)
+    label: str = Field(default="", max_length=80)
+
+
+class ApiKeyPatch(BaseModel):
+    label: str | None = Field(default=None, max_length=80)
+    enabled: bool | None = None
+    # Replacing the secret keeps the row's history, which is what you want when a
+    # key is rotated rather than swapped for a different account's.
+    secret: str | None = Field(default=None, min_length=8, max_length=500)
+    # Forget a cooldown on request — a limit the provider has since lifted should
+    # not keep a key benched because we wrote down a pessimistic guess.
+    clear_cooldown: bool = False
