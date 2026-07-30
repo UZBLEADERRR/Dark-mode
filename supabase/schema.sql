@@ -91,6 +91,13 @@ CREATE TABLE IF NOT EXISTS profiles (
     platform   TEXT NOT NULL,
     handle     TEXT NOT NULL DEFAULT '',
     summary    TEXT NOT NULL DEFAULT '',
+    -- Aniq ma'lumotlar, matndan alohida. AI g'oyani aynan shularga tayanib
+    -- beradi: bunisi bo'sh bo'lsa g'oyalar ham umumiy chiqadi.
+    niche      TEXT NOT NULL DEFAULT '',   -- mavzu, aniq: "boshlang'ich Python darslari"
+    audience   TEXT NOT NULL DEFAULT '',   -- kim ko'radi
+    language   TEXT NOT NULL DEFAULT '',   -- postlar tili
+    pillars    TEXT NOT NULL DEFAULT '',   -- nima post qiladi: dars, tahlil, savol-javob
+    style      TEXT NOT NULL DEFAULT '',   -- qanday olinadi: ovoz ustidan, subtitr bilan
     mime       TEXT NOT NULL DEFAULT 'image/png',
     ext        TEXT NOT NULL DEFAULT '.png',
     image      BYTEA NOT NULL,
@@ -105,3 +112,8 @@ CREATE TABLE IF NOT EXISTS profiles (
 ALTER TABLE heroes ADD COLUMN IF NOT EXISTS voice_id     TEXT NOT NULL DEFAULT '';
 ALTER TABLE heroes ADD COLUMN IF NOT EXISTS tts_provider TEXT NOT NULL DEFAULT '';
 ALTER TABLE music  ADD COLUMN IF NOT EXISTS kind         TEXT NOT NULL DEFAULT 'music';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS niche    TEXT NOT NULL DEFAULT '';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS audience TEXT NOT NULL DEFAULT '';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT '';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS pillars  TEXT NOT NULL DEFAULT '';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS style    TEXT NOT NULL DEFAULT '';

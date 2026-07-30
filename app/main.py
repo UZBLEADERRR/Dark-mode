@@ -581,6 +581,9 @@ CHAT_KEEP = 60
 def _profile_out(profile: dict[str, Any]) -> dict[str, Any]:
     return {"id": profile["id"], "platform": profile.get("platform", ""),
             "handle": profile.get("handle", ""), "summary": profile.get("summary", ""),
+            "niche": profile.get("niche", ""), "audience": profile.get("audience", ""),
+            "language": profile.get("language", ""), "pillars": profile.get("pillars", ""),
+            "style": profile.get("style", ""),
             "url": f"/api/profiles/{profile['id']}/image"}
 
 
@@ -607,10 +610,17 @@ async def create_profile(
     if where and where not in strategist.PLATFORMS:
         where = "other"
     seen = await strategist.read_profile(data, mime, where)
+    # Everything that was read is kept, not just the prose. The specifics are
+    # what the assistant is held to when it proposes something; with only a
+    # summary in front of it, a model has nothing particular to be faithful to
+    # and answers with something that would suit any channel.
     return _profile_out(store.add_profile(
         where or seen.get("platform") or "other",
         handle.strip() or seen.get("handle") or "",
-        seen.get("summary") or "", data, mime, ext))
+        seen.get("summary") or "", data, mime, ext,
+        niche=seen.get("niche", ""), audience=seen.get("audience", ""),
+        language=seen.get("language", ""), pillars=seen.get("pillars", ""),
+        style=seen.get("style", "")))
 
 
 @app.get("/api/profiles/{profile_id}/image")
@@ -625,7 +635,10 @@ async def profile_image(profile_id: str) -> Response:
 
 @app.patch("/api/profiles/{profile_id}")
 async def edit_profile(profile_id: str, body: ProfilePatch) -> dict[str, bool]:
-    if not store.update_profile(profile_id, handle=body.handle, summary=body.summary):
+    if not store.update_profile(
+            profile_id, handle=body.handle, summary=body.summary,
+            niche=body.niche, audience=body.audience, language=body.language,
+            pillars=body.pillars, style=body.style):
         raise HTTPException(status_code=404, detail="Profile not found.")
     return {"updated": True}
 

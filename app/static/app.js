@@ -3717,17 +3717,27 @@ function drawChannels() {
         <figure class="chan-card" data-profile="${esc(p.id)}">
           <img src="${esc(p.url)}" alt="${esc(p.handle || p.platform)}" loading="lazy" />
           <figcaption>
-            <b>${esc(PLAT_LABEL[p.platform] || p.platform)}</b>
-            <span>${esc(p.handle || '—')}</span>
+            <b>${esc(p.handle || PLAT_LABEL[p.platform] || p.platform)}</b>
+            <!-- What the channel is about, which is what the ideas are judged
+                 against — the platform is a badge over the picture, because
+                 "YouTube" says far less about a channel than its subject does. -->
+            <span>${esc(p.niche || 'mavzusi yozilmagan')}</span>
           </figcaption>
+          <u class="plat">${esc(PLAT_LABEL[p.platform] || p.platform)}</u>
+          <i class="pen" data-edit-profile="${esc(p.id)}" role="button" aria-label="Tuzatish">✎</i>
           <i class="x" data-del-profile="${esc(p.id)}" role="button" aria-label="O‘chirish">×</i>
         </figure>`).join('')
     : '';
   $('#chan-note').classList.toggle('hidden', list.length > 0);
 
+  $$('#chan-row [data-edit-profile]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    editProfile(b.dataset.editProfile);
+  }));
+
   // Tapping a channel is the shortest way to say which one you mean.
   $$('#chan-row [data-profile]').forEach((card) => card.addEventListener('click', (e) => {
-    if (e.target.closest('[data-del-profile]')) return;
+    if (e.target.closest('[data-del-profile], [data-edit-profile]')) return;
     const p = CHAT.profiles.find((x) => x.id === card.dataset.profile);
     if (!p) return;
     const name = p.handle ? `${PLAT_LABEL[p.platform] || p.platform} ${p.handle}` : PLAT_LABEL[p.platform];
@@ -3744,6 +3754,50 @@ function drawChannels() {
       await loadProfiles();
     } catch (err) { toast(err.message); }
   }));
+}
+
+/** Correct what was read off a screenshot. The specifics are what the assistant
+    is held to, so a wrong subject matters more than a wrong sentence. */
+async function editProfile(id) {
+  const p = CHAT.profiles.find((x) => x.id === id);
+  if (!p) return;
+  const answer = await ask({
+    title: 'Kanal haqida',
+    ok: 'Saqlash',
+    html: `
+      <label class="f"><span>Nomi (@)</span>
+        <input name="handle" value="${esc(p.handle || '')}" placeholder="@kanalim" /></label>
+      <label class="f"><span>Mavzusi — aniq</span>
+        <input name="niche" value="${esc(p.niche || '')}"
+          placeholder="boshlang‘ich Python darslari" /></label>
+      <label class="f"><span>Kim ko‘radi</span>
+        <input name="audience" value="${esc(p.audience || '')}"
+          placeholder="18-30 yosh, O‘zbekistondagi dasturchilar" /></label>
+      <label class="f"><span>Postlar tili</span>
+        <input name="language" value="${esc(p.language || '')}" placeholder="uz" maxlength="5" /></label>
+      <label class="f"><span>Nima post qilasiz</span>
+        <input name="pillars" value="${esc(p.pillars || '')}"
+          placeholder="dars, kod tahlili, savol-javob" /></label>
+      <label class="f"><span>Qanday olinadi</span>
+        <input name="style" value="${esc(p.style || '')}"
+          placeholder="ovoz ustidan, subtitr bilan, tez montaj" /></label>
+      <small class="note">AI g‘oyalarni aynan shu ma’lumotlarga tayanib beradi —
+        noto‘g‘ri bo‘lsa g‘oyalar ham umumiy chiqadi.</small>`,
+  });
+  if (!answer) return;
+  try {
+    await api(`/api/profiles/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        handle: answer.handle.trim(), niche: answer.niche.trim(),
+        audience: answer.audience.trim(), language: answer.language.trim(),
+        pillars: answer.pillars.trim(), style: answer.style.trim(),
+      }),
+    });
+    await loadProfiles();
+    toast('Saqlandi — endi g‘oyalar shunga qarab beriladi');
+  } catch (e) { toast(e.message); }
 }
 
 $$('#profile-platform button').forEach((b) => b.addEventListener('click', () => {
@@ -3817,7 +3871,14 @@ function drawChat() {
     watch(b.dataset.openJob, { reveal: true });
   }));
 
-  log.scrollTop = log.scrollHeight;
+  // The page is the scroller now, not the log, so the newest message is brought
+  // to where it can be read rather than the log's own scrollTop being set —
+  // which, on a container that no longer scrolls, did nothing at all.
+  const newest = log.lastElementChild;
+  if (CHAT.messages.length && newest) {
+    requestAnimationFrame(() =>
+      newest.scrollIntoView({ behavior: 'smooth', block: 'end' }));
+  }
 }
 
 function bubble(m, i) {
@@ -3828,6 +3889,7 @@ function bubble(m, i) {
           <b>${esc(idea.title)}</b>
           ${idea.hook ? `<span class="hook">${esc(idea.hook)}</span>` : ''}
           ${idea.why ? `<span class="why">${esc(idea.why)}</span>` : ''}
+          ${idea.fit ? `<span class="fit">${esc(idea.fit)}</span>` : ''}
           <em>${esc(SHAPE_LABEL[idea.shape] || idea.shape)} · ${idea.seconds}s</em>
         </button>`).join('')}</div>`
     : '';

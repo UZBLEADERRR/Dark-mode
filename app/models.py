@@ -289,10 +289,20 @@ class JobOut(BaseModel):
 
 
 class ProfilePatch(BaseModel):
-    """Correct what was read off a channel screenshot, or name it yourself."""
+    """Correct what was read off a channel screenshot, or name it yourself.
+
+    Every field the reading produced is correctable, not only the prose: the
+    specifics are what the assistant is actually held to, so a wrong `niche` is
+    worth more to fix than a wrong sentence.
+    """
 
     handle: str | None = Field(default=None, max_length=120)
     summary: str | None = Field(default=None, max_length=4000)
+    niche: str | None = Field(default=None, max_length=400)
+    audience: str | None = Field(default=None, max_length=400)
+    language: str | None = Field(default=None, max_length=10)
+    pillars: str | None = Field(default=None, max_length=800)
+    style: str | None = Field(default=None, max_length=800)
 
 
 class ChatTurn(BaseModel):
