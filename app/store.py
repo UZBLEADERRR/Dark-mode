@@ -119,6 +119,10 @@ CREATE TABLE IF NOT EXISTS plans (
     -- default, because a video published without being read is a video you cannot
     -- unpublish from anyone who already saw it.
     approve      INTEGER NOT NULL DEFAULT 1,
+    -- 'auto' takes the cheap slow road when there is time for it, 'on' always,
+    -- 'off' never. A choice, because "cheaper but slower" is not a decision an
+    -- app should be making silently on somebody else's behalf.
+    batch        TEXT NOT NULL DEFAULT 'auto',
     status       TEXT NOT NULL DEFAULT 'planned',
     job_id       TEXT NOT NULL DEFAULT '',
     video_url    TEXT NOT NULL DEFAULT '',
@@ -296,6 +300,7 @@ _ADDED_COLUMNS = (
     ("profiles", "language", "TEXT NOT NULL DEFAULT ''"),
     ("profiles", "pillars", "TEXT NOT NULL DEFAULT ''"),
     ("profiles", "style", "TEXT NOT NULL DEFAULT ''"),
+    ("plans", "batch", "TEXT NOT NULL DEFAULT 'auto'"),
 )
 
 
@@ -489,7 +494,7 @@ def delete_asset(asset_id: str) -> bool:
 # --- plans -------------------------------------------------------------------
 
 _PLAN_COLS = ("id, title, request, publish_at, lead_minutes, privacy, approve, "
-              "status, job_id, video_url, error, created_at, updated_at")
+              "batch, status, job_id, video_url, error, created_at, updated_at")
 
 
 def _plan(row: Any) -> dict[str, Any]:
@@ -504,16 +509,16 @@ def _plan(row: Any) -> dict[str, Any]:
 
 def add_plan(*, title: str, request: dict[str, Any], publish_at: str,
              lead_minutes: int = 240, privacy: str = "public",
-             approve: bool = True) -> dict[str, Any]:
+             approve: bool = True, batch: str = "auto") -> dict[str, Any]:
     plan_id = new_id("pln")
     now = _now()
     with _conn() as conn:
         conn.execute(
             "INSERT INTO plans (id, title, request, publish_at, lead_minutes, privacy,"
-            " approve, status, job_id, video_url, error, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " approve, batch, status, job_id, video_url, error, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (plan_id, title, json.dumps(request), publish_at, int(lead_minutes),
-             privacy, 1 if approve else 0, "planned", "", "", "", now, now),
+             privacy, 1 if approve else 0, batch, "planned", "", "", "", now, now),
         )
     return get_plan(plan_id) or {}
 
@@ -536,7 +541,7 @@ def get_plan(plan_id: str) -> dict[str, Any] | None:
 def update_plan(plan_id: str, **fields: Any) -> bool:
     """Change a plan. Only the columns named are touched."""
     allowed = ("title", "publish_at", "lead_minutes", "privacy", "approve",
-               "status", "job_id", "video_url", "error")
+               "batch", "status", "job_id", "video_url", "error")
     sets, values = [], []
     for key in allowed:
         if key in fields and fields[key] is not None:

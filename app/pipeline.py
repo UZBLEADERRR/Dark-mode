@@ -1873,12 +1873,17 @@ async def resume_job(job_id: str) -> None:
 
 
 async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_voice: bool,
-                           redo_all_voices: bool = False) -> None:
+                           redo_all_voices: bool = False,
+                           voice_range: tuple[int, int] | None = None) -> None:
     """Rebuild one scene's image and/or voice in place.
 
     `redo_all_voices` re-records the whole video instead — what you want after
-    changing the narrator, rather than waiting for the render to discover it
-    one scene at a time.
+    changing the narrator, rather than waiting for the render to discover it one
+    scene at a time.
+
+    `voice_range` is the middle case, and the common one: half a video recorded
+    in the wrong voice. Re-recording all of it to fix the second half means
+    paying a second time for the half that was already right.
     """
     job = store.get_job(job_id)
     if job is None:
@@ -1897,19 +1902,26 @@ async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_vo
         uploaded_audio = request.get("narration_audio")
 
         if redo_voice and not uploaded_audio:
-            targets = scenes if redo_all_voices else [target]
-            _progress(job_id, "voice", 30,
-                      f"Re-recording {len(targets)} scene(s)" if redo_all_voices
-                      else f"Re-recording scene {index + 1}")
+            if voice_range is not None:
+                low, high = voice_range
+                targets = [s for s in scenes if low <= s["index"] <= high]
+                said = f"Re-recording scenes {low + 1}–{high + 1} ({len(targets)})"
+            elif redo_all_voices:
+                targets = scenes
+                said = f"Re-recording {len(targets)} scene(s)"
+            else:
+                targets = [target]
+                said = f"Re-recording scene {index + 1}"
+            _progress(job_id, "voice", 30, said)
             warnings += await _voice_scenes(
                 scenes=scenes, targets=targets, workdir=workdir,
                 provider=(request.get("tts_provider") or config.TTS_PROVIDER).lower(),
                 voice_id=request.get("voice_id"),
                 language=request.get("language", "en"), job_id=job_id,
                 base_progress=30, span=20,
-                # A whole re-record is long enough that losing all of it to one
-                # bad line would be cruel; a single scene should say it failed.
-                strict=not redo_all_voices,
+                # A long re-record is long enough that losing all of it to one bad
+                # line would be cruel; a single scene should say it failed.
+                strict=len(targets) == 1,
             )
 
         if redo_image:
