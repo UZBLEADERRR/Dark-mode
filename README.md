@@ -57,6 +57,43 @@ pul turadi.
 Suhbat va kanallar bazada saqlanadi, ya'ni telefonda boshlab kompyuterda davom
 ettirasiz.
 
+## Reja — oldindan aytib qo'yish
+
+**Reja** bo'limida videoni *qachon chiqishi* bilan aytasiz. Keyin ilova o'zi:
+
+1. Belgilangan vaqtdan **oldin** tayyorlashni boshlaydi (necha soat oldin —
+   o'zingiz tanlaysiz). Ellik sahnali video besh daqiqalik ish emas, shuning uchun
+   soat to'qqizda kutib turmaydi.
+2. Video tayyor bo'lgach **to'xtaydi va sizni kutadi**. Ko'rib chiqasiz, kerak
+   bo'lsa tahrirlaysiz, keyin **«Tasdiqlash va joylash»**.
+3. YouTube'ga *private* holda chiqadi va **YouTube uni belgilangan paytda o'zi
+   ochadi**. Ya'ni erta tasdiqlasangiz ham vaqtida chiqadi, ilova o'sha payt
+   ishlab turishi shart emas.
+
+Tasdiqlash majburiy emas — «men ko'rib tasdiqlayman» belgisini olib tashlasangiz
+ilova o'zi joylaydi. Lekin standart holat tasdiqlash bilan: ko'rmasdan chiqqan
+videoni ko'rgan odamdan qaytarib olib bo'lmaydi.
+
+Reja bekor qilinadi, vaqti o'zgartiriladi, «Hozir boshlash» bilan navbatsiz
+tayyorlanadi. Rejalar bazada — deploy qilinsa yo'qolmaydi.
+
+### Batch — vaqt ko'p bo'lsa yarim narx
+
+Chiqishiga **6 soatdan ko'p** qolgan reja rasmlarni Gemini'ning **Batch API**si
+orqali tayyorlaydi: **narxi yarmi**, javobi sekinroq. Kartochkada `batch` yorlig'i
+turadi.
+
+Bu hech qachon xavf tug'dirmaydi:
+
+- Batch rad etilsa — oddiy yo'l bilan tayyorlanadi.
+- Batch yarmini qaytarsa — qolgani oddiy yo'l bilan.
+- Batch belgilangan vaqtda javob bermasa — kutish to'xtatiladi va qolgani oddiy
+  yo'l bilan. Qancha kutish rejaning o'zidan kelib chiqadi: chiqishiga qancha
+  qolganining yarmi, lekin 3 soatdan ko'p emas.
+
+Har holatda jurnalda nima bo'lgani yozib qo'yiladi. Ya'ni **rasmsiz video
+chiqmaydi** — faqat narxi farq qiladi.
+
 ## YouTube'ga joylash
 
 Tayyor video kartochkasida **«YouTube'ga joylash»** tugmasi. Sarlavha, tavsif va
@@ -108,6 +145,9 @@ YOUTUBE_CLIENT_SECRET=...
 | `subtitler` | Subtitr qatorlarini qayerda bo'lishni hal qiladi |
 | `publisher` | YouTube sarlavha, tavsif, teglar, chapterlar, thumbnail prompt |
 | `strategist` | Kanallaringizni o'qiydi, g'oya beradi va videoni o'zi boshlaydi |
+
+Reja va joylashtirish skill emas — `planner` moduli: u vaqtni kuzatib turadi va
+har bir rejani bir holatdan ikkinchisiga o'tkazadi.
 
 ## Provayderlar
 

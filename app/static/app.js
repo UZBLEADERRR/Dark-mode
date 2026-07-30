@@ -255,6 +255,10 @@ function go(view) {
   drawDock();
   scrollTo({ top: 0, behavior: 'instant' in document.documentElement.style ? 'instant' : 'auto' });
   if (view === 'edit' || view === 'ready') loadJobs();
+  // A plan changes on its own — the loop builds it while nobody is looking — so
+  // arriving here always asks rather than drawing what was true last time.
+  if (view === 'plans') loadPlans();
+  else followPlans();
   drawEditEmpty();
   // The channels may have been added from another device, or the conversation
   // continued there — this screen is the same conversation wherever it is opened.
@@ -453,6 +457,14 @@ async function loadHealth() {
   $('#language').innerHTML = h.languages
     .map((l) => `<option value="${esc(l.id)}"${l.id === 'en' ? ' selected' : ''}>${esc(l.label)}</option>`)
     .join('');
+  // A plan is written for a channel that is almost certainly in one language, and
+  // Uzbek is the one this app is in, so that is where it starts.
+  const planLang = $('#plan-language');
+  if (planLang) {
+    planLang.innerHTML = h.languages
+      .map((l) => `<option value="${esc(l.id)}"${l.id === 'uz' ? ' selected' : ''}>${esc(l.label)}</option>`)
+      .join('');
+  }
 
   const fill = (sel, map, preferred) => {
     const pick = map[preferred] ? preferred : Object.keys(map).find((k) => map[k]);
@@ -3988,6 +4000,175 @@ async function loadChat() {
   drawChat();
 }
 
+// ══ Reja ══════════════════════════════════════════════════════════
+// A video asked for in advance. The app builds it before the slot, waits to be
+// told it is good, and YouTube holds it until the minute that was chosen.
+
+const PLAN_STATUS = {
+  planned: 'rejada', building: 'tayyorlanmoqda', ready: 'tasdiqlashni kutmoqda',
+  published: 'joylandi', failed: 'xato', cancelled: 'bekor',
+};
+
+let PLANS = [];
+let planPoll = null;
+
+async function loadPlans() {
+  try { PLANS = await api('/api/plans'); } catch (e) { PLANS = []; }
+  const waiting = PLANS.filter((p) => p.status === 'ready').length;
+  $('#plans-badge').textContent = waiting;
+  $('#plans-badge').classList.toggle('hidden', !waiting);
+  drawPlans();
+  followPlans();
+}
+
+/** Keep this screen honest while something on it is moving.
+ *
+ * A plan builds itself in the background, so a card left on screen goes stale
+ * within seconds of being drawn — and "tayyorlanmoqda" that never becomes
+ * "tasdiqlashni kutmoqda" looks exactly like a plan that has stuck. Polled only
+ * while this view is open and only while something is actually building. */
+function followPlans() {
+  const moving = PLANS.some((p) => p.status === 'building');
+  const want = moving && state.view === 'plans';
+  if (want && !planPoll) planPoll = setInterval(loadPlans, 5000);
+  if (!want && planPoll) { clearInterval(planPoll); planPoll = null; }
+}
+
+function planWhen(iso) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso;
+  return at.toLocaleString('uz-UZ', { day: '2-digit', month: '2-digit',
+                                      hour: '2-digit', minute: '2-digit' });
+}
+
+function drawPlans() {
+  const list = $('#plans-list');
+  if (!list) return;
+  if (!PLANS.length) {
+    list.innerHTML = `<p class="empty">Hali reja yo‘q. Yuqorida «Yangi reja» ni
+      to‘ldirsangiz, ilova o‘sha vaqtga video tayyorlab qo‘yadi.</p>`;
+    return;
+  }
+  list.innerHTML = PLANS.map((p) => `
+    <article class="plan ${esc(p.status)}">
+      <div class="plan-head">
+        <span class="tag ${esc(p.status)}">${esc(PLAN_STATUS[p.status] || p.status)}</span>
+        <b>${esc(planWhen(p.publish_at))}</b>
+        ${p.batch ? '<em class="cheap" title="Rasmlar batch orqali — yarim narx">batch</em>' : ''}
+        <i class="x" data-del-plan="${esc(p.id)}" role="button" aria-label="O‘chirish">×</i>
+      </div>
+      <h3>${esc(p.title || p.topic)}</h3>
+      <small>${esc(p.video_format)} · ${esc(p.privacy)}${
+        p.approve ? ' · tasdiqlash bilan' : ' · o‘zi joylaydi'}</small>
+      <p class="note">${esc(p.note)}</p>
+      ${p.status === 'building' && p.job_progress
+        ? `<div class="track live"><i style="width:${p.job_progress}%"></i></div>` : ''}
+      <div class="plan-acts">
+        ${p.status === 'ready'
+          ? `<button class="btn primary" data-approve="${esc(p.id)}">Tasdiqlash va joylash</button>` : ''}
+        ${p.job_id
+          ? `<button class="btn" data-open-plan="${esc(p.job_id)}">Videoni ko‘rish</button>` : ''}
+        ${p.status === 'planned'
+          ? `<button class="btn" data-start-plan="${esc(p.id)}">Hozir boshlash</button>
+             <button class="btn ghost" data-move-plan="${esc(p.id)}">Vaqtini o‘zgartirish</button>` : ''}
+        ${p.video_url
+          ? `<a class="btn ok" href="${esc(p.video_url)}" target="_blank" rel="noopener">YouTube'da</a>` : ''}
+      </div>
+      ${p.error && p.status !== 'failed' ? `<p class="msg warn">${esc(p.error)}</p>` : ''}
+    </article>`).join('');
+
+  $$('#plans-list [data-open-plan]').forEach((b) => b.addEventListener('click', () => {
+    go('edit');
+    watch(b.dataset.openPlan, { reveal: true });
+  }));
+
+  $$('#plans-list [data-approve]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    b.textContent = 'Joylanmoqda…';
+    try {
+      await api(`/api/plans/${b.dataset.approve}/approve`, { method: 'POST' });
+      await loadPlans();
+      await loadJobs();
+      toast('Joylandi — belgilangan vaqtda chiqadi');
+    } catch (e) { b.disabled = false; b.textContent = 'Tasdiqlash va joylash'; alert(e.message); }
+  }));
+
+  $$('#plans-list [data-start-plan]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await api(`/api/plans/${b.dataset.startPlan}/start`, { method: 'POST' });
+      await loadPlans();
+      toast('Tayyorlash boshlandi');
+    } catch (e) { b.disabled = false; toast(e.message); }
+  }));
+
+  $$('#plans-list [data-move-plan]').forEach((b) => b.addEventListener('click', async () => {
+    const plan = PLANS.find((p) => p.id === b.dataset.movePlan);
+    const answer = await ask({
+      title: 'Vaqtini o‘zgartirish',
+      ok: 'Saqlash',
+      html: `<label class="f"><span>Qachon chiqsin</span>
+        <input name="when" type="datetime-local" /></label>`,
+    });
+    if (!answer?.when) return;
+    try {
+      await api(`/api/plans/${plan.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publish_at: new Date(answer.when).toISOString() }),
+      });
+      await loadPlans();
+      toast('Vaqti o‘zgartirildi');
+    } catch (e) { toast(e.message); }
+  }));
+
+  $$('#plans-list [data-del-plan]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('Rejani o‘chiramizmi?')) return;
+    try {
+      await api(`/api/plans/${b.dataset.delPlan}`, { method: 'DELETE' });
+      await loadPlans();
+    } catch (e) { toast(e.message); }
+  }));
+}
+
+$('#plan-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const button = $('button', form);
+  const when = form.publish_at.value;
+  if (!when) { toast('Chiqish vaqtini tanlang'); return; }
+  button.disabled = true;
+  $('#plan-error').classList.add('hidden');
+  try {
+    await api('/api/plans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic: form.topic.value.trim(),
+        // An absolute instant: a wall-clock time means nothing to a server in
+        // another timezone, or to YouTube.
+        publish_at: new Date(when).toISOString(),
+        video_format: form.video_format.value,
+        target_seconds: Number(form.target_seconds.value) || 45,
+        language: form.language.value,
+        privacy: form.privacy.value,
+        lead_minutes: Number(form.lead_minutes.value) || 240,
+        approve: form.approve.checked,
+      }),
+    });
+    form.reset();
+    form.target_seconds.value = 45;
+    $('#plan-new').open = false;
+    await loadPlans();
+    toast('Rejaga qo‘shildi');
+  } catch (err) {
+    $('#plan-error').textContent = err.message;
+    $('#plan-error').classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+});
+
 // ══ YouTube ═══════════════════════════════════════════════════════
 // The one thing this app does that other people can see, so it is never a side
 // effect: a video goes up because it was published, not because it rendered.
@@ -4124,7 +4305,8 @@ async function publishToYouTube(job) {
     wireLibrarySections();
     wireFades();
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
-    await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat(), loadYouTube()]);
+    await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat(),
+                       loadYouTube(), loadPlans()]);
     applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.

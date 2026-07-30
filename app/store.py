@@ -103,6 +103,32 @@ CREATE TABLE IF NOT EXISTS media (
 
 CREATE INDEX IF NOT EXISTS media_job_idx ON media (job_id);
 
+-- A video you have asked for in advance. `request` is the whole create payload,
+-- so a plan that fires next Tuesday makes exactly the video that was described
+-- today. `publish_at` is when it should be live; `lead_minutes` is how long
+-- before that the app starts building, because a video takes time to make and
+-- the point of planning ahead is not to be waiting at nine on Tuesday.
+CREATE TABLE IF NOT EXISTS plans (
+    id           TEXT PRIMARY KEY,
+    title        TEXT NOT NULL DEFAULT '',
+    request      TEXT NOT NULL,
+    publish_at   TEXT NOT NULL,
+    lead_minutes INTEGER NOT NULL DEFAULT 240,
+    privacy      TEXT NOT NULL DEFAULT 'public',
+    -- 1 means it waits for you to look at it before it goes anywhere. That is the
+    -- default, because a video published without being read is a video you cannot
+    -- unpublish from anyone who already saw it.
+    approve      INTEGER NOT NULL DEFAULT 1,
+    status       TEXT NOT NULL DEFAULT 'planned',
+    job_id       TEXT NOT NULL DEFAULT '',
+    video_url    TEXT NOT NULL DEFAULT '',
+    error        TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS plans_when_idx ON plans (publish_at);
+
 -- A screenshot of one of your own channels. `summary` is what the model saw in it —
 -- the handle, the niche, who watches, how the posts are written — worked out
 -- once, when the picture was uploaded, and kept. Every later conversation about
@@ -207,7 +233,8 @@ def init() -> None:
 
 
 # Everything that may already be sitting in a local SQLite file.
-_ADOPTABLE = ("heroes", "music", "assets", "settings", "jobs", "media", "profiles")
+_ADOPTABLE = ("heroes", "music", "assets", "settings", "jobs", "media", "profiles",
+              "plans")
 
 
 def _adopt_local_rows() -> None:
@@ -457,6 +484,110 @@ def get_asset(asset_id: str) -> tuple[bytes, str, str] | None:
 def delete_asset(asset_id: str) -> bool:
     with _conn() as conn:
         return conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,)).rowcount > 0
+
+
+# --- plans -------------------------------------------------------------------
+
+_PLAN_COLS = ("id, title, request, publish_at, lead_minutes, privacy, approve, "
+              "status, job_id, video_url, error, created_at, updated_at")
+
+
+def _plan(row: Any) -> dict[str, Any]:
+    out = dict(row)
+    try:
+        out["request"] = json.loads(out.get("request") or "{}")
+    except json.JSONDecodeError:
+        out["request"] = {}
+    out["approve"] = bool(out.get("approve"))
+    return out
+
+
+def add_plan(*, title: str, request: dict[str, Any], publish_at: str,
+             lead_minutes: int = 240, privacy: str = "public",
+             approve: bool = True) -> dict[str, Any]:
+    plan_id = new_id("pln")
+    now = _now()
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO plans (id, title, request, publish_at, lead_minutes, privacy,"
+            " approve, status, job_id, video_url, error, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (plan_id, title, json.dumps(request), publish_at, int(lead_minutes),
+             privacy, 1 if approve else 0, "planned", "", "", "", now, now),
+        )
+    return get_plan(plan_id) or {}
+
+
+def list_plans(limit: int = 60) -> list[dict[str, Any]]:
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT {_PLAN_COLS} FROM plans ORDER BY publish_at ASC LIMIT ?",
+            (limit,)).fetchall()
+    return [_plan(r) for r in rows]
+
+
+def get_plan(plan_id: str) -> dict[str, Any] | None:
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT {_PLAN_COLS} FROM plans WHERE id = ?", (plan_id,)).fetchone()
+    return _plan(row) if row else None
+
+
+def update_plan(plan_id: str, **fields: Any) -> bool:
+    """Change a plan. Only the columns named are touched."""
+    allowed = ("title", "publish_at", "lead_minutes", "privacy", "approve",
+               "status", "job_id", "video_url", "error")
+    sets, values = [], []
+    for key in allowed:
+        if key in fields and fields[key] is not None:
+            sets.append(f"{key} = ?")
+            values.append(1 if key == "approve" and fields[key] is True
+                          else 0 if key == "approve" and fields[key] is False
+                          else fields[key])
+    if "request" in fields and fields["request"] is not None:
+        sets.append("request = ?")
+        values.append(json.dumps(fields["request"]))
+    if not sets:
+        return False
+    sets.append("updated_at = ?")
+    values.append(_now())
+    values.append(plan_id)
+    with _conn() as conn:
+        return conn.execute(
+            f"UPDATE plans SET {', '.join(sets)} WHERE id = ?", values).rowcount > 0
+
+
+def delete_plan(plan_id: str) -> bool:
+    with _conn() as conn:
+        return conn.execute("DELETE FROM plans WHERE id = ?", (plan_id,)).rowcount > 0
+
+
+def plans_due(now_iso: str, statuses: tuple[str, ...] = ("planned",)) -> list[dict[str, Any]]:
+    """Plans whose build should already have started.
+
+    The comparison is done in Python rather than SQL: `publish_at` minus a
+    per-plan lead time is not something either engine can index on, and there are
+    tens of these rows, not millions.
+    """
+    from datetime import datetime, timedelta, timezone as _tz
+
+    def parsed(text: str) -> datetime | None:
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    right_now = parsed(now_iso) or datetime.now(_tz.utc)
+    out = []
+    for plan in list_plans(200):
+        if plan["status"] not in statuses:
+            continue
+        when = parsed(plan["publish_at"])
+        if when is None:
+            continue
+        if when - timedelta(minutes=int(plan["lead_minutes"] or 0)) <= right_now:
+            out.append(plan)
+    return out
 
 
 # --- channel profiles --------------------------------------------------------

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import config, pgstore, skills, store
-from .providers import align, images, storage, tts
+from .providers import align, batch, images, storage, tts
 from .render import overlays as ov
 from .render import shots
 from .render import subtitles as subs
@@ -1006,6 +1006,8 @@ async def _render_images(
     span: int = 24,
     only_stale: bool = False,
     missing_only: bool = False,
+    batch_wanted: bool = False,
+    batch_patience_minutes: float = 0.0,
 ) -> list[str]:
     image_dir = workdir / "images"
     warnings: list[str] = []
@@ -1054,9 +1056,120 @@ async def _render_images(
             _progress(job_id, "images", base_progress + int(span * done / total),
                       f"Scene image {done}/{total}")
 
+    if work and batch_wanted:
+        # Half the price, and there is time to wait for it. Whatever the batch
+        # does not return is made the ordinary way below — a scene without a
+        # picture is not an acceptable saving.
+        got = await _batch_images(
+            work=work, image_dir=image_dir, hero_paths=hero_paths, aspect=aspect,
+            job_id=job_id, base_progress=base_progress, span=span,
+            patience_minutes=batch_patience_minutes)
+        for scene, shot in list(work):
+            key = _work_key(scene, shot)
+            path = got.get(key)
+            if path is None:
+                continue
+            _adopt_picture(scene, shot, path)
+            done += 1
+        work = [(s, sh) for s, sh in work if _work_key(s, sh) not in got]
+        if got:
+            _note(job_id, f"Batch: {len(got)}/{total} rasm arzon narxda tayyorlandi")
+
     if work:
         await _gather_limited([one(s, sh) for s, sh in work], config.IMAGE_CONCURRENCY)
     return warnings
+
+
+def _work_key(scene: dict, shot: dict | None) -> str:
+    return f"shot:{shot['sid']}" if shot is not None else f"scene:{scene['sid']}"
+
+
+def _adopt_picture(scene: dict, shot: dict | None, path: Path) -> None:
+    """Attach a finished picture, from wherever it came from."""
+    holder = shot if shot is not None else scene
+    holder["image_path"] = str(path)
+    holder["needs_image"] = False
+    holder["image_version"] = int(holder.get("image_version", 0)) + 1
+    if shot is not None:
+        scene["needs_image"] = any(s.get("needs_image") for s in scene["shots"])
+        if scene["shots"][0] is shot:
+            scene["image_path"] = str(path)
+            scene["image_version"] = int(scene.get("image_version", 0)) + 1
+
+
+async def _batch_images(
+    *, work: list[tuple[dict, dict | None]], image_dir: Path,
+    hero_paths: dict[str, Path], aspect: str, job_id: str,
+    base_progress: int, span: int, patience_minutes: float = 0.0,
+) -> dict[str, Path]:
+    """Draw as many of these as the batch API will, and say which it did.
+
+    Never raises: every failure here means "pay full price for this one", which is
+    the ordinary path and not an error worth stopping a render for.
+    """
+    if not batch.available():
+        _note(job_id, "Batch so'raldi, ammo Gemini kaliti yo'q — oddiy yo'l bilan")
+        return {}
+
+    model = config.model("gemini_image")
+    items = []
+    for scene, shot in work:
+        holder = shot if shot is not None else scene
+        refs = [hero_paths[h] for h in scene.get("hero_ids", []) if h in hero_paths]
+        pictures = []
+        for ref in refs[:3]:
+            try:
+                pictures.append((ref.read_bytes(), "image/png"))
+            except OSError:
+                continue
+        prompt = (holder.get("prompt") or holder.get("image_prompt")
+                  or scene.get("image_prompt") or "")
+        items.append({
+            "key": _work_key(scene, shot),
+            "request": batch.image_request(
+                model, f"{prompt}\n\nAspect ratio: {aspect}.",
+                negative=holder.get("negative_prompt") or scene.get("negative_prompt", ""),
+                images=pictures),
+        })
+
+    try:
+        name = await batch.submit(model, items, label=f"sarideo {job_id}")
+    except batch.BatchError as exc:
+        _note(job_id, f"Batch boshlanmadi ({exc}) — oddiy yo'l bilan")
+        return {}
+
+    _progress(job_id, "images", base_progress,
+              f"Batch yuborildi — {len(items)} rasm arzon narxda kutilmoqda")
+
+    look = await batch.gather(
+        name,
+        # How long it is worth waiting is not a property of the batch API, it is a
+        # property of when the video is due — so the caller says.
+        patience=(patience_minutes * 60) if patience_minutes > 0 else None,
+        on_wait=lambda waited, state: _progress(
+            job_id, "images", base_progress,
+            f"Batch kutilmoqda — {int(waited // 60)} daqiqa ({state})"))
+
+    if look.get("why"):
+        _note(job_id, f"Batch: {look['why']} — qolgani oddiy yo'l bilan")
+
+    made: dict[str, Path] = {}
+    image_dir.mkdir(parents=True, exist_ok=True)
+    for key, response in (look.get("results") or {}).items():
+        data = batch.image_bytes(response)
+        if not data:
+            continue
+        target = image_dir / (
+            f"shot_{key.split(':', 1)[1]}.png" if key.startswith("shot:")
+            else f"scene_{key.split(':', 1)[1]}.png")
+        try:
+            target.write_bytes(data)
+        except OSError:
+            continue
+        made[key] = target
+    for key, why in (look.get("errors") or {}).items():
+        _note(job_id, f"Batch rad etdi ({key}): {why} — oddiy yo'l bilan")
+    return made
 
 
 def _split_uploaded_audio(scenes: list[dict], words: list[dict], total: float) -> None:
@@ -1235,10 +1348,14 @@ async def run_draft(job_id: str) -> None:
             _kept_note(job_id, scenes, await keep_media(scenes, job_id))
 
         # --- images -----------------------------------------------------------
+        # Only the first draw of a planned video takes the batch road. A picture
+        # redrawn later is one somebody is sitting waiting for.
         _progress(job_id, "images", 48, "Generating scene images")
         warnings += await _render_images(
             scenes=scenes, targets=scenes, workdir=workdir, hero_paths=hero_paths,
             provider=image_provider, aspect=fmt["aspect"], size=(width, height), job_id=job_id,
+            batch_wanted=bool(request.get("batch")),
+            batch_patience_minutes=float(request.get("batch_patience_minutes") or 0),
         )
 
         _save_scenes(job_id, scenes, style_bible=prompt_pack.get("style_bible"),

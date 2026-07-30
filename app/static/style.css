@@ -1624,3 +1624,52 @@ input[type="range"]::-moz-range-thumb {
   transition: color .18s, border-color .18s;
 }
 .linky:hover { color: var(--text); border-color: var(--accent); }
+
+/* ── plans ────────────────────────────────────────────────────────────────────
+   A plan is a promise with a time on it, so the time is the loudest thing on the
+   card and the status sits next to it. */
+
+.plans { display: grid; gap: 10px; }
+.plan {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 14px 15px;
+}
+.plan.ready { border-color: rgba(61, 220, 145, .35); }
+.plan.failed { border-color: rgba(255, 92, 71, .35); }
+.plan.cancelled { opacity: .55; }
+.plan-head {
+  position: relative;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 6px; padding-right: 26px;
+}
+.plan-head b { font-size: .84rem; font-variant-numeric: tabular-nums; }
+.plan-head .x {
+  position: absolute; top: -2px; right: -4px; width: 24px; height: 24px;
+  display: grid; place-items: center; border-radius: 99px;
+  color: var(--faint); font-style: normal; cursor: pointer;
+}
+.plan-head .x:hover { color: var(--accent); background: var(--accent-soft); }
+/* Half price is worth a badge: it is the reason to plan ahead rather than an
+   implementation detail. */
+.cheap {
+  font-style: normal; font-size: .62rem; font-weight: 700; letter-spacing: .04em;
+  padding: 2px 7px; border-radius: 99px; text-transform: uppercase;
+  background: rgba(61, 220, 145, .14); color: var(--ok);
+}
+.plan h3 { font-size: .95rem; margin: 0 0 3px; }
+.plan > small { color: var(--muted); font-size: .74rem; }
+.plan .note { margin: 8px 0 0; }
+.plan .track { margin-top: 9px; }
+.plan-acts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+
+.tag.planned { background: var(--raised); color: var(--muted); }
+.tag.ready { background: rgba(61, 220, 145, .14); color: var(--ok); }
+.tag.published { background: rgba(120, 160, 255, .14); color: #b8ccff; }
+.tag.cancelled { background: var(--raised); color: var(--faint); }
+
+/* The plan form is a column of full-width fields, unlike the library's little
+   inline forms. */
+.mini.wide { display: grid; gap: 9px; }
+.mini.wide textarea, .mini.wide input, .mini.wide select { width: 100%; }
+.f2 { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+@media (max-width: 420px) { .f2 { grid-template-columns: 1fr; } }
