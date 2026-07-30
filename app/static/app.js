@@ -4491,15 +4491,34 @@ async function keyAction(id, act, btn) {
   }
 }
 
+/** A pasted key, as the provider needs it — see `keys.clean` on the server.
+ *
+ * Copying a key on a phone is lossy in ways that say nothing about the key: the
+ * dashboard wraps it so the paste carries newlines, a long-press takes the
+ * quotes around it, the keyboard adds a trailing space.
+ */
+const cleanKey = (text) => String(text ?? '')
+  .trim()
+  // Opening and closing are not always the same character — a phone turns a pair
+  // of straight quotes into “ … ” — so the pairs are matched, not just repeated.
+  .replace(/^(["'`])([\s\S]*)\1$/, '$2')
+  .replace(/^‘([\s\S]*)’$/, '$1')
+  .replace(/^“([\s\S]*)”$/, '$1')
+  .replace(/^«([\s\S]*)»$/, '$1')
+  .replace(/\s+/g, '');
+
 $('#key-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
   const body = {
     provider: form.provider.value,
-    secret: form.secret.value.trim(),
+    secret: cleanKey(form.secret.value),
     label: form.label.value.trim(),
   };
-  if (body.secret.length < 8) { toast('Kalit juda qisqa'); return; }
+  // Only "you typed nothing" is checked here. There is no length or shape a key
+  // has to have — Google alone issues both `AIza…` and `AQ.…` — so anything
+  // stricter would just refuse real keys. The provider decides, when it is used.
+  if (!body.secret) { toast('Kalit kiritilmadi'); return; }
   const btn = form.querySelector('button');
   btn.disabled = true;
   try {
