@@ -13,15 +13,19 @@
 <header class="bar">
   <div class="mark"><span class="dot-logo"></span> Sarideo</div>
 
-  <!-- The four places you can be. Sections, not tools — the tools are in the
-       dock at the bottom, where a thumb can reach them. -->
+  <!-- The six places you can be. Sections, not tools — the tools are in the dock
+       at the bottom, where a thumb can reach them.
+
+       Two labels each. Six full names do not fit across a narrow phone, and a nav
+       that scrolls is a nav that slides under your finger and hides the tab you
+       were looking for; the short name is what fits, so nothing has to move. -->
   <nav class="topnav" id="topnav">
-    <button data-go="chat">Suhbat</button>
-    <button data-go="create" aria-pressed="true">Yaratish</button>
-    <button data-go="edit">Tahrirlash<i class="badge hidden" id="jobs-badge"></i></button>
-    <button data-go="plans">Reja<i class="badge hidden" id="plans-badge"></i></button>
-    <button data-go="ready">Tayyor<i class="badge hidden" id="ready-badge"></i></button>
-    <button data-go="library">Kutubxona</button>
+    <button data-go="chat"><b>Suhbat</b><u>Suhbat</u></button>
+    <button data-go="create" aria-pressed="true"><b>Yaratish</b><u>Yangi</u></button>
+    <button data-go="edit"><b>Tahrirlash</b><u>Tahrir</u><i class="badge hidden" id="jobs-badge"></i></button>
+    <button data-go="plans"><b>Reja</b><u>Reja</u><i class="badge hidden" id="plans-badge"></i></button>
+    <button data-go="ready"><b>Tayyor</b><u>Tayyor</u><i class="badge hidden" id="ready-badge"></i></button>
+    <button data-go="library"><b>Kutubxona</b><u>Kutub</u></button>
   </nav>
 
   <div class="bar-right">
@@ -266,11 +270,18 @@
                 <option value="1440">1 kun</option>
               </select></label>
           </div>
+          <label class="f"><span>Rasmlar qanday tayyorlansin</span>
+            <select name="batch">
+              <option value="auto">Avtomatik — vaqt bo‘lsa arzon batch</option>
+              <option value="on">Har doim batch — yarim narx, sekinroq</option>
+              <option value="off">Har doim oddiy — tez, to‘liq narx</option>
+            </select></label>
           <label class="sw"><input type="checkbox" name="approve" checked /><i></i>
             <span>Chiqarishdan oldin men ko‘rib tasdiqlayman</span></label>
           <p class="note">Belgini olib tashlasangiz ilova o‘zi joylaydi — ko‘rmasdan
-            chiqadi. Uzoq muddatli rejalar rasmlarni <b>batch</b> orqali, ya‘ni
-            yarim narxda tayyorlaydi.</p>
+            chiqadi. <b>Batch</b> — rasmlarni yarim narxda tayyorlash; javobi
+            sekinroq keladi, shuning uchun «avtomatik» uni faqat chiqishiga 6
+            soatdan ko‘p qolgan rejalarda ishlatadi.</p>
           <button>Rejaga qo‘shish</button>
         </form>
         <p class="msg err hidden" id="plan-error"></p>

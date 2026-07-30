@@ -246,11 +246,9 @@ function go(view) {
   state.view = view;
   $$('.view').forEach((v) => v.classList.toggle('on', v.id === `view-${view}`));
   $$('#topnav button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.go === view));
-  // Five sections do not fit across a phone, so the nav scrolls — and a tab you
-  // cannot see is a tab you do not know is there. The current one is always
-  // brought into view, including when the app opens straight onto it.
-  $(`#topnav button[data-go="${view}"]`)
-    ?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  // Deliberately not scrolled into view. The nav fits at every width worth
+  // supporting — short labels below 460px — so there is nothing to scroll to, and
+  // sliding it under the user's finger on every tap was the whole complaint.
   closeSheet();
   drawDock();
   scrollTo({ top: 0, behavior: 'instant' in document.documentElement.style ? 'instant' : 'auto' });
@@ -341,6 +339,10 @@ function drawDock() {
   if (state.view === 'edit' && !ED.job) items = [];
   const dock = $('#dock');
   dock.classList.toggle('hidden', !items.length);
+  // The page keeps a dock's worth of room at the bottom. On a screen that has no
+  // dock that room is a hole, and a sticky composer sitting above it jumps up by
+  // exactly that much as you reach the end of the page.
+  document.body.classList.toggle('nodock', !items.length);
   if (!items.length) { dock.innerHTML = ''; return; }
 
   // In the editor the tools act on a scene, so they are dead until one is open.
@@ -3026,19 +3028,48 @@ function drawScenePanel() {
           </div>
           <small id="revoice-hint"></small>
         </div>
-        <label class="sw"><input type="checkbox" name="all_scenes" /><i></i>
-          <span>Barcha sahnalarni qayta yozish</span></label>
+        <div class="f"><span>Qaysi sahnalar</span>
+          <select name="scope" id="revoice-scope">
+            <option value="one">Faqat shu sahna (${s.index + 1})</option>
+            <option value="range">Oraliq — masalan ${Math.min(s.index + 1, ED.scenes.length)} dan ${ED.scenes.length} gacha</option>
+            <option value="all">Barchasi (${ED.scenes.length})</option>
+          </select></div>
+        <div class="f2 hidden" id="revoice-range">
+          <label class="f"><span>Qaysi sahnadan</span>
+            <input name="from_scene" type="number" min="1" max="${ED.scenes.length}"
+              value="${s.index + 1}" /></label>
+          <label class="f"><span>Qaysi sahnagacha</span>
+            <input name="to_scene" type="number" min="1" max="${ED.scenes.length}"
+              value="${ED.scenes.length}" /></label>
+        </div>
         <small class="note">Ovoz butun videoga tegishli — o‘zgartirsangiz qolgan
-          sahnalar ham render paytida qayta yoziladi.</small>`,
-      onOpen: () => fillRevoice(current, ED.job.voice_id || ''),
+          sahnalar ham render paytida qayta yoziladi. Oraliq tanlasangiz faqat
+          o‘shalari hozir qayta yoziladi, ya‘ni yaxshi chiqqanlari uchun
+          ikkinchi marta to‘lanmaydi.</small>`,
+      onOpen: () => {
+        fillRevoice(current, ED.job.voice_id || '');
+        // The two number boxes only mean anything when a range is what is wanted.
+        const scope = $('#revoice-scope');
+        const range = $('#revoice-range');
+        const sync = () => range.classList.toggle('hidden', scope.value !== 'range');
+        scope.addEventListener('change', sync);
+        sync();
+      },
     });
     if (!answer) return;
+    const scope = answer.scope || 'one';
+    // Shown one-based because that is what the filmstrip says; sent zero-based
+    // because that is what a scene index is.
+    const from = Math.max(1, Number(answer.from_scene) || 1) - 1;
+    const to = Math.max(1, Number(answer.to_scene) || ED.scenes.length) - 1;
     regen({
       image: false,
       voice: true,
       tts_provider: answer.tts_provider || null,
       voice_id: answer.voice_id || null,
-      all_scenes: !!answer.all_scenes,
+      all_scenes: scope === 'all',
+      from_index: scope === 'range' ? Math.min(from, to) : null,
+      to_index: scope === 'range' ? Math.max(from, to) : null,
     });
   });
   $('[data-a="upload"] input', host).addEventListener('change', (e) => {
@@ -4054,12 +4085,23 @@ function drawPlans() {
       <div class="plan-head">
         <span class="tag ${esc(p.status)}">${esc(PLAN_STATUS[p.status] || p.status)}</span>
         <b>${esc(planWhen(p.publish_at))}</b>
-        ${p.batch ? '<em class="cheap" title="Rasmlar batch orqali — yarim narx">batch</em>' : ''}
+        ${p.batch
+          ? `<em class="cheap" title="Rasmlar batch orqali — yarim narx">batch${
+              p.batch_mode === 'on' ? ' ·' : ''}</em>`
+          : (p.batch_mode === 'off'
+              ? '<em class="cheap off" title="Batch o‘chirilgan — to‘liq narx, tez">oddiy</em>' : '')}
         <i class="x" data-del-plan="${esc(p.id)}" role="button" aria-label="O‘chirish">×</i>
       </div>
       <h3>${esc(p.title || p.topic)}</h3>
       <small>${esc(p.video_format)} · ${esc(p.privacy)}${
         p.approve ? ' · tasdiqlash bilan' : ' · o‘zi joylaydi'}</small>
+      ${p.status === 'planned' ? `
+        <label class="f tight"><span>Rasmlar</span>
+          <select data-batch="${esc(p.id)}">
+            <option value="auto"${p.batch_mode === 'auto' ? ' selected' : ''}>Avtomatik</option>
+            <option value="on"${p.batch_mode === 'on' ? ' selected' : ''}>Batch — yarim narx</option>
+            <option value="off"${p.batch_mode === 'off' ? ' selected' : ''}>Oddiy — tez</option>
+          </select></label>` : ''}
       <p class="note">${esc(p.note)}</p>
       ${p.status === 'building' && p.job_progress
         ? `<div class="track live"><i style="width:${p.job_progress}%"></i></div>` : ''}
@@ -4122,6 +4164,21 @@ function drawPlans() {
     } catch (e) { toast(e.message); }
   }));
 
+  // Changed on the card rather than only at creation: "cheaper but slower" is a
+  // decision worth revisiting when the slot moves.
+  $$('#plans-list [data-batch]').forEach((sel) => sel.addEventListener('change', async () => {
+    try {
+      await api(`/api/plans/${sel.dataset.batch}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch: sel.value }),
+      });
+      await loadPlans();
+      toast(sel.value === 'off' ? 'Oddiy yo‘l — tez, to‘liq narx'
+        : sel.value === 'on' ? 'Batch — yarim narx, sekinroq' : 'Avtomatik');
+    } catch (e) { toast(e.message); }
+  }));
+
   $$('#plans-list [data-del-plan]').forEach((b) => b.addEventListener('click', async () => {
     if (!confirm('Rejani o‘chiramizmi?')) return;
     try {
@@ -4154,6 +4211,7 @@ $('#plan-form').addEventListener('submit', async (e) => {
         privacy: form.privacy.value,
         lead_minutes: Number(form.lead_minutes.value) || 240,
         approve: form.approve.checked,
+        batch: form.batch.value,
       }),
     });
     form.reset();

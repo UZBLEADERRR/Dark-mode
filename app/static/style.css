@@ -110,6 +110,10 @@ main {
   padding: clamp(18px, 4vw, 44px) clamp(16px, 5vw, 40px)
            calc(108px + env(safe-area-inset-bottom));
 }
+/* No dock on this screen, so no room to leave for one. Without this the chat's
+   sticky composer rose a hundred and eight pixels as the page reached its end —
+   which is the input box "jumping upwards". */
+body.nodock main { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
 
 .view { display: none; }
 .view.on { display: block; animation: drop .26s var(--ease); }
@@ -134,12 +138,46 @@ main {
 }
 .topnav button:hover { color: var(--text); }
 .topnav button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+/* Six sections, one row, no scrolling — a nav that scrolls slides under your
+   finger and hides the tab you were reaching for. Which is why there are two
+   labels per tab: the short one is what fits on a phone, and the full one comes
+   back only at a width that can actually hold it.
+
+   Everything about the nav's size lives here, in one block. It was previously
+   spread over three, two of which came later in the file and quietly overrode the
+   first. */
+.topnav button b { display: none; }
+.topnav button u { display: inline; text-decoration: none; }
+
 .topnav .badge {
-  display: inline-block; margin-left: 6px;
-  min-width: 16px; height: 16px; padding: 0 4px;
-  border-radius: 99px; background: var(--accent); color: #fff;
-  font-size: .6rem; font-weight: 700; line-height: 16px; text-align: center;
-  font-style: normal; vertical-align: 1px;
+  display: inline-block; border-radius: 99px;
+  background: var(--accent); color: #fff;
+  font-size: .6rem; font-weight: 700; text-align: center;
+  font-style: normal;
+  /* A number needs room a phone has not got, and a dot says the same thing:
+     there is something in here. */
+  margin-left: 4px; min-width: 6px; width: 6px; height: 6px; padding: 0;
+  overflow: hidden; text-indent: -99px; vertical-align: 2px;
+}
+
+@media (max-width: 819px) {
+  .topnav { gap: 0; padding: 2px; }
+  .topnav button { padding: 7px 7px; font-size: .74rem; }
+}
+@media (max-width: 400px) {
+  .topnav button { padding: 6px 4px; font-size: .68rem; }
+  .topnav .badge { margin-left: 3px; min-width: 5px; width: 5px; height: 5px; }
+}
+@media (max-width: 340px) {
+  .topnav button { padding: 6px 3px; font-size: .64rem; }
+}
+@media (min-width: 820px) {
+  .topnav button b { display: inline; }
+  .topnav button u { display: none; }
+  .topnav .badge {
+    margin-left: 6px; min-width: 16px; width: auto; height: 16px; padding: 0 4px;
+    line-height: 16px; overflow: visible; text-indent: 0; vertical-align: 1px;
+  }
 }
 
 /* ── the dock ──────────────────────────────────────────────────── */
@@ -199,9 +237,6 @@ main {
   }
   .dock svg { width: 18px; height: 18px; }
 
-  .topnav { gap: 0; padding: 3px; }
-  .topnav button { padding: 7px 9px; font-size: .78rem; }
-  .topnav .badge { margin-left: 4px; min-width: 14px; height: 14px; line-height: 14px; }
 }
 
 /* ── the sheet ─────────────────────────────────────────────────── */
@@ -1673,3 +1708,9 @@ input[type="range"]::-moz-range-thumb {
 .mini.wide textarea, .mini.wide input, .mini.wide select { width: 100%; }
 .f2 { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 @media (max-width: 420px) { .f2 { grid-template-columns: 1fr; } }
+
+.cheap.off { background: var(--raised); color: var(--muted); }
+/* A select tucked under a card's summary line, not a form field in its own right. */
+.plan .f.tight { margin-top: 8px; gap: 4px; }
+.plan .f.tight span { font-size: .72rem; color: var(--muted); }
+.plan .f.tight select { padding: 6px 9px; font-size: .78rem; }

@@ -248,6 +248,11 @@ class RegenerateRequest(BaseModel):
     tts_provider: str | None = None
     # Re-record every scene with the new voice, not just this one.
     all_scenes: bool = False
+    # Or only a stretch of them. Half a video recorded in the wrong voice is the
+    # ordinary way this goes wrong, and re-recording all of it to fix the second
+    # half means paying twice for the half that was already right.
+    from_index: int | None = Field(default=None, ge=0)
+    to_index: int | None = Field(default=None, ge=0)
 
 
 class HeroPatch(BaseModel):
@@ -358,6 +363,9 @@ class PlanIn(BaseModel):
     # Waits for you to look at it. On by default: a video published unread cannot
     # be un-seen by whoever already saw it.
     approve: bool = True
+    # The cheap slow road for the pictures. `auto` uses it when the slot is far
+    # enough off to afford the wait; `on` and `off` say so outright.
+    batch: Literal["auto", "on", "off"] = "auto"
 
 
 class PlanPatch(BaseModel):
@@ -366,4 +374,5 @@ class PlanPatch(BaseModel):
     lead_minutes: int | None = Field(default=None, ge=10, le=10080)
     privacy: Literal["private", "unlisted", "public"] | None = None
     approve: bool | None = None
+    batch: Literal["auto", "on", "off"] | None = None
     status: Literal["planned", "cancelled"] | None = None

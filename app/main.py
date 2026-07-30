@@ -735,6 +735,8 @@ def _plan_out(plan: dict[str, Any]) -> dict[str, Any]:
         "lead_minutes": plan.get("lead_minutes", 0),
         "privacy": plan.get("privacy", "public"),
         "approve": bool(plan.get("approve")),
+        # What was chosen, and what that works out to for this slot.
+        "batch_mode": plan.get("batch") or "auto",
         "status": plan.get("status", ""),
         "job_id": plan.get("job_id", ""),
         "video_url": plan.get("video_url", ""),
@@ -779,7 +781,7 @@ async def create_plan(body: PlanIn) -> dict[str, Any]:
     plan = store.add_plan(
         title=body.title.strip() or body.topic.strip(), request=request,
         publish_at=when, lead_minutes=body.lead_minutes,
-        privacy=body.privacy, approve=body.approve)
+        privacy=body.privacy, approve=body.approve, batch=body.batch)
     return _plan_out(plan)
 
 
@@ -1455,11 +1457,43 @@ async def regenerate_scene(job_id: str, index: int, body: RegenerateRequest) -> 
     # halfway through is a defect — and the other scenes are marked rather than
     # re-recorded now, so one scene's fix does not quietly become a whole
     # re-record you did not ask for.
+    # The range is worked out first, because what is about to be recorded decides
+    # what has to be marked as stale. Checked here too, where a bad range can
+    # still be a 400 rather than a job that runs and records nothing.
+    span = None
+    if body.from_index is not None or body.to_index is not None:
+        known = sorted(s["index"] for s in scenes)
+        low = body.from_index if body.from_index is not None else known[0]
+        high = body.to_index if body.to_index is not None else known[-1]
+        if low > high:
+            raise HTTPException(status_code=400,
+                                detail="Boshlanish raqami tugashidan katta bo'lmasin.")
+        if not any(low <= i <= high for i in known):
+            raise HTTPException(status_code=400,
+                                detail=f"{low + 1}–{high + 1} oralig'ida sahna yo'q.")
+        span = (low, high)
+
+    if span is not None:
+        about_to = {i for i in (s["index"] for s in scenes) if span[0] <= i <= span[1]}
+    elif body.all_scenes:
+        about_to = {s["index"] for s in scenes}
+    else:
+        about_to = {index}
+
+    # Re-recording is exactly when you notice the voice was wrong, so it can be
+    # changed here. It applies to the whole video — a narrator who changes
+    # halfway through is a defect — and the scenes that are not about to be
+    # recorded are marked rather than recorded now, so one fix does not quietly
+    # become a whole re-record you did not ask for.
+    #
+    # Marked against what is *about to be recorded*, not against the scene that
+    # happened to be open: with a range, the open scene is usually outside it,
+    # and skipping it left one scene silently keeping the old voice.
     request = dict(job["request"])
     if _apply_voice(job_id, request, body.tts_provider, body.voice_id):
         store.replace_request(job_id, request)
         for scene in scenes:
-            if scene["index"] != index:
+            if scene["index"] not in about_to:
                 scene["needs_voice"] = True
         store.update_job(job_id, result={"scenes": scenes},
                          log="Voice changed — other scenes will follow on render")
@@ -1468,8 +1502,8 @@ async def regenerate_scene(job_id: str, index: int, body: RegenerateRequest) -> 
     store.update_job(job_id, status="running", step="regenerate", progress=10)
     _launch(lambda: pipeline.regenerate_scene(
         job_id, index, redo_image=body.image, redo_voice=redo_voice,
-        redo_all_voices=body.all_scenes), job_id)
-    return {"id": job_id, "status": "running"}
+        redo_all_voices=body.all_scenes, voice_range=span), job_id)
+    return {"id": job_id, "status": "running", "voice_range": span}
 
 
 @app.post("/api/jobs/{job_id}/scenes/{index}/image")

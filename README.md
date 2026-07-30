@@ -79,9 +79,19 @@ tayyorlanadi. Rejalar bazada — deploy qilinsa yo'qolmaydi.
 
 ### Batch — vaqt ko'p bo'lsa yarim narx
 
-Chiqishiga **6 soatdan ko'p** qolgan reja rasmlarni Gemini'ning **Batch API**si
-orqali tayyorlaydi: **narxi yarmi**, javobi sekinroq. Kartochkada `batch` yorlig'i
-turadi.
+Rasmlarni Gemini'ning **Batch API**si orqali tayyorlash mumkin: **narxi yarmi**,
+javobi sekinroq.
+
+Buni siz tanlaysiz — reja formasida ham, keyin kartochkadagi **«Rasmlar»**
+ro'yxatidan ham:
+
+| Tanlov | Nima bo'ladi |
+|---|---|
+| **Avtomatik** | Chiqishiga 6 soatdan ko'p qolgan bo'lsa batch, aks holda oddiy |
+| **Batch — yarim narx** | Har doim batch, vaqtiga qaramay |
+| **Oddiy — tez** | Batch umuman ishlatilmaydi |
+
+Kartochkada qaysi yo'l tanlanganini yorliq ko'rsatib turadi.
 
 Bu hech qachon xavf tug'dirmaydi:
 
@@ -220,6 +230,22 @@ bo'lardi.
 Bir necha ovoz bo'lsa ham so'rovlar baribir guruhlanadi: har ovoz o'z
 qatorlarini bitta so'rovda o'qiydi. To'rt qahramonli multfilm — sahna soniga
 qarab emas, **to'rtta so'rov**.
+
+### Ovozni qayta yozish — bitta, oraliq yoki hammasi
+
+Sahna panelida **«Ovozni qayta yozish»** bosganda **qaysi sahnalar** degan tanlov
+chiqadi:
+
+- **Faqat shu sahna** — bittasini tuzatish uchun.
+- **Oraliq** — masalan 52 dan 78 gacha. Faqat o'shalari qayta yoziladi.
+- **Barchasi** — butun video.
+
+Oraliq nima uchun kerak: 78 sahnaning 51 tasi yaxshi chiqib, qolgani boshqa
+ovozda bo'lsa, hammasini qayta yozish **yaxshi chiqqan 51 tasi uchun ikkinchi
+marta to'lash** demakdir. Oraliq tanlasangiz faqat 27 tasiga to'lanadi.
+
+Ovozni almashtirsangiz u butun videoga tegishli bo'ladi: oraliqdan tashqaridagi
+sahnalar **belgilanadi**, ya'ni keyingi render'da qayta yoziladi — hozir emas.
 
 ### O'z ovozingizni yozish
 

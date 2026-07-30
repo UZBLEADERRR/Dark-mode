@@ -65,7 +65,17 @@ def hours_until(when: str) -> float:
 
 
 def wants_batch(plan: dict[str, Any]) -> bool:
-    """Whether there is enough time to take the cheap, slow road."""
+    """Whether this plan takes the cheap, slow road.
+
+    The plan's own choice comes first. `auto` is the sensible default — cheap when
+    there is time for it — but "cheaper but slower" is not a decision to make
+    silently on somebody else's behalf, so `on` and `off` mean exactly that.
+    """
+    choice = (plan.get("batch") or "auto").lower()
+    if choice == "on":
+        return True
+    if choice == "off":
+        return False
     return hours_until(plan.get("publish_at", "")) >= BATCH_AFTER_HOURS
 
 
