@@ -286,3 +286,14 @@ class JobOut(BaseModel):
     logs: list[str] = Field(default_factory=list)
     created_at: str | None = None
     updated_at: str | None = None
+
+
+class ProfilePatch(BaseModel):
+    """Correct what was read off a channel screenshot, or name it yourself."""
+
+    handle: str | None = Field(default=None, max_length=120)
+    summary: str | None = Field(default=None, max_length=4000)
+
+
+class ChatTurn(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)

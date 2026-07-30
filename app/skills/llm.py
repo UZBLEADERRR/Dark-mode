@@ -8,6 +8,7 @@ image prompts, subtitle breaks and metadata from that one key.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 from typing import Any
@@ -37,15 +38,26 @@ def _client():
     return _anthropic_client
 
 
-def _claude_sync(system: str, user: str, schema: dict | None, max_tokens: int) -> str:
+def _claude_sync(system: str, user: str, schema: dict | None, max_tokens: int,
+                 images: list[tuple[bytes, str]] | None = None) -> str:
     global _structured_outputs_ok
     import anthropic
+
+    content: Any = user
+    if images:
+        # Pictures first: a model reads the instruction better when it already
+        # has the thing the instruction is about.
+        content = [
+            {"type": "image", "source": {"type": "base64", "media_type": mime,
+                                         "data": base64.b64encode(data).decode()}}
+            for data, mime in images
+        ] + [{"type": "text", "text": user}]
 
     base: dict[str, Any] = {
         "model": config.model("anthropic_text"),
         "max_tokens": max_tokens,
         "system": system,
-        "messages": [{"role": "user", "content": user}],
+        "messages": [{"role": "user", "content": content}],
     }
 
     use_schema = bool(schema) and _structured_outputs_ok
@@ -117,37 +129,46 @@ def _to_gemini_schema(schema: Any) -> Any:
 async def _gemini_call(
     client: httpx.AsyncClient, model: str, system: str, user: str,
     schema: dict | None, max_tokens: int,
+    images: list[tuple[bytes, str]] | None = None,
 ) -> httpx.Response:
     generation: dict[str, Any] = {"maxOutputTokens": max_tokens, "temperature": 0.9}
     if schema:
         generation["responseMimeType"] = "application/json"
         generation["responseSchema"] = _to_gemini_schema(schema)
 
+    parts: list[dict[str, Any]] = [
+        {"inlineData": {"mimeType": mime, "data": base64.b64encode(data).decode()}}
+        for data, mime in (images or [])
+    ]
+    parts.append({"text": user})
+
     return await client.post(
         f"{config.GEMINI_BASE}/models/{model}:generateContent",
         headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
         json={
             "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": generation,
         },
     )
 
 
-async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int) -> str:
+async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int,
+                  images: list[tuple[bytes, str]] | None = None) -> str:
     if not config.GEMINI_API_KEY:
         raise LLMError("GEMINI_API_KEY is not set.")
 
     timeout = httpx.Timeout(300.0, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await _gemini_call(
-            client, config.model("gemini_text"), system, user, schema, max_tokens
+            client, config.model("gemini_text"), system, user, schema, max_tokens, images
         )
 
         if resp.status_code in (400, 404) and config.model("gemini_text_fallback"):
             # Unknown model name, or a schema this model won't accept.
             resp = await _gemini_call(
-                client, config.model("gemini_text_fallback"), system, user, schema, max_tokens
+                client, config.model("gemini_text_fallback"), system, user, schema,
+                max_tokens, images
             )
             if resp.status_code >= 400 and schema:
                 # Last resort: no response schema, ask for JSON in the prompt.
@@ -158,6 +179,7 @@ async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int) 
                     user,
                     None,
                     max_tokens,
+                    images,
                 )
 
         if resp.status_code >= 400:
@@ -220,13 +242,20 @@ async def call_json(
     user: str,
     schema: dict[str, Any] | None = None,
     max_tokens: int = 32000,
+    images: list[tuple[bytes, str]] | None = None,
 ) -> Any:
-    """Run one skill prompt and return parsed JSON."""
+    """Run one skill prompt and return parsed JSON.
+
+    `images` is a list of `(bytes, mime)`. Both providers take pictures the same
+    way as far as a caller here is concerned — as something to look at before
+    reading the instruction — so a skill that needs to read a screenshot does not
+    have to know which model is behind it.
+    """
     provider = config.llm_provider()
     if provider == "anthropic":
         if not config.ANTHROPIC_API_KEY:
             raise LLMError("ANTHROPIC_API_KEY is not set.")
-        text = await asyncio.to_thread(_claude_sync, system, user, schema, max_tokens)
+        text = await asyncio.to_thread(_claude_sync, system, user, schema, max_tokens, images)
     else:
-        text = await _gemini(system, user, schema, max_tokens)
+        text = await _gemini(system, user, schema, max_tokens, images)
     return _extract_json(text)

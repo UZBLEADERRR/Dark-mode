@@ -186,6 +186,9 @@ function go(view) {
   drawDock();
   scrollTo({ top: 0, behavior: 'instant' in document.documentElement.style ? 'instant' : 'auto' });
   if (view === 'edit' || view === 'ready') loadJobs();
+  // The channels may have been added from another device, or the conversation
+  // continued there — this screen is the same conversation wherever it is opened.
+  if (view === 'chat') { loadProfiles(); growChatInput(); }
 }
 addEventListener('click', (e) => {
   const target = e.target.closest('[data-go]');
@@ -3582,6 +3585,217 @@ function drawReady(done) {
   }));
 }
 
+// ══ suhbat ════════════════════════════════════════════════════════
+// The one screen you talk to. It knows your channels because you showed it a
+// screenshot once, it offers ideas you can tap, and it asks what it still needs
+// before starting a video rather than guessing and charging you for the guess.
+
+const CHAT = { platform: 'youtube', busy: false, messages: [], profiles: [] };
+
+const PLAT_LABEL = { youtube: 'YouTube', instagram: 'Instagram', tiktok: 'TikTok', other: 'Kanal' };
+const SHAPE_LABEL = { shorts: 'Shorts', long: 'Uzun' };
+
+async function loadProfiles() {
+  CHAT.profiles = await api('/api/profiles');
+  drawChannels();
+}
+
+function drawChannels() {
+  const list = CHAT.profiles;
+  $('#chan-count').textContent = list.length ? `${list.length} ta` : '';
+  $('#chan-row').innerHTML = list.length
+    ? list.map((p) => `
+        <figure class="chan-card" data-profile="${esc(p.id)}">
+          <img src="${esc(p.url)}" alt="${esc(p.handle || p.platform)}" loading="lazy" />
+          <figcaption>
+            <b>${esc(PLAT_LABEL[p.platform] || p.platform)}</b>
+            <span>${esc(p.handle || '—')}</span>
+          </figcaption>
+          <i class="x" data-del-profile="${esc(p.id)}" role="button" aria-label="O‘chirish">×</i>
+        </figure>`).join('')
+    : '';
+  $('#chan-note').classList.toggle('hidden', list.length > 0);
+
+  // Tapping a channel is the shortest way to say which one you mean.
+  $$('#chan-row [data-profile]').forEach((card) => card.addEventListener('click', (e) => {
+    if (e.target.closest('[data-del-profile]')) return;
+    const p = CHAT.profiles.find((x) => x.id === card.dataset.profile);
+    if (!p) return;
+    const name = p.handle ? `${PLAT_LABEL[p.platform] || p.platform} ${p.handle}` : PLAT_LABEL[p.platform];
+    $('#chat-input').value = `${name} kanalim uchun g‘oyalar ber`;
+    $('#chat-input').focus();
+    growChatInput();
+  }));
+
+  $$('#chan-row [data-del-profile]').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm('Bu skrinshotni o‘chirasizmi?')) return;
+    try {
+      await api(`/api/profiles/${b.dataset.delProfile}`, { method: 'DELETE' });
+      await loadProfiles();
+    } catch (err) { toast(err.message); }
+  }));
+}
+
+$$('#profile-platform button').forEach((b) => b.addEventListener('click', () => {
+  CHAT.platform = b.dataset.plat;
+  $$('#profile-platform button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+}));
+
+$('#profile-file').addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  // The shared file-input handler puts the chosen filename on the label, which
+  // is right where the file is a setting to be confirmed. Here it is consumed
+  // immediately and the channel appears in the strip, so the label goes back to
+  // being an invitation rather than a stale receipt.
+  const label = e.target.closest('.file');
+  if (label?.dataset.label) {
+    $('span', label).textContent = label.dataset.label;
+    label.classList.remove('has');
+  }
+  if (!file) return;
+  const note = $('#chan-note');
+  note.classList.remove('hidden');
+  note.textContent = 'Skrinshot o‘qilmoqda…';
+  try {
+    const body = new FormData();
+    body.append('image', file);
+    body.append('platform', CHAT.platform);
+    const made = await api('/api/profiles', { method: 'POST', body });
+    await loadProfiles();
+    note.classList.toggle('hidden', CHAT.profiles.length > 0);
+    // What it read back is worth showing: it is what every later answer is
+    // based on, and a misreading is only fixable if it is visible.
+    if (made.summary) {
+      pushChat({ role: 'bot', text: `${PLAT_LABEL[made.platform] || made.platform}`
+        + `${made.handle ? ` ${made.handle}` : ''} — o‘qib oldim.\n\n${made.summary}` });
+    }
+  } catch (err) {
+    note.textContent = err.message;
+    note.classList.remove('hidden');
+  }
+});
+
+function drawChat() {
+  const log = $('#chat-log');
+  log.innerHTML = CHAT.messages.length
+    ? CHAT.messages.map((m, i) => bubble(m, i)).join('')
+      + (CHAT.busy ? '<div class="bub bot typing"><i></i><i></i><i></i></div>' : '')
+    : `<div class="chat-empty">
+         <h2>Nima suratga olamiz?</h2>
+         <p>Kanalingiz skrinshotini yuklang, keyin g‘oya so‘rang. Yoqqanini bosasiz —
+            qolganini o‘zi so‘rab, videoni boshlaydi.</p>
+         <div class="chat-seeds">
+           ${['YouTube Shorts uchun 5 ta g‘oya ber',
+              'TikTok uchun trendga mos nima qilsam bo‘ladi?',
+              'Instagram Reels uchun ta’limiy g‘oya kerak']
+             .map((s) => `<button class="chip" data-seed="${esc(s)}">${esc(s)}</button>`).join('')}
+         </div>
+       </div>`;
+
+  $$('#chat-log [data-seed]').forEach((b) =>
+    b.addEventListener('click', () => sendChat(b.dataset.seed)));
+  $$('#chat-log [data-ask]').forEach((b) =>
+    b.addEventListener('click', () => sendChat(b.dataset.ask)));
+  $$('#chat-log [data-idea]').forEach((b) => b.addEventListener('click', () => {
+    const idea = JSON.parse(b.dataset.idea);
+    sendChat(`«${idea.title}» ni tanladim. ${SHAPE_LABEL[idea.shape] || ''}, `
+      + `${idea.seconds} soniya. Shuni qilamiz.`);
+  }));
+  $$('#chat-log [data-open-job]').forEach((b) => b.addEventListener('click', () => {
+    go('edit');
+    watch(b.dataset.openJob, { reveal: true });
+  }));
+
+  log.scrollTop = log.scrollHeight;
+}
+
+function bubble(m, i) {
+  if (m.role === 'user') return `<div class="bub me">${esc(m.text)}</div>`;
+  const ideas = (m.ideas || []).length
+    ? `<div class="ideas">${m.ideas.map((idea) => `
+        <button class="idea" data-idea="${esc(JSON.stringify(idea))}">
+          <b>${esc(idea.title)}</b>
+          ${idea.hook ? `<span class="hook">${esc(idea.hook)}</span>` : ''}
+          ${idea.why ? `<span class="why">${esc(idea.why)}</span>` : ''}
+          <em>${esc(SHAPE_LABEL[idea.shape] || idea.shape)} · ${idea.seconds}s</em>
+        </button>`).join('')}</div>`
+    : '';
+  // A question with options is a row of buttons, not a sentence to answer by
+  // typing — which is the difference between one tap and a paragraph.
+  const asks = (m.asks || []).length
+    ? `<div class="asks">${m.asks.map((a) => `
+        <div class="ask">
+          <span>${esc(a.question)}</span>
+          <div class="chips">${(a.options || []).map((o) =>
+            `<button class="chip" data-ask="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+        </div>`).join('')}</div>`
+    : '';
+  const started = m.job_id
+    ? `<div class="made-job">
+         <span>Video boshlandi.</span>
+         <button class="btn primary sm" data-open-job="${esc(m.job_id)}">Ochish</button>
+       </div>`
+    : '';
+  return `<div class="bub bot" data-i="${i}">${esc(m.text)}${ideas}${asks}${started}</div>`;
+}
+
+function pushChat(m) {
+  CHAT.messages.push(m);
+  drawChat();
+}
+
+async function sendChat(text) {
+  const said = (text ?? $('#chat-input').value).trim();
+  if (!said || CHAT.busy) return;
+  $('#chat-input').value = '';
+  growChatInput();
+  $('#chat-error').classList.add('hidden');
+  CHAT.busy = true;
+  pushChat({ role: 'user', text: said });
+  $('#chat-send').disabled = true;
+
+  try {
+    const out = await api('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: said }),
+    });
+    CHAT.busy = false;
+    pushChat({ role: 'bot', text: out.reply, ideas: out.ideas, asks: out.asks, job_id: out.job_id });
+    if (out.job_id) { loadJobs(); toast('Video yaratish boshlandi'); }
+  } catch (e) {
+    CHAT.busy = false;
+    drawChat();
+    $('#chat-error').textContent = e.message;
+    $('#chat-error').classList.remove('hidden');
+  } finally {
+    $('#chat-send').disabled = false;
+  }
+}
+
+function growChatInput() {
+  const box = $('#chat-input');
+  box.style.height = 'auto';
+  box.style.height = `${Math.min(140, box.scrollHeight)}px`;
+}
+
+$('#chat-send').addEventListener('click', () => sendChat());
+$('#chat-input').addEventListener('input', growChatInput);
+$('#chat-input').addEventListener('keydown', (e) => {
+  // Enter sends, shift-enter is a new line — what every chat does.
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+
+async function loadChat() {
+  try {
+    const out = await api('/api/chat');
+    CHAT.messages = out.messages || [];
+  } catch (e) { CHAT.messages = []; }
+  drawChat();
+}
+
 // ── boot ──────────────────────────────────────────────────────────
 (async function boot() {
   try {
@@ -3590,7 +3804,7 @@ function drawReady(done) {
     const shut = projectsChoice();
     if (shut !== null) setProjectsShut(shut === '1', false);
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
-    await Promise.all([loadBrand(), loadModels()]);
+    await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat()]);
     applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.

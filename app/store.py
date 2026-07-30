@@ -102,6 +102,22 @@ CREATE TABLE IF NOT EXISTS media (
 );
 
 CREATE INDEX IF NOT EXISTS media_job_idx ON media (job_id);
+
+-- A screenshot of one of your own channels. `summary` is what the model saw in it —
+-- the handle, the niche, who watches, how the posts are written — worked out
+-- once, when the picture was uploaded, and kept. Every later conversation about
+-- ideas reads that text instead of the picture, so looking at a channel is paid
+-- for once rather than on every question.
+CREATE TABLE IF NOT EXISTS profiles (
+    id         TEXT PRIMARY KEY,
+    platform   TEXT NOT NULL,
+    handle     TEXT NOT NULL DEFAULT '',
+    summary    TEXT NOT NULL DEFAULT '',
+    mime       TEXT NOT NULL DEFAULT 'image/png',
+    ext        TEXT NOT NULL DEFAULT '.png',
+    image      {blob} NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -182,7 +198,7 @@ def init() -> None:
 
 
 # Everything that may already be sitting in a local SQLite file.
-_ADOPTABLE = ("heroes", "music", "assets", "settings", "jobs", "media")
+_ADOPTABLE = ("heroes", "music", "assets", "settings", "jobs", "media", "profiles")
 
 
 def _adopt_local_rows() -> None:
@@ -427,6 +443,65 @@ def get_asset(asset_id: str) -> tuple[bytes, str, str] | None:
 def delete_asset(asset_id: str) -> bool:
     with _conn() as conn:
         return conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,)).rowcount > 0
+
+
+# --- channel profiles --------------------------------------------------------
+
+_PROFILE_COLS = "id, platform, handle, summary, mime, ext, created_at"
+
+
+def add_profile(platform: str, handle: str, summary: str, data: bytes,
+                mime: str, ext: str) -> dict[str, Any]:
+    profile_id = new_id("prf")
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO profiles (id, platform, handle, summary, mime, ext, image, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (profile_id, platform, handle, summary, mime, ext, data, _now()),
+        )
+    return {"id": profile_id, "platform": platform, "handle": handle,
+            "summary": summary, "mime": mime, "ext": ext}
+
+
+def list_profiles(platform: str = "") -> list[dict[str, Any]]:
+    with _conn() as conn:
+        if platform:
+            rows = conn.execute(
+                f"SELECT {_PROFILE_COLS} FROM profiles WHERE platform = ? "
+                "ORDER BY created_at DESC", (platform,)).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT {_PROFILE_COLS} FROM profiles ORDER BY created_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_profile_image(profile_id: str) -> tuple[bytes, str, str] | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT image, mime, ext FROM profiles WHERE id = ?", (profile_id,)).fetchone()
+    return (bytes(row["image"]), row["mime"], row["ext"]) if row else None
+
+
+def update_profile(profile_id: str, *, handle: str | None = None,
+                   summary: str | None = None) -> bool:
+    sets, values = [], []
+    if handle is not None:
+        sets.append("handle = ?")
+        values.append(handle)
+    if summary is not None:
+        sets.append("summary = ?")
+        values.append(summary)
+    if not sets:
+        return False
+    values.append(profile_id)
+    with _conn() as conn:
+        return conn.execute(
+            f"UPDATE profiles SET {', '.join(sets)} WHERE id = ?", values).rowcount > 0
+
+
+def delete_profile(profile_id: str) -> bool:
+    with _conn() as conn:
+        return conn.execute("DELETE FROM profiles WHERE id = ?", (profile_id,)).rowcount > 0
 
 
 # --- jobs --------------------------------------------------------------------
