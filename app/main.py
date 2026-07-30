@@ -13,14 +13,16 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import config, pgstore, pipeline, store
+from . import config, pgstore, pipeline, skills, store
 from .models import (
     BrandKit,
+    ChatTurn,
     CreateJobRequest,
     HeroPatch,
     JobPatch,
     ModelSettings,
     MusicSwap,
+    ProfilePatch,
     RegenerateRequest,
     RepurposeRequest,
     SceneInsert,
@@ -30,6 +32,7 @@ from .models import (
     TranslateRequest,
 )
 from .providers import catalog, images, storage, tts
+from .skills import llm, strategist
 from .render import kenburns, overlays as ov
 from .render import shots
 from .render import subtitles as subs
@@ -565,6 +568,129 @@ async def create_asset(
     data, mime, ext = await _read_upload(image, IMAGE_TYPES)
     label = name.strip() or Path(image.filename or f"layer{ext}").stem
     return _asset_out(store.add_asset(label, data, mime, ext))
+
+
+# ── your own channels, and the assistant that talks about them ────────────────
+
+CHAT_KEY = "chat.log"
+# Enough for the assistant to hold a thread without the row growing without
+# bound. A conversation older than this has been superseded by the video it led to.
+CHAT_KEEP = 60
+
+
+def _profile_out(profile: dict[str, Any]) -> dict[str, Any]:
+    return {"id": profile["id"], "platform": profile.get("platform", ""),
+            "handle": profile.get("handle", ""), "summary": profile.get("summary", ""),
+            "url": f"/api/profiles/{profile['id']}/image"}
+
+
+@app.get("/api/profiles")
+async def list_profiles(platform: str = "") -> list[dict[str, Any]]:
+    return [_profile_out(p) for p in store.list_profiles(platform.strip().lower())]
+
+
+@app.post("/api/profiles", status_code=201)
+async def create_profile(
+    image: UploadFile = File(...),
+    platform: str = Form(""),
+    handle: str = Form(""),
+) -> dict[str, Any]:
+    """Keep a screenshot of one of your channels, and what can be read off it.
+
+    Read once, here, rather than on every question about it: the reading is a
+    vision call and the answer does not change between one conversation and the
+    next. A reading that fails is not a failure — the screenshot is kept anyway
+    and the person can say what it is themselves.
+    """
+    data, mime, ext = await _read_upload(image, IMAGE_TYPES)
+    where = platform.strip().lower()
+    if where and where not in strategist.PLATFORMS:
+        where = "other"
+    seen = await strategist.read_profile(data, mime, where)
+    return _profile_out(store.add_profile(
+        where or seen.get("platform") or "other",
+        handle.strip() or seen.get("handle") or "",
+        seen.get("summary") or "", data, mime, ext))
+
+
+@app.get("/api/profiles/{profile_id}/image")
+async def profile_image(profile_id: str) -> Response:
+    found = store.get_profile_image(profile_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    data, mime, _ext = found
+    return Response(content=data, media_type=mime,
+                    headers={"Cache-Control": "public, max-age=31536000"})
+
+
+@app.patch("/api/profiles/{profile_id}")
+async def edit_profile(profile_id: str, body: ProfilePatch) -> dict[str, bool]:
+    if not store.update_profile(profile_id, handle=body.handle, summary=body.summary):
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    return {"updated": True}
+
+
+@app.delete("/api/profiles/{profile_id}")
+async def remove_profile(profile_id: str) -> dict[str, bool]:
+    if not store.delete_profile(profile_id):
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    return {"deleted": True}
+
+
+@app.get("/api/chat")
+async def chat_history() -> dict[str, Any]:
+    return {"messages": store.get_setting(CHAT_KEY) or []}
+
+
+@app.delete("/api/chat")
+async def clear_chat() -> dict[str, bool]:
+    store.set_setting(CHAT_KEY, [])
+    return {"cleared": True}
+
+
+@app.post("/api/chat")
+async def chat(body: ChatTurn) -> dict[str, Any]:
+    """One turn. May end in a video being started, which is the point of it.
+
+    The assistant is only allowed to start a render once it has everything it
+    needs — that rule lives in the skill, which turns an incomplete request back
+    into a question. So this endpoint either says something, or says something
+    *and* has a job id: it never starts a job it had to guess at.
+    """
+    said = body.message.strip()
+    if not said:
+        raise HTTPException(status_code=400, detail="Xabar bo'sh.")
+    if not config.llm_ready():
+        raise HTTPException(
+            status_code=400,
+            detail="Suhbat uchun AI kaliti kerak — ANTHROPIC_API_KEY yoki GEMINI_API_KEY qo'ying.")
+
+    history = store.get_setting(CHAT_KEY) or []
+    try:
+        answer = await skills.chat(
+            message=said, history=history,
+            profiles=store.list_profiles(), heroes=store.list_heroes(),
+            languages=list(config.LANGUAGES),
+        )
+    except llm.LLMError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    job_id = None
+    if answer["create"]:
+        # Straight down the ordinary create path — same validation, same queue,
+        # same draft-then-review flow as the form. A video the assistant started
+        # is not a different kind of video.
+        payload = {k: v for k, v in answer["create"].items() if v is not None}
+        payload.setdefault("auto_render", False)
+        request = CreateJobRequest(**payload)
+        made = await create_job(request)
+        job_id = made["id"]
+
+    turn = [{"role": "user", "text": said},
+            {"role": "bot", "text": answer["reply"], "ideas": answer["ideas"],
+             "asks": answer["asks"], "job_id": job_id}]
+    store.set_setting(CHAT_KEY, (history + turn)[-CHAT_KEEP:])
+    return {**answer, "job_id": job_id}
 
 
 @app.post("/api/actors", status_code=201)

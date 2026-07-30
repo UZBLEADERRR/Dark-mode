@@ -26,6 +26,26 @@ yaratasiz — butun video qaytadan hisoblanmaydi. Keyin **Render** bosasiz.
 Ko'rib chiqish kerak bo'lmasa, formada "Render'dan oldin ko'rib chiqaman"
 katagini olib tashlang — u holda hammasi bir yo'la tugaydi.
 
+## Suhbat
+
+Forma to'ldirishning o'rniga aytib ham bo'ladi. **Suhbat** bo'limida:
+
+1. **Kanalingiz skrinshotini yuklaysiz** — Instagram, YouTube yoki TikTok. AI
+   uni bir marta o'qiydi: nima haqida kanal, kim ko'radi, qanday yozilgan. O'qigani
+   saqlanadi, ya'ni keyingi har savolda rasm qayta yuborilmaydi.
+2. **G'oya so'raysiz** — «YouTube Shorts uchun g'oyalar ber». Javob kartalar bilan
+   keladi: sarlavha, ilk jumla, nega shu kanalda ishlaydi, va necha soniya.
+3. **Yoqqanini bosasiz** — AI qolgan narsalarni so'raydi (uzunlik, shakl, qaysi
+   personajlar, harakatlanadimi), tugmalar ko'rinishida. Hammasi ma'lum bo'lgach
+   videoni o'zi boshlaydi.
+
+Muhim qoida: **hammasini bilmaguncha video boshlanmaydi.** Yarim to'ldirilgan
+so'rov savolga aylanadi, ishga emas — chunki noto'g'ri taxmin qilingan video ham
+pul turadi.
+
+Suhbat va kanallar bazada saqlanadi, ya'ni telefonda boshlab kompyuterda davom
+ettirasiz.
+
 ## AI skills
 
 | Skill | Vazifasi |
@@ -36,6 +56,7 @@ katagini olib tashlang — u holda hammasi bir yo'la tugaydi.
 | `choreographer` | Multfilmni sahnalashtiradi: kim ekranda, qayerda, qanday harakat qiladi |
 | `subtitler` | Subtitr qatorlarini qayerda bo'lishni hal qiladi |
 | `publisher` | YouTube sarlavha, tavsif, teglar, chapterlar, thumbnail prompt |
+| `strategist` | Kanallaringizni o'qiydi, g'oya beradi va videoni o'zi boshlaydi |
 
 ## Provayderlar
 
@@ -48,6 +69,9 @@ Hammasi adapter — `.env` orqali almashtirasiz, kod o'zgarmaydi.
 | Ovoz | `gemini`, `elevenlabs`, `openai`, yoki **o'z audiongizni yuklash** |
 | Subtitr vaqti | ElevenLabs timestamps → Whisper → proporsional taxmin |
 | Saqlash | Lokal disk (default) yoki Supabase Storage |
+
+Suhbat va skrinshot o'qish skript provayderining o'zidan ishlaydi — Gemini ham,
+Claude ham rasmni ko'radi, alohida kalit kerak emas.
 
 Qaysi kalit bor-yo'qligi UI tepasidagi yorliqlarda ko'rinadi; kalitsiz provayder
 tanlanmaydi va job yaratilganda aniq xabar beriladi.
@@ -265,6 +289,7 @@ yozib turadi.
 | `assets` | Stikerlar, logotip, kesib olingan aktyorlar, yozib olingan ovozlar |
 | `settings` | Brend to'plami, tanlangan modellar va ovozlar |
 | `jobs` | Loyihalar: ssenariy, sahnalar, ovoz uzunliklari, tayyor video havolasi |
+| `profiles` | Kanal skrinshotlari va AI ulardan o'qib olgani |
 
 Storage bucket'ida (`videos`) esa har bir loyihaning sahna rasmlari, ovoz
 bo'laklari va tayyor MP4 si `<job_id>/...` ko'rinishida turadi.

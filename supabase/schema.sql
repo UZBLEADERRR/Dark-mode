@@ -82,6 +82,21 @@ CREATE TABLE IF NOT EXISTS media (
 
 CREATE INDEX IF NOT EXISTS media_job_idx ON media (job_id);
 
+-- O'z kanallaringiz: Instagram/YouTube/TikTok profilingiz skrinshoti. `summary`
+-- — AI skrinshotdan nimani o'qib olgani. U bir marta, yuklaganda o'qiladi va shu
+-- yerda qoladi; keyingi har bir suhbat rasm emas, shu matnni ko'radi — ya'ni
+-- kanalga qarash bir marta to'lanadi, har savolda emas.
+CREATE TABLE IF NOT EXISTS profiles (
+    id         TEXT PRIMARY KEY,
+    platform   TEXT NOT NULL,
+    handle     TEXT NOT NULL DEFAULT '',
+    summary    TEXT NOT NULL DEFAULT '',
+    mime       TEXT NOT NULL DEFAULT 'image/png',
+    ext        TEXT NOT NULL DEFAULT '.png',
+    image      BYTEA NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 -- Bu jadvallarga faqat serverning o'zi (service key bilan) kiradi, brauzerdan
 -- emas. RLS yoqilmagan — anon key bu jadvallarni umuman ko'rmaydi.
 

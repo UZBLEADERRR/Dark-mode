@@ -16,6 +16,7 @@
   <!-- The four places you can be. Sections, not tools — the tools are in the
        dock at the bottom, where a thumb can reach them. -->
   <nav class="topnav" id="topnav">
+    <button data-go="chat">Suhbat</button>
     <button data-go="create" aria-pressed="true">Yaratish</button>
     <button data-go="edit">Tahrirlash<i class="badge hidden" id="jobs-badge"></i></button>
     <button data-go="ready">Tayyor<i class="badge hidden" id="ready-badge"></i></button>
@@ -28,6 +29,43 @@
 </header>
 
 <main>
+
+  <!-- ══ Suhbat ═════════════════════════════════════════════════════ -->
+  <!-- Show it your channels once; after that ask it for ideas and tap one, and
+       it asks what it still needs before starting the video itself. -->
+  <section class="view" id="view-chat">
+    <div class="chat-wrap">
+      <div class="chan" id="chan-strip">
+        <div class="chan-head">
+          <span>Mening kanallarim</span>
+          <em id="chan-count"></em>
+        </div>
+        <div class="chan-row" id="chan-row"></div>
+        <div class="chan-add">
+          <label class="file sm"><input type="file" id="profile-file" accept="image/*" hidden />
+            <span>Skrinshot yuklash</span></label>
+          <div class="seg tight" id="profile-platform">
+            <button type="button" data-plat="youtube" aria-pressed="true">YouTube</button>
+            <button type="button" data-plat="instagram">Instagram</button>
+            <button type="button" data-plat="tiktok">TikTok</button>
+          </div>
+        </div>
+        <p class="note" id="chan-note">Profilingiz skrinshotini yuklang — AI kanalingizni
+          bir marta o‘qib oladi va keyin har so‘raganda shunga qarab g‘oya beradi.</p>
+      </div>
+
+      <div class="chat" id="chat-log"></div>
+
+      <div class="chat-bar">
+        <textarea id="chat-input" rows="1" maxlength="4000"
+          placeholder="YouTube uchun Shorts g‘oyalari ber…"></textarea>
+        <button class="go slim" id="chat-send" aria-label="Yuborish">
+          <svg viewBox="0 0 24 24"><path d="M4 12l16-8-6 8 6 8z"/></svg>
+        </button>
+      </div>
+      <p class="msg err hidden" id="chat-error"></p>
+    </div>
+  </section>
 
   <!-- ══ Yaratish ═══════════════════════════════════════════════════ -->
   <section class="view on" id="view-create">

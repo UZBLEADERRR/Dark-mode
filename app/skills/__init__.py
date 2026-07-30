@@ -7,6 +7,7 @@
     choreographer -> stages a cartoon: who is on screen, where, and how they move
     publisher  -> title, description, tags, thumbnail prompt, music mood
     translator -> re-voices a script in another language, to the same length
+    strategist -> reads your own channels and talks you from an idea to a video
 """
 
 from .director import (
@@ -17,6 +18,7 @@ from .director import (
 from .choreographer import stage_scenes
 from .imagesmith import build_image_prompts
 from .publisher import build_publish_pack
+from .strategist import chat, read_profile
 from .subtitler import build_captions
 from .translator import translate_lines
 
@@ -29,4 +31,6 @@ __all__ = [
     "build_captions",
     "build_publish_pack",
     "translate_lines",
+    "chat",
+    "read_profile",
 ]
