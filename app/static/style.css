@@ -555,6 +555,9 @@ input[type="range"]::-moz-range-thumb {
 .stall .btn { flex: none; }
 .stall.long .btn { color: #ffd79a; border-color: rgba(255, 189, 82, .35); }
 .stall.long .btn:hover { background: rgba(255, 189, 82, .14); border-color: rgba(255, 189, 82, .6); }
+/* Waiting a turn is normal, so it is stated calmly — not in the warning colour
+   the stall notice uses. */
+.stall.queue { background: rgba(120, 160, 255, .1); color: #b8ccff; }
 
 .fold { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 .fold summary {
@@ -687,6 +690,18 @@ input[type="range"]::-moz-range-thumb {
 
 .tool.play { background: var(--accent-soft); border-color: rgba(255, 92, 71, .35); }
 .tool.play svg { fill: currentColor; stroke: none; }
+
+/* Playing the whole video is the review gesture, so it reads as the primary
+   action once it is running. The bar in its icon is a stroke, not a fill. */
+.tool.playall svg path:first-child { fill: currentColor; stroke: none; }
+.tool.playall.on { background: var(--accent); color: #fff; border-color: transparent; }
+.tool.playall.on svg { fill: currentColor; stroke: currentColor; }
+
+/* While a render is running over these rows the studio is still fully usable —
+   watch it back, look at any scene — but a save has to wait for the render to
+   let go of them, and the bar says so rather than the edit looking lost. */
+.editor.locked .editor-bar { background: rgba(120, 160, 255, .07); }
+.editor.locked .saver { color: #b8ccff; }
 
 /* A thin bar under the frame: how far into the scene the preview has played. */
 .scrub {

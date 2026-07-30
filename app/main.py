@@ -148,10 +148,40 @@ async def _read_upload(upload: UploadFile, allowed: dict[str, str]) -> tuple[byt
     return b"".join(chunks), allowed[ext], ext
 
 
-def _launch(coro_factory, job_id: str | None = None) -> None:
+# Jobs holding or waiting for a slot, oldest first. The semaphore already made
+# work queue instead of thrashing the container, but it queued invisibly: a
+# render that was second in line said "rendering" and then did nothing for ten
+# minutes, which is indistinguishable from a render that has hung.
+_queue: list[str] = []
+
+
+def queue_place(job_id: str) -> int:
+    """Where this job is in the waiting line. 0 = being worked on, 1 = next."""
+    try:
+        place = _queue.index(job_id)
+    except ValueError:
+        return 0
+    return max(0, place - config.MAX_CONCURRENT_JOBS + 1)
+
+
+def _launch(coro_factory, job_id: str | None = None, *, on_start=None) -> None:
+    # Enrolled here rather than inside the task: the task body does not run until
+    # the loop comes back round, and the caller needs to be able to tell the user
+    # their place in the queue in the same response.
+    if job_id:
+        _queue.append(job_id)
+
     async def runner() -> None:
-        async with _job_slots:
-            await coro_factory()
+        try:
+            async with _job_slots:
+                # Called once the slot is actually held, which is the moment the
+                # work starts rather than the moment it was asked for.
+                if on_start:
+                    on_start()
+                await coro_factory()
+        finally:
+            if job_id and job_id in _queue:
+                _queue.remove(job_id)
 
     task = asyncio.create_task(runner())
     _running.add(task)
@@ -175,6 +205,10 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "status": job["status"],
         "step": job.get("step", ""),
         "progress": job.get("progress", 0),
+        # 0 while it is being worked on, 1 when it is next. A project waiting its
+        # turn behind another render is doing nothing, and saying so is the
+        # difference between patience and thinking the app has frozen.
+        "queue_place": queue_place(job["id"]),
         "kind": request.get("kind", "video"),
         "topic": request.get("topic", ""),
         "video_format": request.get("video_format", "16:9"),
@@ -1109,11 +1143,29 @@ async def upload_scene_voice(
 
 @app.post("/api/jobs/{job_id}/render", status_code=202)
 async def render_job(job_id: str) -> dict[str, Any]:
-    """Finish a reviewed draft, or re-render a finished video after edits."""
+    """Finish a reviewed draft, or re-render a finished video after edits.
+
+    A render that has to wait its turn says so. It used to claim to be rendering
+    from the moment the button was pressed, so a second project queued behind the
+    first looked like one that had hung — and the honest answer, "you are next",
+    was never on screen.
+    """
     _editable_job(job_id)
-    store.update_job(job_id, status="rendering", step="render", progress=74)
-    _launch(lambda: pipeline.run_render(job_id), job_id)
-    return {"id": job_id, "status": "rendering"}
+    busy = len(_queue) >= config.MAX_CONCURRENT_JOBS
+    if busy:
+        store.update_job(job_id, status="queued", step="navbat", progress=74,
+                         log=f"Navbatda {len(_queue) - config.MAX_CONCURRENT_JOBS + 1}-chi "
+                             "— o'z navbatida o'zi boshlanadi")
+    else:
+        store.update_job(job_id, status="rendering", step="render", progress=74)
+    _launch(
+        lambda: pipeline.run_render(job_id), job_id,
+        on_start=(lambda: store.update_job(job_id, status="rendering", step="render",
+                                           log="Navbat keldi — render boshlandi"))
+        if busy else None,
+    )
+    return {"id": job_id, "status": "queued" if busy else "rendering",
+            "queue_place": queue_place(job_id)}
 
 
 @app.post("/api/jobs/{job_id}/resume", status_code=202)
