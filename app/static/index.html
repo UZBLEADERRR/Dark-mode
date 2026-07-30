@@ -366,7 +366,11 @@
           limitga urilganda ilova kutmasdan keyingisiga o'tadi.</p>
         <form id="key-form" class="mini">
           <select name="provider" id="key-provider"></select>
-          <input name="secret" placeholder="Kalit (API key)" required autocomplete="off" />
+          <!-- A key is not prose. Autocapitalise turns "AQ.ab8…" into "AQ.Ab8…"
+               because a dot after two capitals reads as the end of a sentence,
+               and autocorrect rewrites the rest — so every helper is off. -->
+          <input name="secret" placeholder="Kalit (API key)" required autocomplete="off"
+                 autocapitalize="off" autocorrect="off" spellcheck="false" />
           <input name="label" placeholder="Nomi — masalan 'birinchi akkaunt'" />
           <button>Qo'shish</button>
         </form>

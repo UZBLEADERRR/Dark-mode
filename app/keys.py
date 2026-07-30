@@ -55,6 +55,28 @@ _turn: dict[str, int] = {}
 _lock = threading.Lock()
 
 
+def clean(secret: str) -> str:
+    """A pasted key, as the provider needs to receive it.
+
+    Copying a key on a phone is lossy in ways that have nothing to do with the
+    key: the dashboard wraps it, so the paste carries newlines inside it; a
+    long-press copy takes the surrounding quotes; a keyboard adds a trailing
+    space. All of that is removed here, once, so no adapter has to think about it.
+
+    What is *not* done here is judging the key. There is no minimum length and no
+    expected prefix — Google issues both `AIza…` and `AQ.…`, of different lengths,
+    and a rule about shape could only ever reject a real key.
+    """
+    text = (secret or "").strip()
+    # Opening and closing are not always the same character — a phone turns a
+    # pair of straight quotes into “ … ”, so this checks the pair, not equality.
+    quotes = {"\"": "\"", "'": "'", "`": "`", "‘": "’", "“": "”", "«": "»"}
+    while len(text) > 1 and quotes.get(text[0]) == text[-1]:
+        text = text[1:-1].strip()
+    # Every kind of space, not just the ends: a wrapped paste has them inside.
+    return "".join(text.split())
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -245,7 +267,7 @@ async def probe(provider: str, secret: str) -> tuple[bool, str, float]:
     """
     import httpx
 
-    secret = (secret or "").strip()
+    secret = clean(secret)
     if not secret:
         return False, "Kalit bo'sh", 0.0
     try:

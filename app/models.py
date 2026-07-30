@@ -386,13 +386,18 @@ KeyProvider = Literal["gemini", "anthropic", "openai", "elevenlabs", "fal"]
 class ApiKeyIn(BaseModel):
     """One key to store. Several per provider is the point, so nothing is unique.
 
-    The secret is generous in length because providers disagree about it wildly,
-    and stripped because a key pasted from a dashboard almost always arrives with
-    a newline attached — which the provider then rejects as a wrong key.
+    There is no minimum length and no expected shape. Google alone issues both
+    `AIza…` and `AQ.…` keys, of different lengths, and every other provider does
+    something else again — so any rule this app invented about what a key looks
+    like could only ever start rejecting real keys. The provider is the authority
+    on whether a key is valid, and it says so when the key is used or tested.
+
+    Whitespace is stripped throughout rather than just at the ends: a key copied
+    from a dashboard on a phone arrives wrapped, with newlines inside it.
     """
 
     provider: KeyProvider
-    secret: str = Field(min_length=8, max_length=500)
+    secret: str = Field(min_length=1, max_length=2000)
     label: str = Field(default="", max_length=80)
 
 
@@ -401,7 +406,7 @@ class ApiKeyPatch(BaseModel):
     enabled: bool | None = None
     # Replacing the secret keeps the row's history, which is what you want when a
     # key is rotated rather than swapped for a different account's.
-    secret: str | None = Field(default=None, min_length=8, max_length=500)
+    secret: str | None = Field(default=None, min_length=1, max_length=2000)
     # Forget a cooldown on request — a limit the provider has since lifted should
     # not keep a key benched because we wrote down a pessimistic guess.
     clear_cooldown: bool = False

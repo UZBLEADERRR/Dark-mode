@@ -199,6 +199,12 @@ Deploy qilish, env o'zgartirish shart emas: qo'shdingiz — shu zahoti ishlatila
 - Kalitni **o'chirib-yoqib** qo'yish mumkin; o'chirilgani navbatda qatnashmaydi.
 - Kalit **hech qachon qaytarib ko'rsatilmaydi** — qo'shgandan keyin faqat nomi,
   holati va statistikasi ko'rinadi.
+- Kalitning **shakli tekshirilmaydi**: Google ham `AIza…`, ham `AQ.…` ko'rinishidagi
+  kalitlar beradi, uzunliklari ham har xil — shuning uchun ilova hech qanday
+  "shunday bo'lishi kerak" qoidasi qo'ymaydi. Kalit to'g'ri yoki noto'g'riligini
+  provayderning o'zi aytadi ("Tekshirish" tugmasi). Telefondan nusxa olganda
+  qo'shilib ketadigan qator uzilishi, qo'shtirnoq va bo'shliqlar avtomatik
+  tozalanadi.
 - Env o'zgaruvchilari (`GEMINI_API_KEY` va h.k.) ishlashda davom etadi: ilovada
   kalit bo'lmasa, o'shalar ishlatiladi.
 

@@ -1140,7 +1140,9 @@ async def get_keys() -> dict[str, Any]:
 
 @app.post("/api/keys", status_code=201)
 async def add_key(body: ApiKeyIn) -> dict[str, Any]:
-    secret = body.secret.strip()
+    # Cleaned, not judged. Whether the key works is the provider's answer, given
+    # when it is tested or used — not something to guess from its shape here.
+    secret = keys.clean(body.secret)
     if not secret:
         raise HTTPException(status_code=400, detail="Kalit bo'sh.")
     existing = {r.get("secret") for r in keys.stored(body.provider)}
@@ -1159,8 +1161,8 @@ async def patch_key(key_id: str, body: ApiKeyPatch) -> dict[str, Any]:
         fields["label"] = body.label.strip()
     if body.enabled is not None:
         fields["enabled"] = body.enabled
-    if body.secret is not None and body.secret.strip():
-        fields["secret"] = body.secret.strip()
+    if body.secret is not None and keys.clean(body.secret):
+        fields["secret"] = keys.clean(body.secret)
         # A new secret has its own allowance, so the old one's cooldown and
         # remembered error do not apply to it.
         fields["cooldown_until"] = ""
