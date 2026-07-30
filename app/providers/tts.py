@@ -16,7 +16,7 @@ from typing import Callable
 
 import httpx
 
-from .. import config
+from .. import config, keys
 from . import ratelimit
 
 
@@ -30,11 +30,21 @@ class RateLimited(TTSError):
     Kept apart from every other failure because it is not one: the request was
     understood and will succeed on its own once the window rolls over. Waiting
     is the correct response, so this never counts against the stall deadline.
+
+    Carries the key it was refused for, because with a second key waiting is the
+    wrong response: the allowance belongs to the key, not to the provider.
+
+    `benched` says whether that key was actually put aside. A 503 means the
+    provider is overloaded, which the next key cannot fix — and rushing through
+    ten keys without pausing would only ask an overloaded service ten times.
     """
 
-    def __init__(self, message: str, retry_after: float = 20.0) -> None:
+    def __init__(self, message: str, retry_after: float = 20.0, key: str = "",
+                 benched: float = 0.0) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+        self.key = key
+        self.benched = benched
 
 
 # One ceiling per provider, shared across the whole process. Shared because
@@ -44,14 +54,24 @@ class RateLimited(TTSError):
 _limiters: dict[str, ratelimit.RateLimiter] = {}
 
 
+def allowance(provider: str) -> int:
+    """Calls a minute we may make — the per-key limit times the keys we hold.
+
+    A limit is sold with a key, so two keys are two allowances. Pacing to one
+    key's worth while holding ten would leave nine idle, which is exactly the
+    wait this feature exists to remove.
+    """
+    return config.tts_rate_limit(provider) * max(1, keys.count(provider))
+
+
 def limiter(provider: str | None = None) -> ratelimit.RateLimiter:
     """This provider's limiter, resynced to config so a settings change lands."""
     provider = (provider or config.TTS_PROVIDER).lower()
     gate = _limiters.get(provider)
     if gate is None:
-        gate = _limiters[provider] = ratelimit.RateLimiter(config.tts_rate_limit(provider))
+        gate = _limiters[provider] = ratelimit.RateLimiter(allowance(provider))
     else:
-        gate.reconfigure(config.tts_rate_limit(provider))
+        gate.reconfigure(allowance(provider))
     return gate
 
 
@@ -79,18 +99,31 @@ def _wav_from_pcm(pcm: bytes, sample_rate: int = 24000, channels: int = 1) -> by
     return header + pcm
 
 
-def _raise_for_status(resp: httpx.Response, label: str) -> None:
-    """Turn a failed response into the right kind of error.
+def _raise_for_status(resp: httpx.Response, label: str, *,
+                      provider: str = "", secret: str = "") -> None:
+    """Tell the keyring how the key did, then turn a failure into the right error.
 
     A 429 — and a 503, which providers use for the same "come back shortly" —
     becomes `RateLimited` so the caller waits instead of burning an attempt.
+
+    The keyring is told before the exception unwinds, on purpose: the retry above
+    us picks a key by asking which ones are free, so a cooldown recorded after
+    the raise would arrive too late and the retry would land on the key that has
+    just refused.
     """
     if resp.status_code < 400:
+        if provider and secret:
+            keys.bless(provider, secret)
         return
+    benched = 0.0
+    if provider and secret:
+        benched = keys.penalise(provider, secret, status=resp.status_code,
+                                body=resp.text[:400])
     if resp.status_code in (429, 503):
         raise RateLimited(
             f"{label} is rate limiting us ({resp.status_code}).",
             ratelimit.retry_after(resp.headers, 20.0),
+            key=secret, benched=benched,
         )
     raise TTSError(f"{label} error {resp.status_code}: {resp.text[:300]}")
 
@@ -130,14 +163,16 @@ def _words_from_chars(
 async def _elevenlabs(
     client: httpx.AsyncClient, text: str, out_path: Path, voice_id: str | None
 ) -> tuple[Path, list[dict]]:
-    if not config.ELEVENLABS_API_KEY:
-        raise TTSError("ELEVENLABS_API_KEY is not set.")
+    secret = config.key("elevenlabs")
+    if not secret:
+        raise TTSError("ElevenLabs kaliti yo'q — kutubxonadan qo'shing yoki "
+                       "ELEVENLABS_API_KEY ni sozlang.")
 
     voice = voice_id or config.default_voice("elevenlabs")
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice}/with-timestamps"
     resp = await client.post(
         url,
-        headers={"xi-api-key": config.ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+        headers={"xi-api-key": secret, "Content-Type": "application/json"},
         json={
             "text": text,
             "model_id": config.model("elevenlabs_tts"),
@@ -145,7 +180,7 @@ async def _elevenlabs(
             "voice_settings": {"stability": 0.45, "similarity_boost": 0.8, "style": 0.15},
         },
     )
-    _raise_for_status(resp, "ElevenLabs")
+    _raise_for_status(resp, "ElevenLabs", provider="elevenlabs", secret=secret)
 
     payload = resp.json()
     audio_b64 = payload.get("audio_base64")
@@ -169,13 +204,15 @@ async def _elevenlabs(
 async def _openai(
     client: httpx.AsyncClient, text: str, out_path: Path, voice_id: str | None
 ) -> tuple[Path, list[dict]]:
-    if not config.OPENAI_API_KEY:
-        raise TTSError("OPENAI_API_KEY is not set.")
+    secret = config.key("openai")
+    if not secret:
+        raise TTSError("OpenAI kaliti yo'q — kutubxonadan qo'shing yoki "
+                       "OPENAI_API_KEY ni sozlang.")
 
     resp = await client.post(
         f"{config.OPENAI_BASE}/audio/speech",
         headers={
-            "Authorization": f"Bearer {config.OPENAI_API_KEY}",
+            "Authorization": f"Bearer {secret}",
             "Content-Type": "application/json",
         },
         json={
@@ -185,7 +222,7 @@ async def _openai(
             "response_format": "mp3",
         },
     )
-    _raise_for_status(resp, "OpenAI TTS")
+    _raise_for_status(resp, "OpenAI TTS", provider="openai", secret=secret)
 
     out_path = out_path.with_suffix(".mp3")
     out_path.write_bytes(resp.content)
@@ -197,8 +234,10 @@ async def _openai(
 async def _gemini(
     client: httpx.AsyncClient, text: str, out_path: Path, voice_id: str | None
 ) -> tuple[Path, list[dict]]:
-    if not config.GEMINI_API_KEY:
-        raise TTSError("GEMINI_API_KEY is not set.")
+    secret = config.key("gemini")
+    if not secret:
+        raise TTSError("Gemini kaliti yo'q — kutubxonadan qo'shing yoki "
+                       "GEMINI_API_KEY ni sozlang.")
 
     body = {
         "contents": [{"role": "user", "parts": [{"text": text}]}],
@@ -213,7 +252,7 @@ async def _gemini(
             },
         },
     }
-    headers = {"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"}
+    headers = {"x-goog-api-key": secret, "Content-Type": "application/json"}
 
     async def call(model_name: str) -> httpx.Response:
         return await client.post(
@@ -230,7 +269,7 @@ async def _gemini(
     if resp.status_code in (400, 403, 404) and fallback \
             and fallback != config.model("gemini_tts"):
         resp = await call(fallback)
-    _raise_for_status(resp, "Gemini TTS")
+    _raise_for_status(resp, "Gemini TTS", provider="gemini", secret=secret)
 
     for candidate in resp.json().get("candidates", []):
         for part in candidate.get("content", {}).get("parts", []):
@@ -308,15 +347,32 @@ async def synthesize(
         try:
             return await asyncio.wait_for(run(), timeout=config.TTS_DEADLINE)
         except RateLimited as exc:
-            # Every worker backs off, not just this one — the allowance is shared,
-            # so letting the others carry on would just collect more refusals.
-            gate.penalise(exc.retry_after)
+            # Only when this key was actually set aside. A provider that is
+            # overloaded refuses every key, and hurrying through all ten would
+            # ask an overloaded service ten times instead of waiting once.
+            switched = bool(exc.benched) and keys.can_switch(provider, exc.key)
+            if not switched:
+                # Every worker backs off, not just this one — with one key the
+                # allowance is shared, so letting the others carry on would just
+                # collect more refusals. With a spare key it is the opposite:
+                # holding everybody back would waste the key that is still free.
+                gate.penalise(exc.retry_after)
+            # Charged either way. The refused key is already in cooldown, so a
+            # switch costs no real time — but the count is what stops a provider
+            # that refuses every key from looping here forever.
             queued += exc.retry_after
             if queued > config.TTS_RATE_PATIENCE:
                 raise TTSError(
                     f"Still rate limited after {queued / 60:.0f} minutes of waiting. "
-                    "Lower TTS_RATE_LIMIT or use a key with a bigger allowance."
+                    "Add another API key, lower TTS_RATE_LIMIT, or use a key with a "
+                    "bigger allowance."
                 ) from exc
+            if switched:
+                # No sleep: another key is free this second, and waiting out a
+                # limit we are no longer subject to is the whole bug.
+                if on_wait:
+                    on_wait(0.0, "rate limited — switching to another key")
+                continue
             if on_wait:
                 on_wait(exc.retry_after, "rate limited by the provider")
             await asyncio.sleep(exc.retry_after)
@@ -398,10 +454,13 @@ async def _elevenlabs_batch(
     client: httpx.AsyncClient, lines: list[str], voice_id: str | None
 ) -> tuple[bytes, list[str], list[float], list[float]] | None:
     """Speak several lines in one request. None when the response cannot be split."""
+    secret = config.key("elevenlabs")
+    if not secret:
+        raise TTSError("ElevenLabs kaliti yo'q.")
     voice = voice_id or config.default_voice("elevenlabs")
     resp = await client.post(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice}/with-timestamps",
-        headers={"xi-api-key": config.ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+        headers={"xi-api-key": secret, "Content-Type": "application/json"},
         json={
             "text": BATCH_SEPARATOR.join(lines),
             "model_id": config.model("elevenlabs_tts"),
@@ -409,7 +468,7 @@ async def _elevenlabs_batch(
             "voice_settings": {"stability": 0.45, "similarity_boost": 0.8, "style": 0.15},
         },
     )
-    _raise_for_status(resp, "ElevenLabs")
+    _raise_for_status(resp, "ElevenLabs", provider="elevenlabs", secret=secret)
 
     payload = resp.json()
     audio_b64 = payload.get("audio_base64")
@@ -431,7 +490,8 @@ async def _elevenlabs_batch(
 def can_batch(provider: str | None = None) -> bool:
     """Only a provider that times every character can be cut back apart."""
     provider = (provider or config.TTS_PROVIDER).lower()
-    return bool(config.TTS_BATCH and provider == "elevenlabs" and config.ELEVENLABS_API_KEY)
+    return bool(config.TTS_BATCH and provider == "elevenlabs"
+                and config.has_key("elevenlabs"))
 
 
 async def synthesize_many(
@@ -491,9 +551,16 @@ async def synthesize_many(
             async with httpx.AsyncClient(timeout=timeout) as client:
                 spoken = await _elevenlabs_batch(client, chunk, voice_id)
         except RateLimited as exc:
-            gate.penalise(exc.retry_after)
-            if on_wait:
-                on_wait(exc.retry_after, "rate limited by the provider")
+            # The group now falls through to one request per line, and each of
+            # those picks a key of its own — so holding the shared gate would
+            # only delay work another key is free to do.
+            if exc.benched and keys.can_switch(provider, exc.key):
+                if on_wait:
+                    on_wait(0.0, "rate limited — switching to another key")
+            else:
+                gate.penalise(exc.retry_after)
+                if on_wait:
+                    on_wait(exc.retry_after, "rate limited by the provider")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - one line at a time still works

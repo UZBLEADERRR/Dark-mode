@@ -109,11 +109,12 @@ async def list_models(provider: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             if provider == "gemini":
-                if not config.GEMINI_API_KEY:
-                    return {"provider": provider, "models": [], "error": "GEMINI_API_KEY yo'q"}
+                secret = config.key("gemini")
+                if not secret:
+                    return {"provider": provider, "models": [], "error": "Gemini kaliti yo'q — kutubxonaga qo'shing yoki GEMINI_API_KEY ni sozlang"}
                 resp = await client.get(
                     f"{config.GEMINI_BASE}/models?pageSize=200",
-                    headers={"x-goog-api-key": config.GEMINI_API_KEY},
+                    headers={"x-goog-api-key": secret},
                 )
                 resp.raise_for_status()
                 out = []
@@ -129,11 +130,12 @@ async def list_models(provider: str) -> dict:
                 return {"provider": provider, "models": out}
 
             if provider == "openai":
-                if not config.OPENAI_API_KEY:
-                    return {"provider": provider, "models": [], "error": "OPENAI_API_KEY yo'q"}
+                secret = config.key("openai")
+                if not secret:
+                    return {"provider": provider, "models": [], "error": "OpenAI kaliti yo'q — kutubxonaga qo'shing yoki OPENAI_API_KEY ni sozlang"}
                 resp = await client.get(
                     f"{config.OPENAI_BASE}/models",
-                    headers={"Authorization": f"Bearer {config.OPENAI_API_KEY}"},
+                    headers={"Authorization": f"Bearer {secret}"},
                 )
                 resp.raise_for_status()
                 return {"provider": provider, "models": [
@@ -142,11 +144,12 @@ async def list_models(provider: str) -> dict:
                 ]}
 
             if provider == "elevenlabs":
-                if not config.ELEVENLABS_API_KEY:
-                    return {"provider": provider, "models": [], "error": "ELEVENLABS_API_KEY yo'q"}
+                secret = config.key("elevenlabs")
+                if not secret:
+                    return {"provider": provider, "models": [], "error": "ElevenLabs kaliti yo'q — kutubxonaga qo'shing yoki ELEVENLABS_API_KEY ni sozlang"}
                 resp = await client.get(
                     "https://api.elevenlabs.io/v1/models",
-                    headers={"xi-api-key": config.ELEVENLABS_API_KEY},
+                    headers={"xi-api-key": secret},
                 )
                 resp.raise_for_status()
                 return {"provider": provider, "models": [
@@ -174,9 +177,10 @@ async def list_voices(provider: str) -> dict:
                 "default": config.default_voice("openai")}
 
     if provider == "elevenlabs":
-        if not config.ELEVENLABS_API_KEY:
+        if not config.has_key("elevenlabs"):
             return {"provider": provider, "voices": [], "default": "",
-                    "error": "ELEVENLABS_API_KEY yo'q"}
+                    "error": "ElevenLabs kaliti yo'q — kutubxonaga qo'shing "
+                             "yoki ELEVENLABS_API_KEY ni sozlang"}
         try:
             entries, source = await _elevenlabs_voices()
             voices = []
@@ -233,7 +237,7 @@ async def _elevenlabs_voices() -> tuple[list[dict], str]:
     fallback for keys or deployments where v2 is not available, because losing
     the whole picker is a far worse outcome than an older shape.
     """
-    headers = {"xi-api-key": config.ELEVENLABS_API_KEY}
+    headers = {"xi-api-key": config.key("elevenlabs")}
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
             found: list[dict] = []

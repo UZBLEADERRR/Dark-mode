@@ -4353,6 +4353,171 @@ async function publishToYouTube(job) {
   }
 }
 
+// ══ API kalitlari ═════════════════════════════════════════════════
+// One key means one per-minute allowance, and a fifty-scene video spends most of
+// its time waiting for that allowance to refill. Several keys per provider is
+// what turns the wait into work, so this section is about supply: how many keys
+// there are, which are ready this second, and which is benched and why.
+
+let KEYS = { providers: [] };
+
+const KEY_NAMES = {
+  gemini: 'Gemini',
+  anthropic: 'Claude (Anthropic)',
+  openai: 'OpenAI',
+  elevenlabs: 'ElevenLabs',
+  fal: 'fal.ai',
+};
+
+async function loadKeys() {
+  try { KEYS = await api('/api/keys'); } catch (e) { KEYS = { providers: [] }; }
+  drawKeys();
+}
+
+/** "2 daqiqa" rather than "132s" — a cooldown is read, not measured. */
+function coolText(seconds) {
+  if (seconds <= 0) return '';
+  if (seconds < 90) return `${seconds} soniya`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} daqiqa`;
+  return `${Math.round(seconds / 3600)} soat`;
+}
+
+function drawKeys() {
+  const box = $('#keys-box');
+  if (!box) return;
+
+  const all = KEYS.providers || [];
+  const stored = all.reduce((n, p) => n + (p.keys_list || []).length, 0);
+  // Only a provider the app is set to call counts as missing. The badge is read
+  // at a glance from the folded library, so it has to mean something.
+  const inUse = new Set(Object.values(KEYS.in_use || {}));
+  const short = all.filter((p) => p.keys === 0 && inUse.has(p.provider)).length;
+  libCount('keys', short ? `${short} ta yetishmaydi` : stored ? `${stored} ta` : 'muhitdan',
+           short > 0);
+
+  const picker = $('#key-provider');
+  if (picker && !picker.options.length) {
+    picker.innerHTML = all
+      .map((p) => `<option value="${p.provider}">${esc(KEY_NAMES[p.provider] || p.provider)}</option>`)
+      .join('');
+  }
+
+  // Which providers this deployment actually calls. A missing ElevenLabs key is
+  // nothing to worry about when the voice comes from Gemini, and colouring it red
+  // anyway would teach you to ignore the colour.
+  const needed = new Set(Object.values(KEYS.in_use || {}));
+
+  box.innerHTML = all.map((prov) => {
+    const rows = prov.keys_list || [];
+    // A key that is cooling is still a key. Saying "3 ta, 2 tayyor" answers the
+    // only question that matters mid-render — is anything free right now?
+    const supply = prov.keys === 0
+      ? (needed.has(prov.provider)
+          ? '<span class="tag failed">kalit yo‘q — kerak</span>'
+          : '<span class="tag">ishlatilmaydi</span>')
+      : `<span class="tag ${prov.ready ? 'done' : 'warn'}">${prov.keys} ta, ${prov.ready} tayyor</span>`;
+    return `
+      <div class="key-prov">
+        <div class="row">
+          <span>${esc(KEY_NAMES[prov.provider] || prov.provider)}</span>
+          ${supply}
+        </div>
+        ${prov.from_env ? `<p class="note">${esc(prov.env_var)} muhitdan olinadi — pastga qo‘shsangiz, o‘shalar ishlatiladi.</p>` : ''}
+        ${rows.length ? rows.map((k) => `
+          <div class="key-row${k.enabled ? '' : ' off'}" data-key="${k.id}">
+            <div class="key-what">
+              <b>${esc(k.label || 'nomsiz')}</b>
+              <span class="key-stat">${k.uses} marta ishlatildi${k.fails ? ` · ${k.fails} xato` : ''}</span>
+              ${k.cooldown_seconds > 0
+                ? `<span class="key-cool">${coolText(k.cooldown_seconds)} dam oladi</span>` : ''}
+              ${k.last_error ? `<span class="key-err">${esc(k.last_error)}</span>` : ''}
+            </div>
+            <div class="key-acts">
+              <button class="chip" data-act="test">Tekshirish</button>
+              <button class="chip" data-act="toggle">${k.enabled ? 'O‘chirish' : 'Yoqish'}</button>
+              ${k.cooldown_seconds > 0 ? '<button class="chip" data-act="wake">Darhol ishlat</button>' : ''}
+              <button class="chip danger" data-act="del">Olib tashlash</button>
+            </div>
+          </div>`).join('') : '<p class="key-none">Hali kalit qo‘shilmagan</p>'}
+      </div>`;
+  }).join('');
+
+  $$('#keys-box .key-row .chip').forEach((btn) => {
+    btn.addEventListener('click', () => keyAction(
+      btn.closest('.key-row').dataset.key, btn.dataset.act, btn));
+  });
+  if (short) {
+    box.insertAdjacentHTML('afterbegin',
+      `<p class="msg warn">${short} ta provayderda kalit yo‘q — shu bosqichlar ishlamaydi.</p>`);
+  }
+}
+
+/** Every key call is JSON, and `api` sends exactly the headers it is given. */
+const keyApi = (path, method, body) => api(path, {
+  method,
+  ...(body ? { headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify(body) } : {}),
+});
+
+async function keyAction(id, act, btn) {
+  const row = (KEYS.providers || [])
+    .flatMap((p) => p.keys_list || []).find((k) => k.id === id);
+  if (!row) return;
+  const was = btn.textContent;
+  btn.disabled = true;
+  try {
+    if (act === 'del') {
+      if (!confirm('Kalit olib tashlanadi. Davom etamizmi?')) { btn.disabled = false; return; }
+      await keyApi(`/api/keys/${id}`, 'DELETE');
+      toast('Olib tashlandi');
+    } else if (act === 'toggle') {
+      await keyApi(`/api/keys/${id}`, 'PATCH', { enabled: !row.enabled });
+      toast(row.enabled ? 'O‘chirildi' : 'Yoqildi');
+    } else if (act === 'wake') {
+      await keyApi(`/api/keys/${id}`, 'PATCH', { clear_cooldown: true });
+      toast('Yana ishlatiladi');
+    } else if (act === 'test') {
+      btn.textContent = 'Tekshirilyapti…';
+      const out = await keyApi(`/api/keys/${id}/test`, 'POST');
+      toast(out.detail || (out.ok ? 'Ishlaydi' : 'Ishlamadi'));
+    }
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = was;
+    await loadKeys();
+    await loadHealth();
+  }
+}
+
+$('#key-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const body = {
+    provider: form.provider.value,
+    secret: form.secret.value.trim(),
+    label: form.label.value.trim(),
+  };
+  if (body.secret.length < 8) { toast('Kalit juda qisqa'); return; }
+  const btn = form.querySelector('button');
+  btn.disabled = true;
+  try {
+    await keyApi('/api/keys', 'POST', body);
+    // Cleared straight away: a key left sitting in a visible field is a key on
+    // screen for anyone standing behind you.
+    form.secret.value = '';
+    form.label.value = '';
+    toast('Kalit qo‘shildi');
+    await loadKeys();
+    await loadHealth();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // ── boot ──────────────────────────────────────────────────────────
 (async function boot() {
   try {
@@ -4364,7 +4529,7 @@ async function publishToYouTube(job) {
     wireFades();
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
     await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat(),
-                       loadYouTube(), loadPlans()]);
+                       loadYouTube(), loadPlans(), loadKeys()]);
     applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.

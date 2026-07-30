@@ -357,44 +357,89 @@ def ensure_dirs() -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
+# --- where a key comes from ---------------------------------------------------
+# The keyring (app/keys.py) installs itself here at import. Config stays free of
+# imports from the rest of the app — it is read by everything, including the
+# keyring — so the direction is inverted rather than the dependency added.
+
+_key_for = None            # (provider) -> secret to use now
+_key_count = None          # (provider) -> how many keys exist at all
+
+
+def set_key_source(pick, count) -> None:
+    global _key_for, _key_count
+    _key_for, _key_count = pick, count
+
+
+_ENV_KEYS = {
+    "gemini": "GEMINI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "fal": "FAL_KEY",
+}
+
+
+def env_key(provider: str) -> str:
+    return globals().get(_ENV_KEYS.get(provider, ""), "") or ""
+
+
+def key(provider: str) -> str:
+    """The secret to use for the next call to this provider.
+
+    Read at call time, never captured: that is what lets a retry land on a
+    different key than the attempt before it.
+    """
+    if _key_for is not None:
+        picked = _key_for(provider)
+        if picked:
+            return picked
+    return env_key(provider)
+
+
+def has_key(provider: str) -> bool:
+    """Whether this provider can be used at all — not whether it is free now.
+
+    A key that is cooling off after a rate limit still counts: the provider is
+    configured, and reporting it as missing would turn a busy minute into "you
+    have not set this up".
+    """
+    if _key_count is not None:
+        return _key_count(provider) > 0
+    return bool(env_key(provider))
+
+
 def llm_provider() -> str:
     """Which model writes the script. Falls back to whichever key exists."""
     if LLM_PROVIDER in {"anthropic", "claude"}:
         return "anthropic"
     if LLM_PROVIDER == "gemini":
         return "gemini"
-    return "anthropic" if ANTHROPIC_API_KEY else "gemini"
+    return "anthropic" if has_key("anthropic") else "gemini"
 
 
 def llm_ready() -> bool:
-    return bool(ANTHROPIC_API_KEY) if llm_provider() == "anthropic" else bool(GEMINI_API_KEY)
+    return has_key("anthropic") if llm_provider() == "anthropic" else has_key("gemini")
 
 
 def image_provider_ready(provider: str | None = None) -> bool:
     provider = (provider or IMAGE_PROVIDER).lower()
-    return {
-        "gemini": bool(GEMINI_API_KEY),
-        "fal": bool(FAL_KEY),
-        "openai": bool(OPENAI_API_KEY),
-    }.get(provider, False)
+    return has_key(provider) if provider in {"gemini", "fal", "openai"} else False
 
 
 def tts_provider_ready(provider: str | None = None) -> bool:
     provider = (provider or TTS_PROVIDER).lower()
-    return {
-        "elevenlabs": bool(ELEVENLABS_API_KEY),
-        "openai": bool(OPENAI_API_KEY),
-        "gemini": bool(GEMINI_API_KEY),
-        "upload": True,
-    }.get(provider, False)
+    if provider == "upload":
+        return True
+    return has_key(provider) if provider in {"elevenlabs", "openai", "gemini"} else False
 
 
 def resolve_align_provider(tts_provider: str) -> str:
     """Pick the best subtitle-timing source available for this TTS provider."""
     if ALIGN_PROVIDER != "auto":
         return ALIGN_PROVIDER
-    if tts_provider == "elevenlabs" and ELEVENLABS_API_KEY:
+    if tts_provider == "elevenlabs" and has_key("elevenlabs"):
         return "elevenlabs"
-    if OPENAI_API_KEY:
+    if has_key("openai"):
         return "whisper"
     return "estimate"

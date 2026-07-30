@@ -72,7 +72,11 @@ def _wait_note(job_id: str, label: str) -> Callable[[float, str], None]:
     progress it is meant to sit beside.
     """
     def note(seconds: float, reason: str) -> None:
-        if seconds >= 10:
+        if seconds <= 0:
+            # Not a wait at all — something happened instead of waiting, which is
+            # worth saying precisely because the log would otherwise be silent.
+            _note(job_id, f"{label} — {reason}")
+        elif seconds >= 10:
             _note(job_id, f"{label} — {reason}, waiting {seconds:.0f}s")
 
     return note

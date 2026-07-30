@@ -356,6 +356,24 @@
       <div class="lib-body"><div class="yt-box" id="yt-box"></div></div>
     </details>
 
+    <details class="lib-sec" id="sec-keys">
+      <summary><span>API kalitlari</span><em id="count-keys"></em></summary>
+      <div class="lib-body">
+        <!-- Several keys per provider is the whole point: one key's per-minute
+             allowance is what makes a fifty-scene video wait, and ten keys is
+             ten allowances. -->
+        <p class="hint">Har bir provayderga bir nechta kalit qo'shsangiz, biri
+          limitga urilganda ilova kutmasdan keyingisiga o'tadi.</p>
+        <form id="key-form" class="mini">
+          <select name="provider" id="key-provider"></select>
+          <input name="secret" placeholder="Kalit (API key)" required autocomplete="off" />
+          <input name="label" placeholder="Nomi — masalan 'birinchi akkaunt'" />
+          <button>Qo'shish</button>
+        </form>
+        <div class="keys-box" id="keys-box"></div>
+      </div>
+    </details>
+
     <details class="lib-sec" id="sec-models">
       <summary><span>Modellar</span><em></em></summary>
       <div class="lib-body"><div class="models-box" id="models-box"></div></div>

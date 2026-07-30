@@ -103,6 +103,33 @@ CREATE TABLE IF NOT EXISTS media (
 
 CREATE INDEX IF NOT EXISTS media_job_idx ON media (job_id);
 
+-- Your own API keys, kept here rather than in the environment — because a key is
+-- something you change when a limit bites, and changing an environment variable
+-- means a deploy. Several per provider is the point: ten Gemini keys are ten
+-- times the per-minute allowance, and the app moves to the next one the moment
+-- one refuses.
+--
+-- `cooldown_until` is how a refusal is remembered: a key that has just been
+-- rate-limited is skipped until then rather than tried again immediately and
+-- refused again. `fails` and `last_error` are what the settings page shows, so a
+-- key that is simply wrong can be told apart from one that is merely busy.
+CREATE TABLE IF NOT EXISTS apikeys (
+    id             TEXT PRIMARY KEY,
+    provider       TEXT NOT NULL,
+    label          TEXT NOT NULL DEFAULT '',
+    secret         TEXT NOT NULL,
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    uses           INTEGER NOT NULL DEFAULT 0,
+    fails          INTEGER NOT NULL DEFAULT 0,
+    ok_at          TEXT NOT NULL DEFAULT '',
+    failed_at      TEXT NOT NULL DEFAULT '',
+    cooldown_until TEXT NOT NULL DEFAULT '',
+    last_error     TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS apikeys_provider_idx ON apikeys (provider);
+
 -- A video you have asked for in advance. `request` is the whole create payload,
 -- so a plan that fires next Tuesday makes exactly the video that was described
 -- today. `publish_at` is when it should be live; `lead_minutes` is how long
@@ -238,7 +265,7 @@ def init() -> None:
 
 # Everything that may already be sitting in a local SQLite file.
 _ADOPTABLE = ("heroes", "music", "assets", "settings", "jobs", "media", "profiles",
-              "plans")
+              "plans", "apikeys")
 
 
 def _adopt_local_rows() -> None:
@@ -489,6 +516,94 @@ def get_asset(asset_id: str) -> tuple[bytes, str, str] | None:
 def delete_asset(asset_id: str) -> bool:
     with _conn() as conn:
         return conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,)).rowcount > 0
+
+
+# --- api keys ----------------------------------------------------------------
+# The secret is selected only by the keyring, never by anything that answers a
+# request: `list_keys` deliberately does not return it.
+
+_KEY_COLS = ("id, provider, label, enabled, uses, fails, ok_at, failed_at, "
+             "cooldown_until, last_error, created_at")
+
+
+def add_key(provider: str, secret: str, label: str = "") -> dict[str, Any]:
+    key_id = new_id("key")
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO apikeys (id, provider, label, secret, enabled, uses, fails,"
+            " ok_at, failed_at, cooldown_until, last_error, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (key_id, provider, label, secret, 1, 0, 0, "", "", "", "", _now()),
+        )
+    return get_key(key_id) or {}
+
+
+def list_keys(provider: str = "") -> list[dict[str, Any]]:
+    """Every key's state, without its secret."""
+    with _conn() as conn:
+        if provider:
+            rows = conn.execute(
+                f"SELECT {_KEY_COLS} FROM apikeys WHERE provider = ?"
+                " ORDER BY created_at ASC", (provider,)).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT {_KEY_COLS} FROM apikeys ORDER BY provider, created_at ASC").fetchall()
+    return [{**dict(r), "enabled": bool(r["enabled"])} for r in rows]
+
+
+def get_key(key_id: str) -> dict[str, Any] | None:
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT {_KEY_COLS} FROM apikeys WHERE id = ?", (key_id,)).fetchone()
+    return {**dict(row), "enabled": bool(row["enabled"])} if row else None
+
+
+def key_secrets(provider: str) -> list[dict[str, Any]]:
+    """The usable rows *with* their secrets. Only the keyring calls this."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT id, provider, label, secret, enabled, uses, fails, cooldown_until,"
+            " last_error FROM apikeys WHERE provider = ? ORDER BY created_at ASC",
+            (provider,)).fetchall()
+    return [{**dict(r), "enabled": bool(r["enabled"])} for r in rows]
+
+
+def update_key(key_id: str, **fields: Any) -> bool:
+    allowed = ("label", "enabled", "secret", "uses", "fails", "ok_at", "failed_at",
+               "cooldown_until", "last_error")
+    sets, values = [], []
+    for name in allowed:
+        if name in fields and fields[name] is not None:
+            sets.append(f"{name} = ?")
+            values.append(1 if fields[name] is True else 0 if fields[name] is False
+                          else fields[name])
+    if not sets:
+        return False
+    values.append(key_id)
+    with _conn() as conn:
+        return conn.execute(
+            f"UPDATE apikeys SET {', '.join(sets)} WHERE id = ?", values).rowcount > 0
+
+
+def bump_key(key_id: str, *, ok: bool, when: str, cooldown_until: str = "",
+             error: str = "") -> None:
+    """Record one outcome. Counters are incremented in SQL so two workers
+    reporting at once cannot lose each other's count."""
+    with _conn() as conn:
+        if ok:
+            conn.execute(
+                "UPDATE apikeys SET uses = uses + 1, ok_at = ?, fails = 0,"
+                " cooldown_until = '', last_error = '' WHERE id = ?", (when, key_id))
+        else:
+            conn.execute(
+                "UPDATE apikeys SET fails = fails + 1, failed_at = ?,"
+                " cooldown_until = ?, last_error = ? WHERE id = ?",
+                (when, cooldown_until, error[:300], key_id))
+
+
+def delete_key(key_id: str) -> bool:
+    with _conn() as conn:
+        return conn.execute("DELETE FROM apikeys WHERE id = ?", (key_id,)).rowcount > 0
 
 
 # --- plans -------------------------------------------------------------------

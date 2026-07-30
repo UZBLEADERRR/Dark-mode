@@ -46,11 +46,11 @@ async def transcribe_segments(audio_path: Path, language: str | None = None) -> 
     directly; Gemini can listen to audio too, which matters because most
     installations here have only a Gemini key.
     """
-    if config.OPENAI_API_KEY:
+    if config.has_key("openai"):
         segments = await _whisper_segments(audio_path, language)
         if segments:
             return segments
-    if config.GEMINI_API_KEY:
+    if config.has_key("gemini"):
         return await _gemini_segments(audio_path, language)
     return []
 
@@ -63,7 +63,7 @@ async def _whisper_segments(audio_path: Path, language: str | None) -> list[dict
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
             resp = await client.post(
                 f"{config.OPENAI_BASE}/audio/transcriptions",
-                headers={"Authorization": f"Bearer {config.OPENAI_API_KEY}"},
+                headers={"Authorization": f"Bearer {config.key('openai')}"},
                 data=data,
                 files={"file": (audio_path.name, audio_path.read_bytes(),
                                 "application/octet-stream")},
@@ -125,7 +125,7 @@ async def _gemini_segments(audio_path: Path, language: str | None) -> list[dict]
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
             resp = await client.post(
-                url, headers={"x-goog-api-key": config.GEMINI_API_KEY}, json=payload)
+                url, headers={"x-goog-api-key": config.key("gemini")}, json=payload)
         resp.raise_for_status()
         text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
         import json
@@ -147,7 +147,7 @@ async def _gemini_segments(audio_path: Path, language: str | None) -> list[dict]
 
 async def transcribe_words(audio_path: Path, language: str | None = None) -> list[dict]:
     """Word timings from OpenAI transcription. Returns [] if unavailable."""
-    if not config.OPENAI_API_KEY:
+    if not config.has_key("openai"):
         return []
 
     data = {
@@ -162,7 +162,7 @@ async def transcribe_words(audio_path: Path, language: str | None = None) -> lis
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
             resp = await client.post(
                 f"{config.OPENAI_BASE}/audio/transcriptions",
-                headers={"Authorization": f"Bearer {config.OPENAI_API_KEY}"},
+                headers={"Authorization": f"Bearer {config.key('openai')}"},
                 data=data,
                 files={"file": (audio_path.name, audio_path.read_bytes(), "application/octet-stream")},
             )
@@ -185,7 +185,7 @@ async def transcribe_words(audio_path: Path, language: str | None = None) -> lis
 
 async def transcribe_full(audio_path: Path, language: str | None = None) -> dict:
     """Full transcript plus word timings — used when the user uploads their own audio."""
-    if not config.OPENAI_API_KEY:
+    if not config.has_key("openai"):
         return {"text": "", "words": []}
 
     data = {
@@ -199,7 +199,7 @@ async def transcribe_full(audio_path: Path, language: str | None = None) -> dict
     async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
         resp = await client.post(
             f"{config.OPENAI_BASE}/audio/transcriptions",
-            headers={"Authorization": f"Bearer {config.OPENAI_API_KEY}"},
+            headers={"Authorization": f"Bearer {config.key('openai')}"},
             data=data,
             files={"file": (audio_path.name, audio_path.read_bytes(), "application/octet-stream")},
         )
