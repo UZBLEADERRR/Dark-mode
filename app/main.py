@@ -14,7 +14,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
 
-from . import config, pgstore, pipeline, skills, store
+from . import config, pgstore, pipeline, planner, skills, store
 from .models import (
     BrandKit,
     ChatTurn,
@@ -23,6 +23,8 @@ from .models import (
     JobPatch,
     ModelSettings,
     MusicSwap,
+    PlanIn,
+    PlanPatch,
     ProfilePatch,
     PublishRequest,
     RegenerateRequest,
@@ -115,7 +117,17 @@ async def lifespan(app: FastAPI):
         store.update_job(job_id, status="rendering", step="render", progress=74,
                          log="Resuming the render after a restart")
         _launch(lambda jid=job_id: pipeline.run_render(jid), job_id)
-    yield
+
+    # Plans are promises about the future, so something has to be awake to keep
+    # them. Started here, after the server is answering, and it is allowed to fail
+    # for ever without taking anything else down.
+    plans = asyncio.create_task(planner.run_forever(_launch))
+    _running.add(plans)
+    plans.add_done_callback(_running.discard)
+    try:
+        yield
+    finally:
+        plans.cancel()
 
 
 app = FastAPI(title="Sarideo", version="2.0.0", lifespan=lifespan)
@@ -709,6 +721,106 @@ async def chat(body: ChatTurn) -> dict[str, Any]:
              "asks": answer["asks"], "job_id": job_id}]
     store.set_setting(CHAT_KEY, (history + turn)[-CHAT_KEEP:])
     return {**answer, "job_id": job_id}
+
+
+# ── plans: a video asked for in advance ───────────────────────────────────────
+
+def _plan_out(plan: dict[str, Any]) -> dict[str, Any]:
+    job = store.get_job(plan.get("job_id") or "") if plan.get("job_id") else None
+    return {
+        "id": plan["id"],
+        "title": plan.get("title") or (plan.get("request") or {}).get("topic", ""),
+        "topic": (plan.get("request") or {}).get("topic", ""),
+        "publish_at": plan.get("publish_at", ""),
+        "lead_minutes": plan.get("lead_minutes", 0),
+        "privacy": plan.get("privacy", "public"),
+        "approve": bool(plan.get("approve")),
+        "status": plan.get("status", ""),
+        "job_id": plan.get("job_id", ""),
+        "video_url": plan.get("video_url", ""),
+        "error": plan.get("error", ""),
+        "video_format": (plan.get("request") or {}).get("video_format", ""),
+        # Whether this one is taking the cheap slow road, and how far off it is.
+        "batch": planner.wants_batch(plan),
+        "hours_left": round(planner.hours_until(plan.get("publish_at", "")), 1),
+        "note": planner.describe(plan),
+        "job_status": job["status"] if job else "",
+        "job_progress": job.get("progress", 0) if job else 0,
+        "created_at": plan.get("created_at"),
+    }
+
+
+@app.get("/api/plans")
+async def list_plans(limit: int = 60) -> list[dict[str, Any]]:
+    return [_plan_out(p) for p in store.list_plans(min(limit, 200))]
+
+
+@app.post("/api/plans", status_code=201)
+async def create_plan(body: PlanIn) -> dict[str, Any]:
+    when = body.publish_at.strip()
+    if planner.hours_until(when) <= 0:
+        raise HTTPException(status_code=400,
+                            detail="Chiqish vaqti o'tib ketgan — kelajakdagi vaqtni tanlang.")
+    request = {
+        "topic": body.topic.strip(),
+        "video_format": body.video_format,
+        "target_seconds": body.target_seconds,
+        "language": body.language,
+        "hero_ids": body.hero_ids,
+        "animate_actors": body.animate_actors,
+        "music_id": body.music_id or None,
+        "auto_render": True,
+    }
+    for key, value in (("tone", body.tone), ("art_style", body.art_style),
+                       ("action", body.action)):
+        if value.strip():
+            request[key] = value.strip()
+    _validate(request)
+    plan = store.add_plan(
+        title=body.title.strip() or body.topic.strip(), request=request,
+        publish_at=when, lead_minutes=body.lead_minutes,
+        privacy=body.privacy, approve=body.approve)
+    return _plan_out(plan)
+
+
+@app.patch("/api/plans/{plan_id}")
+async def edit_plan(plan_id: str, body: PlanPatch) -> dict[str, Any]:
+    if store.get_plan(plan_id) is None:
+        raise HTTPException(status_code=404, detail="Reja topilmadi.")
+    if body.publish_at and planner.hours_until(body.publish_at) <= 0:
+        raise HTTPException(status_code=400, detail="Chiqish vaqti o'tib ketgan.")
+    store.update_plan(plan_id, **body.model_dump(exclude_none=True))
+    return _plan_out(store.get_plan(plan_id) or {})
+
+
+@app.delete("/api/plans/{plan_id}")
+async def remove_plan(plan_id: str) -> dict[str, bool]:
+    if not store.delete_plan(plan_id):
+        raise HTTPException(status_code=404, detail="Reja topilmadi.")
+    return {"deleted": True}
+
+
+@app.post("/api/plans/{plan_id}/approve", status_code=202)
+async def approve_plan(plan_id: str) -> dict[str, Any]:
+    """Say yes. The video goes up, timed to the slot the plan asked for."""
+    try:
+        made = await planner.publish_plan(plan_id)
+    except planner.PlanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {**made, "plan": _plan_out(store.get_plan(plan_id) or {})}
+
+
+@app.post("/api/plans/{plan_id}/start", status_code=202)
+async def start_plan_now(plan_id: str) -> dict[str, Any]:
+    """Build it now rather than waiting for the lead time."""
+    plan = store.get_plan(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Reja topilmadi.")
+    if plan["status"] != "planned":
+        raise HTTPException(status_code=409,
+                            detail="Bu reja allaqachon boshlangan.")
+    await planner.start_plan(plan, _launch)
+    return _plan_out(store.get_plan(plan_id) or {})
 
 
 # ── publishing to your own channel ────────────────────────────────────────────

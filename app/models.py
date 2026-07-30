@@ -186,6 +186,14 @@ class CreateJobRequest(BaseModel):
     animate_actors: bool = False
     # False stops after the draft so scenes can be reviewed and edited first.
     auto_render: bool = True
+    # Take the cheap, slow road: the provider's batch API instead of one request
+    # per picture. Half the price, answers within hours rather than seconds — so
+    # it is only ever set when something knows there is time, which in practice
+    # means a planned video whose slot is hours away.
+    batch: bool = False
+    # How long the batch may take before the render stops waiting and pays full
+    # price for the rest. Set from how far off the video is actually due.
+    batch_patience_minutes: float = Field(default=0.0, ge=0, le=1440)
 
     def resolved_format(self) -> dict:
         return config.FORMATS.get(self.video_format, config.FORMATS["16:9"])
@@ -325,3 +333,37 @@ class PublishRequest(BaseModel):
     # "prepare it now, publish it Tuesday at nine" work.
     publish_at: str | None = Field(default=None, max_length=40)
     with_thumbnail: bool = True
+
+
+class PlanIn(BaseModel):
+    """A video asked for in advance."""
+
+    topic: str = Field(min_length=2, max_length=500)
+    # When it should be live. RFC3339; the browser sends an absolute instant.
+    publish_at: str = Field(min_length=10, max_length=40)
+    title: str = Field(default="", max_length=200)
+    video_format: str = "9:16"
+    target_seconds: int = Field(default=45, ge=20, le=1800)
+    language: str = "uz"
+    tone: str = ""
+    art_style: str = ""
+    action: str = ""
+    hero_ids: list[str] = Field(default_factory=list)
+    animate_actors: bool = False
+    music_id: str | None = None
+    privacy: Literal["private", "unlisted", "public"] = "public"
+    # How long before the slot to start building. A fifty-scene video is not a
+    # five-minute job, and the point of planning ahead is not to be waiting.
+    lead_minutes: int = Field(default=240, ge=10, le=10080)
+    # Waits for you to look at it. On by default: a video published unread cannot
+    # be un-seen by whoever already saw it.
+    approve: bool = True
+
+
+class PlanPatch(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    publish_at: str | None = Field(default=None, max_length=40)
+    lead_minutes: int | None = Field(default=None, ge=10, le=10080)
+    privacy: Literal["private", "unlisted", "public"] | None = None
+    approve: bool | None = None
+    status: Literal["planned", "cancelled"] | None = None

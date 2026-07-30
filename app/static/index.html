@@ -19,6 +19,7 @@
     <button data-go="chat">Suhbat</button>
     <button data-go="create" aria-pressed="true">Yaratish</button>
     <button data-go="edit">Tahrirlash<i class="badge hidden" id="jobs-badge"></i></button>
+    <button data-go="plans">Reja<i class="badge hidden" id="plans-badge"></i></button>
     <button data-go="ready">Tayyor<i class="badge hidden" id="ready-badge"></i></button>
     <button data-go="library">Kutubxona</button>
   </nav>
@@ -216,6 +217,67 @@
         </div>
       </div>
     </section>
+  </section>
+
+  <!-- ══ Reja ═══════════════════════════════════════════════════════ -->
+  <!-- A video asked for in advance: it builds itself before the slot, waits for
+       you to look at it, and YouTube holds it until the minute you chose. -->
+  <section class="view" id="view-plans">
+    <h1 class="view-title">Reja</h1>
+    <p class="view-note">Nechida chiqishini aytasiz — ilova o‘zi tayyorlaydi,
+      siz ko‘rib tasdiqlaysiz, YouTube belgilangan paytda chiqaradi.</p>
+
+    <details class="lib-sec" id="plan-new">
+      <summary><span>Yangi reja</span><em></em></summary>
+      <div class="lib-body">
+        <form id="plan-form" class="mini wide">
+          <label class="f"><span>Nima haqida</span>
+            <textarea name="topic" rows="2" maxlength="500" required
+              placeholder="Registon maydonining uch madrasasi — qisqa tarix"></textarea></label>
+          <div class="f2">
+            <label class="f"><span>Qachon chiqsin</span>
+              <input name="publish_at" type="datetime-local" required /></label>
+            <label class="f"><span>Kadr shakli</span>
+              <select name="video_format">
+                <option value="9:16">Shorts (9:16)</option>
+                <option value="16:9">Uzun (16:9)</option>
+                <option value="1:1">Kvadrat (1:1)</option>
+                <option value="4:5">Portret (4:5)</option>
+              </select></label>
+          </div>
+          <div class="f2">
+            <label class="f"><span>Uzunligi (soniya)</span>
+              <input name="target_seconds" type="number" min="20" max="1800" value="45" /></label>
+            <label class="f"><span>Til</span>
+              <select name="language" id="plan-language"></select></label>
+          </div>
+          <div class="f2">
+            <label class="f"><span>Kim ko‘radi</span>
+              <select name="privacy">
+                <option value="public">Hamma (public)</option>
+                <option value="unlisted">Havola bilan</option>
+                <option value="private">Faqat men</option>
+              </select></label>
+            <label class="f"><span>Necha soat oldin tayyorlansin</span>
+              <select name="lead_minutes">
+                <option value="60">1 soat</option>
+                <option value="240" selected>4 soat</option>
+                <option value="720">12 soat</option>
+                <option value="1440">1 kun</option>
+              </select></label>
+          </div>
+          <label class="sw"><input type="checkbox" name="approve" checked /><i></i>
+            <span>Chiqarishdan oldin men ko‘rib tasdiqlayman</span></label>
+          <p class="note">Belgini olib tashlasangiz ilova o‘zi joylaydi — ko‘rmasdan
+            chiqadi. Uzoq muddatli rejalar rasmlarni <b>batch</b> orqali, ya‘ni
+            yarim narxda tayyorlaydi.</p>
+          <button>Rejaga qo‘shish</button>
+        </form>
+        <p class="msg err hidden" id="plan-error"></p>
+      </div>
+    </details>
+
+    <div class="plans" id="plans-list"></div>
   </section>
 
   <!-- ══ Tayyor ═════════════════════════════════════════════════════ -->
