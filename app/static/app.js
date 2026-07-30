@@ -177,15 +177,85 @@ addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('#modal').classList.contains('hidden')) closeModal(null);
 });
 
+// ── strips that scroll sideways ───────────────────────────────────
+// Four projects with two on screen, or five sections across a phone, look
+// exactly like four projects and five sections — there is nothing to say the
+// rest exist. A fade on whichever side has more says it, and only there: a strip
+// whose contents fit is not faded, and one scrolled to its end stops promising.
+
+function markFades(strip) {
+  if (!strip) return;
+  const over = strip.scrollWidth - strip.clientWidth;
+  strip.classList.toggle('fade-l', over > 2 && strip.scrollLeft > 4);
+  strip.classList.toggle('fade-r', over > 2 && strip.scrollLeft < over - 4);
+}
+
+const FADED = ['#topnav', '#jobs-list', '#filmstrip', '#chan-row'];
+
+function refreshFades() {
+  FADED.forEach((sel) => markFades($(sel)));
+}
+
+function wireFades() {
+  FADED.forEach((sel) => {
+    const strip = $(sel);
+    if (!strip) return;
+    strip.addEventListener('scroll', () => markFades(strip), { passive: true });
+  });
+  addEventListener('resize', refreshFades, { passive: true });
+  // Content arrives after the first paint, so measuring once at boot would only
+  // ever measure an empty strip.
+  new MutationObserver(refreshFades).observe(document.body,
+    { childList: true, subtree: true });
+  refreshFades();
+}
+
+// ── the library's folding sections ────────────────────────────────
+// Six headings on one page put the model settings and the health list three
+// thousand pixels below the fold — on a phone, past every hero, the whole brand
+// kit, every layer picture and every track. They fold, and which are open is
+// remembered per section, so coming back lands where you left it.
+
+const LIB_KEY = 'studio.library.open';
+
+function libCount(section, text, warn = false) {
+  const badge = $(`#count-${section}`);
+  if (!badge) return;
+  badge.textContent = text || '';
+  badge.classList.toggle('warn', !!warn);
+}
+
+function libOpenState() {
+  try { return JSON.parse(localStorage.getItem(LIB_KEY) || '{}'); } catch { return {}; }
+}
+
+function wireLibrarySections() {
+  const remembered = libOpenState();
+  $$('.lib-sec').forEach((sec) => {
+    if (remembered[sec.id] !== undefined) sec.open = !!remembered[sec.id];
+    sec.addEventListener('toggle', () => {
+      const now = libOpenState();
+      now[sec.id] = sec.open;
+      try { localStorage.setItem(LIB_KEY, JSON.stringify(now)); } catch { /* private mode */ }
+    });
+  });
+}
+
 // ── navigation ────────────────────────────────────────────────────
 function go(view) {
   state.view = view;
   $$('.view').forEach((v) => v.classList.toggle('on', v.id === `view-${view}`));
   $$('#topnav button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.go === view));
+  // Five sections do not fit across a phone, so the nav scrolls — and a tab you
+  // cannot see is a tab you do not know is there. The current one is always
+  // brought into view, including when the app opens straight onto it.
+  $(`#topnav button[data-go="${view}"]`)
+    ?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
   closeSheet();
   drawDock();
   scrollTo({ top: 0, behavior: 'instant' in document.documentElement.style ? 'instant' : 'auto' });
   if (view === 'edit' || view === 'ready') loadJobs();
+  drawEditEmpty();
   // The channels may have been added from another device, or the conversation
   // continued there — this screen is the same conversation wherever it is opened.
   if (view === 'chat') { loadProfiles(); growChatInput(); }
@@ -261,6 +331,10 @@ function drawDock() {
   if (state.view === 'create' && state.mode === 'dub') {
     items = items.filter((item) => DUB_TOOLS.has(item.id));
   }
+  // A row of eight tools that cannot be pressed is not information, it is
+  // furniture — and it takes the bottom of the screen away from the thing that
+  // would have told you what to do instead.
+  if (state.view === 'edit' && !ED.job) items = [];
   const dock = $('#dock');
   dock.classList.toggle('hidden', !items.length);
   if (!items.length) { dock.innerHTML = ''; return; }
@@ -441,6 +515,12 @@ async function loadHealth() {
     `<div class="row"><span>${esc({ text: 'skript modeli', image: 'rasm modeli', tts: 'ovoz modeli' }[stage] || stage)}</span>
       <span class="model">${esc(model)}</span></div>`).join('');
 
+  // A folded section still has to say what is inside it, otherwise folding it
+  // hides the answer to "is anything wrong?" — which is the one thing this
+  // section exists to answer.
+  const bad = checks.filter(([, ok]) => !ok).length;
+  libCount('health', bad ? `${bad} ta yetishmaydi` : 'hammasi joyida', bad > 0);
+
   const core = h.ffmpeg && h.llm && Object.values(h.image_providers).some(Boolean);
   const voice = Object.values(h.tts_providers).some(Boolean);
   const pill = $('#health-pill');
@@ -452,6 +532,7 @@ async function loadHealth() {
 // ── heroes ────────────────────────────────────────────────────────
 async function loadHeroes() {
   state.heroes = await api('/api/heroes');
+  libCount('heroes', state.heroes.length ? `${state.heroes.length} ta` : '');
 
   $('#hero-picker').innerHTML = state.heroes.map((h) => `
     <label class="hero-chip" title="${esc(h.name)}">
@@ -575,6 +656,7 @@ async function giveVoice(heroId) {
 // ── overlay assets ────────────────────────────────────────────────
 async function loadAssets() {
   state.assets = await api('/api/assets');
+  libCount('assets', state.assets.length ? `${state.assets.length} ta` : '');
   $('#asset-list').innerHTML = state.assets.length
     ? state.assets.map((a) => `
         <div class="lib-card check">
@@ -887,6 +969,7 @@ async function loadMusic() {
   const all = await api('/api/music');
   state.music = all.filter((m) => m.kind !== 'sfx');
   state.sfx = all.filter((m) => m.kind === 'sfx');
+  libCount('music', all.length ? `${all.length} ta` : '');
 
   $('#music_id').innerHTML = '<option value="">— yo‘q —</option>' +
     state.music.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
@@ -1422,6 +1505,7 @@ function watch(jobId, { reveal = false } = {}) {
   state.drawn = null;
   state.reveal = reveal;
   $('#stage').classList.remove('hidden');
+  drawEditEmpty();
   if (state.poll) clearInterval(state.poll);
   tick();
   state.poll = setInterval(tick, 2500);
@@ -3266,6 +3350,29 @@ addEventListener('beforeunload', () => {
   if (ED.dirty.size || ED.styleDirty) flush();
 });
 
+/** What the editing screen shows when nothing is open in it. */
+function drawEditEmpty() {
+  const empty = $('#edit-empty');
+  if (!empty) return;
+  const show = state.view === 'edit' && !state.activeId;
+  empty.classList.toggle('hidden', !show);
+  if (!show) return;
+
+  // The newest unfinished project is what somebody arriving here almost always
+  // wants, so it is offered rather than described.
+  const pick = state.jobs.find((j) => j.status === 'review')
+    || state.jobs.find((j) => BUSY.includes(j.status))
+    || state.jobs[0];
+  $('#edit-empty-acts').innerHTML = [
+    pick ? `<button class="btn primary" data-open="${esc(pick.id)}">${
+      esc(pick.title || pick.topic || 'Oxirgi loyiha')} — ochish</button>` : '',
+    '<button class="btn" data-go="create">Yangi video</button>',
+    '<button class="btn ghost" data-go="chat">AI dan g‘oya so‘rash</button>',
+  ].join('');
+  $$('#edit-empty-acts [data-open]').forEach((b) =>
+    b.addEventListener('click', () => watch(b.dataset.open, { reveal: true })));
+}
+
 // ── jobs + ready gallery ──────────────────────────────────────────
 async function loadJobs() {
   state.jobs = await api('/api/jobs');
@@ -3277,6 +3384,8 @@ async function loadJobs() {
   const done = state.jobs.filter((j) => j.status === 'done');
   $('#ready-badge').textContent = done.length;
   $('#ready-badge').classList.toggle('hidden', !done.length);
+
+  drawEditEmpty();
 
   // A strip of projects, newest first — pick one and the studio below is it.
   $('#jobs-list').innerHTML = state.jobs.length
@@ -3803,6 +3912,8 @@ async function loadChat() {
     // Before the jobs land, so the strip is never briefly the wrong shape.
     const shut = projectsChoice();
     if (shut !== null) setProjectsShut(shut === '1', false);
+    wireLibrarySections();
+    wireFades();
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
     await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat()]);
     applyBrandToComposer();
