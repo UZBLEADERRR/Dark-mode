@@ -157,6 +157,7 @@ YOUTUBE_CLIENT_SECRET=...
 | `subtitler` | Subtitr qatorlarini qayerda bo'lishni hal qiladi |
 | `publisher` | YouTube sarlavha, tavsif, teglar, chapterlar, thumbnail prompt |
 | `strategist` | Kanallaringizni o'qiydi, g'oya beradi va videoni o'zi boshlaydi |
+| `shorts` | Uzun videoning ichidan alohida ishlaydigan Shorts bo'laklarini topadi |
 
 Reja va joylashtirish skill emas — `planner` moduli: u vaqtni kuzatib turadi va
 har bir rejani bir holatdan ikkinchisiga o'tkazadi.
@@ -603,6 +604,40 @@ vaqtlar, subtitr va qatlamlar o'zgarmaydi — ular formatga bog'liq emas. Rasmla
 esa bog'liq: eskilarini ishlatsangiz o'rtasidan kesiladi (tez), qayta
 yaratsangiz yangi kadr uchun chiziladi (sifatli).
 
+## Uzun videodan Shorts
+
+Uzun video tayyor bo'lgach, «Tayyor» bo'limida **«Shortsga bo'lish»** chiqadi.
+
+**AI topib beradi.** «AI mos joylarni topsin» bosilsa, videoning ichidan o'zicha
+tugallangan bo'laklar tanlanadi. Har taklif yonida: **nechchi soniya**, nechta
+sahna, taklif qilingan **sarlavha**, ekranga chiqadigan **hook** va *nega* aynan
+shu bo'lak alohida ishlashi. Uzunlik taxmin emas — yozilgan ovozdan hisoblanadi,
+ya'ni kesishdan **oldin** bilasiz.
+
+**O'zingiz ham kesasiz.** Qaysi sahnadan qaysi sahnagacha — tanlaysiz, uzunligi
+darrov ko'rinadi (60 soniyadan oshsa ogohlantiradi). Teskari tanlansa o'zi
+to'g'rilaydi.
+
+Short **tayyor MP4 dan kesilmaydi** — u alohida loyiha bo'lib tug'iladi. Rasm,
+ovoz, qatlamlar allaqachon bor, shuning uchun vertikal kadr **qayta teriladi**,
+subtitr esa tor kadr uchun qaytadan bo'linadi — kengini qirqib qo'yilmaydi.
+Demak Short ham oddiy loyiha: tahrirlash, muqova qo'yish va YouTube'ga joylash
+mumkin. Ovoz va rasm qayta yaratilmaydi — ular allaqachon to'langan.
+
+## Subtitrni yuklab olish
+
+Har bir tayyor video ostida **Subtitr: .srt · .vtt · matn**:
+
+| Format | Nimaga |
+|---|---|
+| `.srt` | montaj dasturlari va YouTube'ga subtitr sifatida yuklash |
+| `.vtt` | brauzer pleeri (`<track>`), veb-sahifaga qo'yish |
+| `matn` | tavsif oynasi, blog, ssenariyni o'qish — vaqtlarsiz, butun jumlalar |
+
+Uchalasi ham **bitta manbadan** olinadi, shuning uchun bir-biridan farq qilmaydi.
+Matn varianti sahnalar bo'yicha abzatslarga bo'linadi — ekrandagi uch so'zli
+bo'laklar emas, o'qib bo'ladigan matn.
+
 ---
 
 ## Railway'ga deploy
@@ -707,6 +742,8 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs/{id}/scenes/order` | Tartibni o'zgartirish |
 | `POST /api/jobs/{id}/scenes/{i}/regenerate` | Faqat o'sha sahnani qayta yaratish |
 | `POST /api/jobs/{id}/thumbnails` | Uchta muqova varianti |
+| `POST /api/jobs/{id}/shorts/suggest` | Uzun videoning ichidan Shorts bo'laklarini topish |
+| `POST /api/jobs/{id}/shorts` | Tanlangan sahnalarni alohida Short qilib kesish |
 | `POST /api/jobs/{id}/repurpose` | Boshqa formatga nusxa olish |
 | `POST /api/jobs/{id}/translate` | Boshqa tilga nusxa olish |
 | `POST /api/dub` | Tayyor videoni dublyaj qilish |
@@ -719,6 +756,7 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `GET/POST /api/music?kind=sfx` | Fon musiqasi va tovush effektlari |
 | `POST /api/jobs/{id}/render` | Render qilish / qayta render |
 | `GET /api/jobs/{id}/download` | MP4 yuklab olish |
+| `GET /api/jobs/{id}/subtitles.srt\|.vtt\|.txt` | To'liq subtitr — montaj, brauzer yoki matn uchun |
 | `GET /api/health` | Qaysi kalitlar bor, qaysi modellar ishlaydi, formatlar, harakatlar |
 
 ## Loyiha tuzilishi

@@ -1244,6 +1244,55 @@ input[type="range"]::-moz-range-thumb {
 .model-acts .saver { text-align: left; }
 #models-note { margin: 0; }
 
+/* ── subtitles and Shorts ──────────────────────────────────────── */
+/* Three formats of one thing, so they read as one control rather than three
+   more buttons competing with "download the video". */
+.subs {
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 7px 11px; min-width: 0;
+  font-size: .76rem; color: var(--muted);
+  background: var(--raised); border: 1px solid var(--line); border-radius: 99px;
+}
+.subs a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--line-2); }
+.subs a:hover { border-bottom-color: currentColor; }
+
+.rule { height: 1px; margin: 15px 0 12px; border: 0; background: var(--line); }
+
+/* The button and the sentence explaining it are one block, stacked: side by side
+   the sentence wrapped into the button's gutter and read as its label. */
+#short-ai { display: grid; justify-items: start; gap: 7px; margin-bottom: 4px; }
+#short-ai .note { margin: 0; }
+
+.short-pick {
+  display: grid; gap: 4px; min-width: 0;
+  margin-top: 9px; padding: 11px 12px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: 12px;
+}
+.short-pick b { font-size: .86rem; overflow-wrap: anywhere; }
+.short-meta { font-size: .72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The hook is the thing that has to earn the second second, so it is shown as
+   what it will be — a line on screen — rather than as another field. */
+.short-hook { font-size: .78rem; color: var(--text); }
+.short-why {
+  font-size: .72rem; color: var(--ok);
+  padding-left: 8px; border-left: 2px solid rgba(61, 220, 145, .4);
+  overflow-wrap: anywhere;
+}
+.short-pick .chip {
+  justify-self: start; margin-top: 5px; padding: 6px 12px;
+  font-size: .74rem; color: var(--text);
+  background: transparent; border: 1px solid var(--line-2); border-radius: 99px;
+  cursor: pointer;
+}
+.short-pick .chip:hover { border-color: var(--accent); color: var(--accent); }
+/* The length is the number that decides whether this is a Short at all, so it
+   is stated before the cut rather than discovered after the render. */
+.short-len {
+  margin: 10px 0 0; font-size: .8rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.short-len.over { color: var(--warn); }
+
 /* ── API keys ──────────────────────────────────────────────────── */
 /* Read top to bottom this is a supply report: per provider, how many keys and
    how many are free, then a line per key. Everything is allowed to wrap and

@@ -1590,6 +1590,11 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
                 "video_url": video_url,
                 "download_url": f"/api/jobs/{job_id}/download",
                 "subtitle_url": subtitle_url,
+                # Kept with the job, not only written to a file. Timing captions
+                # costs a model call, and every other subtitle format is these
+                # same cues in different punctuation — so they are stored once
+                # and converted on demand rather than rebuilt.
+                "captions": captions,
                 "duration": round(total_audio, 2),
                 "warnings": warnings,
                 "metadata": publish_pack,
@@ -2204,6 +2209,136 @@ def repurpose(job_id: str, video_format: str, regenerate_images: bool) -> str | 
         },
     )
     return clone_id
+
+
+# ── Shorts out of a long video ────────────────────────────────────────────────
+
+# What a Short may run to. YouTube takes three minutes now, but the format is
+# still a sixty-second one in practice: past that the retention curve is a
+# different problem and the thing you have made is a short video, not a Short.
+SHORT_MAX_SECONDS = 60.0
+
+
+async def shorts_for(job_id: str, *, count: int = 3,
+                     max_seconds: float = SHORT_MAX_SECONDS) -> list[dict]:
+    """Which stretches of this video would stand alone, and how long each is.
+
+    The lengths come from the recorded voice-over rather than from the model, so
+    a suggestion says what it will actually cost you before you cut it.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return []
+    scenes = _load_scenes(job)
+    if not scenes:
+        raise PipelineError("Bu videoda sahna yo'q.")
+
+    request = job.get("request") or {}
+    result = job.get("result") or {}
+    return await skills.suggest_shorts(
+        scenes=scenes,
+        language=request.get("language", "en"),
+        title=result.get("title") or request.get("topic", ""),
+        count=count,
+        max_seconds=max_seconds,
+    )
+
+
+async def cut_short(job_id: str, first: int, last: int, *, title: str = "",
+                    video_format: str = "9:16",
+                    regenerate_images: bool = False) -> str | None:
+    """Clone one run of scenes into a Short of its own.
+
+    A Short is cut as a *project*, not out of the finished MP4. Everything the
+    long video is made of is still here — the stills, the voice, the layers — so
+    the vertical frame is composed rather than cropped out of a wide one, and the
+    captions are re-broken for the narrower canvas instead of being shrunk.
+    That also means the Short arrives editable: it is a project like any other,
+    which is what lets you fix its hook before it goes out.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return None
+    if video_format not in config.FORMATS:
+        raise PipelineError(f"Unknown video format '{video_format}'.")
+
+    scenes = _load_scenes(job)
+    if not scenes:
+        raise PipelineError("Bu videoda sahna yo'q.")
+
+    known = {int(s["index"]) for s in scenes}
+    if first not in known:
+        raise PipelineError(f"{first}-sahna yo'q.")
+    if last < first:
+        first, last = last, first
+    chosen = [s for s in scenes if first <= int(s["index"]) <= last]
+    if not chosen:
+        raise PipelineError("Tanlangan oraliqda sahna yo'q.")
+
+    length = sum(float(s.get("audio_duration") or 0.0) for s in chosen)
+    request = {
+        **job["request"],
+        "kind": "short",
+        "video_format": video_format,
+        "topic": title or job.get("result", {}).get("title") or job["request"].get("topic", ""),
+        "target_seconds": max(5, int(round(length))) or 30,
+        "auto_render": True,
+        # Already written and voiced: a cut must never re-run the script.
+        "script": None,
+        "auto_hook": False,
+        "parent_id": job_id,
+        "cut_from": [first, last],
+        # The long video's single recording, if it had one, is the whole reading
+        # — it is replaced below by a slice per scene.
+        "narration_audio": None,
+    }
+    short_id = store.create_job(request)
+    source, target = workdir_for(job_id), workdir_for(short_id)
+
+    for folder in ("audio", "images", "overlays", "heroes", "sfx"):
+        if (source / folder).is_dir():
+            shutil.copytree(source / folder, target / folder, dirs_exist_ok=True)
+
+    clone: list[dict] = []
+    for scene in chosen:
+        copy = dict(scene)
+        for key in ("audio_path", "image_path"):
+            if scene.get(key):
+                copy[key] = str(target / Path(scene[key]).relative_to(source))
+        copy["overlays"] = [dict(o) for o in (scene.get("overlays") or [])]
+        copy["needs_image"] = bool(regenerate_images)
+        copy["needs_voice"] = False
+        clone.append(copy)
+
+    # A video voiced from an uploaded recording has no per-scene audio — there is
+    # one file for the whole reading. The Short cannot carry that: it would be
+    # the entire narration over four scenes of picture. Each chosen scene gets
+    # its own slice of the recording instead, cut at the timings the storyboard
+    # already worked out.
+    uploaded = (job.get("request") or {}).get("narration_audio")
+    if uploaded and not any(s.get("audio_path") for s in chosen):
+        source_audio = Path(uploaded)
+        if not source_audio.exists():
+            raise PipelineError("Uzun videoning ovoz fayli topilmadi.")
+        for scene, copy in zip(chosen, clone):
+            begin = float(scene.get("start") or 0.0)
+            span = float(scene.get("audio_duration") or 0.0)
+            piece = target / "audio" / f"scene_{scene['index']:04d}.mp3"
+            await video.slice_audio(source_audio, piece, begin, begin + span)
+            copy["audio_path"] = str(piece)
+
+    store.update_job(
+        short_id, status="review", step="review", progress=72,
+        log=f"Cut from {job_id}, scenes {first}–{last} — {length:.0f}s",
+        result={
+            "scenes": _reindex(clone),
+            "title": title or job.get("result", {}).get("title"),
+            "scene_count": len(clone),
+            "style_bible": job.get("result", {}).get("style_bible"),
+            "warnings": [],
+        },
+    )
+    return short_id
 
 
 # ── one video, several languages ──────────────────────────────────────────────
