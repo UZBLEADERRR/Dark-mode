@@ -200,7 +200,7 @@ async def read_profile(data: bytes, mime: str, platform: str = "") -> dict[str, 
         if platform else "Work out which platform this is from the screenshot."
     try:
         out = await llm.call_json(
-            READ_SYSTEM, hint, READ_SCHEMA, max_tokens=1500, images=[(data, mime)])
+            READ_SYSTEM, hint, READ_SCHEMA, max_tokens=6000, images=[(data, mime)])
     except llm.LLMError:
         # A profile that could not be read is still a profile worth keeping — the
         # person uploaded it, and they can say what it is themselves.

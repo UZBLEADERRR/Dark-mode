@@ -333,9 +333,13 @@ def build_ass(
     title_cards: list[dict] | None = None,
     overlays: list[dict] | None = None,
     include_captions: bool = True,
+    language: str = "",
 ) -> str:
     resolved = resolve_style(style)
-    budget = config.caption_budget(width, height)
+    # The same budget the line breaker used. Passed the language for the same
+    # reason it was: a Korean line that fits by character count would still be
+    # set too large to fit by width.
+    budget = config.caption_budget(width, height, language)
     font_size = max(16, int(budget["font_size"] * resolved["size"]))
     caption_font = resolved["font"] or font
 

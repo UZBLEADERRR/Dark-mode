@@ -5,11 +5,17 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     DATA_DIR=/data
 
-# ffmpeg + libass (subtitle burn-in) + fonts for Latin/Cyrillic captions
+# ffmpeg + libass (subtitle burn-in) + the fonts the captions are set in.
+# DejaVu and Noto core cover Latin, Cyrillic, Greek, Arabic and Devanagari but
+# have no Hangul, and libass does not fail on a missing glyph — it draws nothing,
+# so a Korean video would come out with blank subtitles. Nanum is 10 MB and is
+# what Korean text is actually set in; the whole Noto CJK family is six times the
+# size and only worth it once Japanese or Chinese are on the list too.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         fonts-dejavu-core \
         fonts-noto-core \
+        fonts-nanum \
         fontconfig \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*

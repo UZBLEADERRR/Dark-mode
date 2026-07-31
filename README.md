@@ -171,6 +171,7 @@ Hammasi adapter — `.env` orqali almashtirasiz, kod o'zgarmaydi.
 | Skript | `gemini` (default), `anthropic` (Claude) |
 | Rasm | `gemini`, `fal` (Flux Kontext), `openai` (gpt-image-1) |
 | Ovoz | `gemini`, `elevenlabs`, `openai`, yoki **o'z audiongizni yuklash** |
+| Til | en, uz, ru, tr, es, ar, hi, de, fr, **ko** |
 | Subtitr vaqti | ElevenLabs timestamps → Whisper → proporsional taxmin |
 | Saqlash | Lokal disk (default) yoki Supabase Storage |
 
@@ -228,6 +229,25 @@ yozaman…» orqali qo'lda kiritasiz. «Standart» ni tanlasangiz env'dagi qiyma
 qaytadi.
 
 **Kutubxona → Holat** har doim aynan qaysi model chaqirilayotganini ko'rsatadi.
+
+### Koreys va boshqa "zich" yozuvlar
+
+Koreys tili qo'shildi (`ko`). Ikkita narsa alohida qilingan, chunki tilni
+ro'yxatga qo'shishning o'zi yetmaydi:
+
+- **Shrift.** DejaVu'da hangul yo'q, libass esa yo'q harfni xato deb hisoblamaydi
+  — u shunchaki **hech narsa chizmaydi**. Shuning uchun image'ga `fonts-nanum`
+  o'rnatiladi va koreys videoning subtitri **NanumGothic**da yoziladi. Boshqa
+  tillar avvalgi shriftda qoladi. (`SUBTITLE_FONT_KO` bilan o'zgartirsa bo'ladi.)
+- **Qator uzunligi.** Hangul bo'g'ini lotin harfidan ~2 barobar keng. 42 belgili
+  qator ingliz tilida sig'adi, koreyschada kadrdan chiqib ketadi — o'lchandi: 30
+  belgi allaqachon 1920px kadrning 76%ini egallaydi. Shuning uchun koreys uchun
+  belgi chegarasi ~yarmiga tushadi, so'z chegarasi esa **ko'tariladi** (koreys
+  so'zlari qisqa). Tahrirlagichdagi subtitr namunasi ham xuddi shu qoidaga
+  ko'ra bo'linadi — ya'ni ko'rsatgani bilan render bir xil bo'ladi.
+
+Xuddi shu qoida yapon va xitoy tillari uchun ham tayyor (`DENSE_SCRIPTS`), ular
+ro'yxatga qo'shilsa shriftini ham qo'shish kerak bo'ladi (`fonts-noto-cjk`).
 
 ## Ovoz
 
