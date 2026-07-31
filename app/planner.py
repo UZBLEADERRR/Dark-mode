@@ -112,8 +112,13 @@ async def start_plan(plan: dict[str, Any], launch: Callable[..., None]) -> None:
     """Turn a plan into a project and set it building."""
     payload = dict(plan.get("request") or {})
     # A planned video is made all the way through: the point is that it is ready
-    # to look at when you get to it, not that it is waiting to be started.
+    # to look at when you get to it, not that it is waiting to be started. Which
+    # is also why the script gate is off here and on everywhere else — a plan
+    # that fires at three in the morning and stops for someone to read the words
+    # has missed its slot by breakfast. Reviewing a planned video is what
+    # `approve` is for, and that happens after it exists.
     payload["auto_render"] = True
+    payload["review_script"] = False
     payload.setdefault("caption_style", subs.resolve_style(payload.get("subtitle_style", "bold")))
     if wants_batch(plan):
         # Cheap and slow, because there is time. How much time is the plan's own

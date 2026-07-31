@@ -84,6 +84,7 @@
         <button type="button" data-mode="topic" aria-pressed="true">Mavzu</button>
         <button type="button" data-mode="script">Senariy</button>
         <button type="button" data-mode="dub">Dublyaj</button>
+        <button type="button" data-mode="subtitle">Subtitr</button>
       </div>
 
       <div class="prompt">
@@ -125,6 +126,26 @@
               <option value="0.25">past</option>
             </select></label>
         </div>
+      </div>
+
+      <!-- Subtitling somebody else's video: no script, no voice, no pictures.
+           Only the words that are already being said, written down and timed. -->
+      <div class="drop hidden" id="subtitle-box">
+        <label class="file big"><input type="file" id="sub_file" accept="video/*" />
+          <span>Videoni tanlash</span></label>
+        <div class="f2">
+          <label class="f"><span>Video qaysi tilda</span>
+            <select id="sub_language"><option value="">avtomatik aniqlansin</option></select></label>
+          <label class="f"><span>Subtitrni videoga yozish</span>
+            <select id="sub_burn">
+              <option value="1">ha — rasmga yozilsin</option>
+              <option value="0">yo'q — faqat fayl bo'lsin</option>
+            </select></label>
+        </div>
+        <p class="note">«Rasmga yozilsin» — subtitr videoning ichiga chiziladi,
+          qayerga tashlasangiz ham ko'rinadi (video qayta siqiladi, ovoz
+          tegilmaydi). «Faqat fayl» — video umuman o'zgarmaydi, siz
+          <b>.srt</b>, <b>.vtt</b> yoki <b>.txt</b> ni yuklab olasiz.</p>
       </div>
 
       <!-- Everything chosen so far, in one line. Tap any of it to change it. -->

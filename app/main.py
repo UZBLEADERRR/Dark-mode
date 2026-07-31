@@ -249,6 +249,9 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "duration": result.get("duration"),
         "title": result.get("title"),
         "scene_count": result.get("scene_count") or len(scenes),
+        # Only a subtitling job has one, and for that job it is the count that
+        # means something.
+        "caption_count": result.get("caption_count"),
         "metadata": result.get("metadata"),
         "thumbnails": result.get("thumbnails") or [],
         # Where it went, once it has gone somewhere. The gallery offers to open it
@@ -449,6 +452,9 @@ async def health() -> dict[str, Any]:
             "tts": config.model(f"{config.TTS_PROVIDER}_tts"),
         },
         "can_dub": config.has_key("gemini") or config.has_key("openai"),
+        # Subtitling asks less of a deployment than anything else here: it needs
+        # something that can listen, and nothing that can speak or draw.
+        "can_subtitle": config.has_key("gemini") or config.has_key("openai"),
         "speeds": [{"id": k, "label": v["label"]} for k, v in config.SPEED_PROFILES.items()],
         # How often the picture changes. The image count is what this really
         # costs, so it is spelled out rather than left to be discovered.
@@ -1367,9 +1373,25 @@ async def create_job_with_audio(
     subtitle_style: str = Form("bold"),
     burn_subtitles: bool = Form(True),
     auto_render: bool = Form(True),
+    # The create form sends all of these whichever way the video is made. Not
+    # declaring them here did not mean "use the default" — it meant the choice
+    # was read off the screen, sent, and dropped on the floor.
+    review_script: bool = Form(True),
+    render_speed: str = Form("balanced"),
+    shot_pace: str = Form("steady"),
+    brand_logo: bool = Form(False),
+    action: str = Form(""),
+    animate_actors: bool = Form(False),
     audio: UploadFile = File(...),
 ) -> dict[str, Any]:
-    """Storyboard a voice-over the user already has, instead of generating one."""
+    """Storyboard a voice-over the user already has, instead of generating one.
+
+    The script gate works here too, and means something different: the words are
+    already spoken, so reading them changes the subtitles rather than the voice.
+    That is worth stopping for — a transcription mishears a name, and the burnt-in
+    caption is the one place that mistake becomes permanent. Nothing is
+    re-recorded, because `needs_voice` is ignored for an uploaded narration.
+    """
     if not config.has_key("openai"):
         raise HTTPException(
             status_code=400,
@@ -1390,6 +1412,9 @@ async def create_job_with_audio(
         "subtitle_style": subtitle_style, "burn_subtitles": burn_subtitles,
         "auto_render": auto_render, "narration_audio": str(staged), "target_seconds": 0,
         "caption_style": subs.resolve_style(subtitle_style),
+        "review_script": review_script, "render_speed": render_speed,
+        "shot_pace": shot_pace, "brand_logo": brand_logo,
+        "action": action or None, "animate_actors": animate_actors,
     }
     _validate(payload)
     job_id = store.create_job(payload)
@@ -1933,6 +1958,52 @@ async def dub_video(
     return {"id": job_id, "status": "queued"}
 
 
+@app.post("/api/videos/subtitle", status_code=202)
+async def subtitle_video(
+    video_file: UploadFile = File(..., alias="video"),
+    language: str = Form(""),
+    subtitle_style: str = Form("bold"),
+    burn_subtitles: bool = Form(True),
+    render_speed: str = Form("balanced"),
+    topic: str = Form(""),
+) -> dict[str, Any]:
+    """Put subtitles on a video the user already has.
+
+    `language` may be empty, which means "work it out from the audio" — the
+    transcribers detect it, and asking someone to name the language of a video
+    they are holding is asking them to do the machine's job.
+    """
+    if language and language not in config.LANGUAGES:
+        raise HTTPException(status_code=400, detail=f"Noma'lum til '{language}'.")
+    if not (config.has_key("openai") or config.has_key("gemini")):
+        raise HTTPException(
+            status_code=400,
+            detail="Videoni tinglash uchun OpenAI yoki Gemini kaliti kerak — "
+                   "kutubxonadagi «API kalitlari» ga qo'shing.")
+    if not video.ffmpeg_available():
+        raise HTTPException(status_code=500, detail="Bu konteynerda ffmpeg yo'q.")
+
+    data, _mime, ext = await _read_upload(video_file, VIDEO_TYPES)
+    staged = config.DATA_DIR / "uploads" / f"{store.new_id('sub')}{ext}"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_bytes(data)
+
+    job_id = store.create_job({
+        "kind": "subtitle",
+        "topic": topic.strip() or Path(video_file.filename or "video").stem,
+        "source_video": str(staged),
+        "language": language,
+        "subtitle_style": subtitle_style,
+        "caption_style": subs.resolve_style(subtitle_style),
+        "burn_subtitles": burn_subtitles,
+        "render_speed": render_speed,
+        "video_format": "16:9",
+        "auto_render": True,
+    })
+    _launch(lambda: pipeline.run_subtitle(job_id), job_id)
+    return {"id": job_id, "status": "queued"}
+
+
 # ── the script, before anything is made from it ───────────────────────────────
 
 def _script_stage(job_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -2148,7 +2219,10 @@ async def subtitles(job_id: str, kind: str) -> Response:
                             detail=f"Subtitr formati '{kind}' yo'q — srt, vtt yoki txt.")
     job = _get_job_or_404(job_id)
     captions = await _captions_for(job)
-    scenes = (job.get("result") or {}).get("scenes") or []
+    result = job.get("result") or {}
+    # A video the app wrote has scenes; a video it was handed has blocks of
+    # transcript. Either one is what the plain-text transcript is paragraphed by.
+    scenes = result.get("scenes") or result.get("blocks") or []
     if not captions and not scenes:
         raise HTTPException(status_code=404,
                             detail="Bu videoda hali subtitr yo'q — avval render qiling.")

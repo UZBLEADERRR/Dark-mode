@@ -57,6 +57,19 @@ yaratasiz — butun video qaytadan hisoblanmaydi. Keyin **Render** bosasiz.
 Ko'rib chiqish kerak bo'lmasa, formada "Render'dan oldin ko'rib chiqaman"
 katagini olib tashlang — u holda hammasi bir yo'la tugaydi.
 
+**Qaysi yo'l bilan boshlaganingizdan qat'i nazar.** Matn to'xtashi endi
+**hamma joyda** standart: formadan boshlasangiz ham, **Suhbat**da «menga shu
+haqda video qil» desangiz ham, o'z ovozingizni yuklasangiz ham. Ilgari u faqat
+forma yuboradigan yagona yo'lda ishlardi — suhbatdan boshlangan video hech
+to'xtamay renderga ketardi. Yagona istisno — **reja**: kechasi soat uchda
+ishga tushadigan video kimdir matnni o'qishini kutib turolmaydi, uni
+`approve` orqali video tayyor bo'lgach ko'rasiz.
+
+O'z ovozingizni yuklaganda bu to'xtash boshqa ma'no beradi: so'zlar allaqachon
+aytilgan, shuning uchun tuzatganingiz **ovozni emas, subtitrni** o'zgartiradi.
+Transkripsiya ismni noto'g'ri eshitsa, uni videoga yozilib qolishidan oldin
+to'g'irlaydigan yagona joy — shu.
+
 ## Suhbat
 
 Forma to'ldirishning o'rniga aytib ham bo'ladi. **Suhbat** bo'limida:
@@ -717,6 +730,35 @@ Uchalasi ham **bitta manbadan** olinadi, shuning uchun bir-biridan farq qilmaydi
 Matn varianti sahnalar bo'yicha abzatslarga bo'linadi — ekrandagi uch so'zli
 bo'laklar emas, o'qib bo'ladigan matn.
 
+## O'z videongizga subtitr qo'shish
+
+Ilova faqat noldan video yasamaydi — tayyor videoni ham qabul qiladi.
+**Yangi → Subtitr** da videoni tanlaysiz, qolganini ilova qiladi: ovoz yo'lini
+ajratadi, gapirilganini tinglaydi, satrlarga bo'ladi va vaqtlarini qo'yadi.
+
+Skript ham, ovoz ham, rasm ham kerak emas — shuning uchun bu ilovaning eng kam
+narsa so'raydigan qismi: **faqat OpenAI yoki Gemini kaliti** yetarli.
+
+Ikki xil natija tanlaysiz:
+
+- **«Rasmga yozilsin»** — subtitr videoning ichiga chiziladi. Qayerga tashlasangiz
+  ham ko'rinadi, subtitr fayli bilan ovora bo'lmaysiz. Rasm qaytadan siqiladi,
+  **ovoz esa tegilmaydi** (nusxalanadi, qayta kodlanmaydi) — subtitr chizish
+  videoning eshitilishini o'zgartirmasligi kerak.
+- **«Faqat fayl»** — video **umuman o'zgarmaydi**, bitta kadr ham qayta
+  siqilmaydi. Sizga `.srt`, `.vtt` va `.txt` qoladi. YouTube va montaj
+  dasturlariga aynan shu kerak.
+
+Til majburiy emas: bo'sh qoldirsangiz, transkripsiya o'zi aniqlaydi. Koreys,
+yapon va xitoy matnida satr uzunligi va shrift o'sha tilga ko'ra tanlanadi —
+generatsiya qilingan videolardagi kabi.
+
+Video hech qanday sahnaga bo'linmaydi — chunki uni siz suratga olgansiz, ilova
+emas. Shuning uchun tayyor ro'yxatda unga «Shortsga bo'lish», «Musiqa qo'shish»
+yoki «Boshqa tilga» tugmalari chiqmaydi: ular sahnalarni qaytadan yig'adi, bu
+yerda esa yig'iladigan sahna yo'q. Nechta satr chiqqani yoziladi (`6 ta satr`),
+sahna soni emas.
+
 ---
 
 ## Railway'ga deploy
@@ -829,6 +871,7 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs/{id}/repurpose` | Boshqa formatga nusxa olish |
 | `POST /api/jobs/{id}/translate` | Boshqa tilga nusxa olish |
 | `POST /api/dub` | Tayyor videoni dublyaj qilish |
+| `POST /api/videos/subtitle` | O'z videongizga subtitr (`burn_subtitles` — rasmga yozilsinmi) |
 | `GET/PUT /api/brand` | Brend to'plami |
 | `GET/PUT /api/models` | Har bosqich qaysi modelni chaqiradi |
 | `GET /api/models/available?provider=` | Provayderdagi mavjud modellar |

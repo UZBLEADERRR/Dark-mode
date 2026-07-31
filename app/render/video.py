@@ -254,6 +254,34 @@ async def probe_video(path: Path) -> dict:
     return info
 
 
+async def burn_onto(
+    *, video_path: Path, subtitle_file: Path, out_path: Path,
+    speed: dict | None = None,
+) -> Path:
+    """Burn subtitles into a video that already exists, leaving the sound alone.
+
+    The audio stream is copied, not re-encoded: nothing about drawing on the
+    picture should change how the video sounds. The picture has to be re-encoded,
+    because burning in is drawing — that is what "burned in" means, and it is the
+    price of a subtitle that survives being reposted anywhere.
+    """
+    profile = speed or config.speed_profile()
+    # cwd is the output folder so the subtitle file can be a bare name in the
+    # filter graph. An absolute path there would need its colons escaped, and on
+    # a path the user never sees that is a bug waiting for a Windows drive letter.
+    workdir = out_path.parent
+    workdir.mkdir(parents=True, exist_ok=True)
+    await _run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(video_path.resolve()),
+        "-vf", f"subtitles={subtitle_file.name}",
+        "-c:v", "libx264", "-preset", profile["final_preset"],
+        "-crf", str(profile["final_crf"]), "-pix_fmt", "yuv420p",
+        "-c:a", "copy", "-movflags", "+faststart", out_path.name,
+    ], cwd=workdir)
+    return out_path
+
+
 async def extract_audio(video_path: Path, out_path: Path) -> Path:
     """Pull the soundtrack out as small mono audio a transcriber will accept."""
     out_path.parent.mkdir(parents=True, exist_ok=True)

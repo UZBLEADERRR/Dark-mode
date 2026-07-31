@@ -333,11 +333,17 @@ const DOCK = {
 // nothing to act on — offering them would only invite fiddling with settings
 // that will be ignored.
 const DUB_TOOLS = new Set(['format', 'voice', 'more']);
+// Subtitling has no voice to choose and no shape to set — the video already has
+// both. What is left is how the words look.
+const SUBTITLE_TOOLS = new Set(['subtitle', 'more']);
 
 function drawDock() {
   let items = DOCK[state.view] || [];
   if (state.view === 'create' && state.mode === 'dub') {
     items = items.filter((item) => DUB_TOOLS.has(item.id));
+  }
+  if (state.view === 'create' && state.mode === 'subtitle') {
+    items = items.filter((item) => SUBTITLE_TOOLS.has(item.id));
   }
   // A row of eight tools that cannot be pressed is not information, it is
   // furniture — and it takes the bottom of the screen away from the thing that
@@ -418,7 +424,12 @@ function drawSummary() {
 
   // Dubbing keeps the original picture, so shape, length, style, cast and music
   // are all decided already — only the new language and voice are ours to pick.
-  const chips = (dub ? [
+  // Subtitling decides even less: the video is not touched except to be written
+  // on, so the only choices are how the words look and whether they are burned.
+  const chips = (state.mode === 'subtitle' ? [
+    ['subtitle', $('#subtitle_style').selectedOptions[0]?.text || 'subtitr'],
+    ['subtitle', $('#sub_burn').value === '1' ? 'rasmga yoziladi' : 'faqat fayl'],
+  ] : dub ? [
     ['format', language && `${language}ga`],
     ['voice', voiceName],
   ] : [
@@ -505,9 +516,14 @@ async function loadHealth() {
   }));
   syncPaceNote();
 
-  $('#dub_source').innerHTML = '<option value="">avtomatik aniqlansin</option>' +
+  const autoFirst = '<option value="">avtomatik aniqlansin</option>' +
     h.languages.map((l) => `<option value="${esc(l.id)}">${esc(l.label)}</option>`).join('');
+  $('#dub_source').innerHTML = autoFirst;
+  $('#sub_language').innerHTML = autoFirst;
   $('#mode-tabs [data-mode="dub"]').classList.toggle('hidden', !h.can_dub);
+  // Subtitling needs a transcriber and nothing else — no voice, no pictures, no
+  // script — so it is offered whenever the app can listen to a video at all.
+  $('#mode-tabs [data-mode="subtitle"]').classList.toggle('hidden', !h.can_subtitle);
 
   $('#subtitle_style').innerHTML = (h.caption_templates || []).map((t) =>
     `<option value="${esc(t.id)}"${t.id === 'bold' ? ' selected' : ''}>${esc(t.label)}</option>`).join('');
@@ -1274,25 +1290,32 @@ $$('#mode-tabs button').forEach((b) => b.addEventListener('click', () => {
   $$('#mode-tabs button').forEach((x) => x.setAttribute('aria-pressed', x === b));
   const script = state.mode === 'script';
   const dub = state.mode === 'dub';
+  const sub = state.mode === 'subtitle';
+  // Both of these work on a video that already exists, so between them they hide
+  // everything that is about inventing one.
+  const onExisting = dub || sub;
   $('#script-box').classList.toggle('hidden', !script);
   $('#dub-box').classList.toggle('hidden', !dub);
+  $('#subtitle-box').classList.toggle('hidden', !sub);
   // Dubbing has no picture to stage and no script to direct.
-  $('#action-box').classList.toggle('hidden', dub);
-  $('#animate-row').classList.toggle('hidden', dub);
-  $('#animate-note').classList.toggle('hidden', dub);
+  $('#action-box').classList.toggle('hidden', onExisting);
+  $('#animate-row').classList.toggle('hidden', onExisting);
+  $('#animate-note').classList.toggle('hidden', onExisting);
   // Dubbing replaces the voice on a picture that already exists, so there is no
   // topic to write and nothing for the AI to imagine.
-  $('.composer .prompt').classList.toggle('hidden', dub);
-  $('#topic').closest('.prompt').classList.toggle('hidden', dub);
+  $('.composer .prompt').classList.toggle('hidden', onExisting);
+  $('#topic').closest('.prompt').classList.toggle('hidden', onExisting);
   // With a script supplied, length comes from the words, not from a slider.
-  $('#duration-row').classList.toggle('hidden', script || dub || $('#use_upload').checked);
+  $('#duration-row').classList.toggle('hidden',
+    script || onExisting || $('#use_upload').checked);
   $('#topic').placeholder = script
     ? 'Video nima haqida — bir qatorda (ixtiyoriy kontekst)'
     : "Ipak yo'li bo'ylab sayohat qilgan uch savdogarning haqiqiy tarixi…";
   $('#topic').rows = script ? 1 : 2;
-  $('#submit-btn').textContent = dub ? 'Dublyaj qilish' : 'Video yaratish';
-  $('.composer h1').textContent = dub
-    ? 'Qaysi videoni tarjima qilamiz?' : 'Nima haqida video?';
+  $('#submit-btn').textContent = dub ? 'Dublyaj qilish'
+    : sub ? 'Subtitr qo‘shish' : 'Video yaratish';
+  $('.composer h1').textContent = dub ? 'Qaysi videoni tarjima qilamiz?'
+    : sub ? 'Qaysi videoga subtitr qo‘shamiz?' : 'Nima haqida video?';
   drawDock();
   drawSummary();
 }));
@@ -1369,22 +1392,49 @@ async function submitDub() {
   watch(job.id, { reveal: true });
 }
 
+async function submitSubtitle() {
+  const err = $('#create-error');
+  const file = $('#sub_file').files[0];
+  if (!file) {
+    err.textContent = 'Avval videoni tanlang.';
+    err.classList.remove('hidden');
+    return;
+  }
+  const body = new FormData();
+  body.append('video', file);
+  // Empty means "work it out from the audio", which is what the transcribers do
+  // anyway — naming the language is an option, not a question to be answered.
+  body.append('language', $('#sub_language').value);
+  body.append('subtitle_style', $('#subtitle_style').value);
+  body.append('burn_subtitles', $('#sub_burn').value === '1' ? 'true' : 'false');
+  body.append('render_speed', state.speed);
+  body.append('topic', file.name.replace(/\.[^.]+$/, ''));
+  const job = await api('/api/videos/subtitle', { method: 'POST', body });
+  go('edit');
+  watch(job.id, { reveal: true });
+}
+
 $('#submit-btn').addEventListener('click', async () => {
   const btn = $('#submit-btn');
   const err = $('#create-error');
   err.classList.add('hidden');
 
-  if (state.mode === 'dub') {
+  // The two modes that work on a video the user already has share everything
+  // except which endpoint they post to and what the button says afterwards.
+  const onExisting = { dub: [submitDub, 'Dublyaj qilish'],
+                       subtitle: [submitSubtitle, 'Subtitr qo‘shish'] }[state.mode];
+  if (onExisting) {
+    const [send, label] = onExisting;
     btn.disabled = true;
     btn.textContent = 'Yuborilmoqda…';
     try {
-      await submitDub();
+      await send();
     } catch (e) {
       err.textContent = e.message;
       err.classList.remove('hidden');
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Dublyaj qilish';
+      btn.textContent = label;
     }
     return;
   }
@@ -1605,7 +1655,8 @@ function drawStage(job) {
   if (busy && latest) meta.push(latest);
   else if (busy && job.step && job.step !== job.status) meta.push(job.step);
   if (job.duration) meta.push(clock(job.duration));
-  if (job.scene_count) meta.push(`${job.scene_count} sahna`);
+  if (job.caption_count) meta.push(`${job.caption_count} ta satr`);
+  else if (job.scene_count) meta.push(`${job.scene_count} sahna`);
 
   // How long since the job last said anything. A provider that accepts a
   // request and never answers used to look exactly like a frozen app, so the
@@ -3742,10 +3793,16 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
       <div class="ready-body">
         <div class="ready-head">
           <h3>${esc(j.title || j.topic || j.id)}</h3>
-          <small>${esc(j.video_format)} · ${clock(j.duration)} · ${j.scene_count || 0} sahna</small>
+          <small>${esc(j.video_format)} · ${clock(j.duration)} · ${
+            j.caption_count ? `${j.caption_count} ta satr` : `${j.scene_count || 0} sahna`}</small>
         </div>
         <div class="acts" style="margin-top:0">
-          <a class="btn primary" href="${esc(j.download_url || j.video_url || '')}" download>Videoni yuklab olish</a>
+          <!-- A subtitled upload has no video of ours to download unless the
+               words were burned in; with "faqat fayl" the deliverable is the
+               subtitle, and a download button pointing at nothing is worse than
+               no button. -->
+          ${j.kind === 'subtitle' && !j.download_url ? '' :
+            `<a class="btn primary" href="${esc(j.download_url || j.video_url || '')}" download>Videoni yuklab olish</a>`}
           <!-- The same cues in the shape you are about to use them in: an editor
                takes .srt, a web player only loads .vtt, and the description box
                wants the words with no timings at all. -->
@@ -3754,6 +3811,11 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
             <a href="/api/jobs/${esc(j.id)}/subtitles.vtt" download>.vtt</a>
             <a href="/api/jobs/${esc(j.id)}/subtitles.txt" download>matn</a>
           </span>
+          <!-- Everything below this line rebuilds the video from its scenes:
+               a new music bed, a cover frame, a Short cut out of it, another
+               format, another language. A subtitled upload has no scenes — the
+               app never made that video — so it is offered none of them. -->
+          ${j.kind === 'subtitle' ? '' : `
           <button class="btn" data-music="${esc(j.id)}" data-track="${esc(j.music_id || '')}"
             data-at="${esc(String(j.music_start || 0))}">${j.music_id ? 'Musiqani almashtirish' : 'Musiqa qo‘shish'}</button>
           <button class="btn" data-thumbs="${esc(j.id)}">Muqova yaratish</button>
@@ -3770,6 +3832,7 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
           <button class="btn" data-repurpose="${esc(j.id)}" data-fmt="${esc(j.video_format)}">Boshqa formatga</button>
           ${j.kind === 'dub' ? '' :
             `<button class="btn" data-translate="${esc(j.id)}" data-lang="${esc(j.language)}">Boshqa tilga</button>`}
+          `}
         </div>
 
         ${j.thumbnails?.length ? `<div class="thumbs">

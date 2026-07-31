@@ -2583,6 +2583,211 @@ def _merge_segments(segments: list[dict], total: float) -> list[dict]:
     return merged
 
 
+# How much speech goes into one pseudo-scene when subtitling a video somebody
+# else made. It is not a scene in any real sense — there is no picture to change
+# — but the caption builder thinks in scenes, and a paragraph of roughly this
+# length is what makes the plain-text transcript readable afterwards.
+SUBTITLE_SCENE_SECONDS = 24.0
+
+
+def _scenes_from_words(words: list[dict], total: float) -> list[dict]:
+    """Group word timings into paragraph-sized blocks, broken at sentence ends.
+
+    The caption builder wants scenes: a run of narration with a start, a length
+    and its words. A video that was uploaded has none, so they are invented here
+    — cut where a sentence ends, near enough to the target length that a block is
+    a paragraph rather than a page.
+    """
+    scenes: list[dict] = []
+    bucket: list[dict] = []
+
+    def flush() -> None:
+        if not bucket:
+            return
+        start = float(bucket[0]["start"])
+        end = float(bucket[-1]["end"])
+        scenes.append({
+            "index": len(scenes),
+            "narration": " ".join(w["text"] for w in bucket).strip(),
+            "start": start,
+            "audio_duration": max(0.4, end - start),
+            # Relative to the block, because `build_captions` adds the start back.
+            "words": [{"text": w["text"], "start": float(w["start"]) - start,
+                       "end": float(w["end"]) - start} for w in bucket],
+        })
+        bucket.clear()
+
+    for word in words:
+        bucket.append(word)
+        spoken = float(bucket[-1]["end"]) - float(bucket[0]["start"])
+        ends_sentence = word["text"].rstrip()[-1:] in ".?!…" if word["text"] else False
+        if spoken >= SUBTITLE_SCENE_SECONDS and ends_sentence:
+            flush()
+        elif spoken >= SUBTITLE_SCENE_SECONDS * 1.8:
+            # No full stop in sight — a transcript without punctuation would
+            # otherwise become one block the length of the video.
+            flush()
+    flush()
+
+    for scene in scenes:
+        scene["audio_duration"] = min(scene["audio_duration"], max(0.4, total - scene["start"]))
+    return scenes
+
+
+def _scenes_from_segments(segments: list[dict]) -> list[dict]:
+    """The same thing from segment timings, when word timings were not on offer.
+
+    Gemini transcribes in segments rather than words. Word times inside the
+    segment are then estimated from its length, which is exactly what the app
+    already does for a voice-over it generated but did not measure.
+    """
+    return [
+        {
+            "index": i,
+            "narration": segment["text"],
+            "start": float(segment["start"]),
+            "audio_duration": max(0.4, float(segment["end"]) - float(segment["start"])),
+            "words": align.estimate_words(
+                segment["text"], max(0.4, float(segment["end"]) - float(segment["start"]))),
+        }
+        for i, segment in enumerate(segments)
+    ]
+
+
+async def run_subtitle(job_id: str) -> None:
+    """Subtitle a video the user already has. No script, no voice, no pictures.
+
+    The whole app is built around making a video from nothing, and this is the
+    other direction: the video exists, and the only thing missing is the words on
+    it. So the stages are listen, cut into lines, and — if asked — draw them on.
+
+    Burning is optional on purpose. A file with the words drawn into the picture
+    is what a repost needs; an `.srt` beside an untouched video is what YouTube
+    and an editor want, and that path never re-encodes the video at all.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    request = job["request"]
+    warnings: list[str] = []
+
+    try:
+        workdir = workdir_for(job_id)
+        source = Path(request["source_video"])
+        if not source.exists():
+            raise PipelineError("Yuklangan video topilmadi.")
+        language = request.get("language", "")
+        burn = bool(request.get("burn_subtitles", True))
+
+        _progress(job_id, "probe", 6, "Videoni o'qiyapman")
+        info = await video.probe_video(source)
+        total = float(info["duration"])
+        width = int(info.get("width") or 1920)
+        height = int(info.get("height") or 1080)
+
+        _progress(job_id, "extract", 12, "Ovoz yo'lini ajratyapman")
+        audio = await video.extract_audio(source, workdir / "source.mp3")
+
+        _progress(job_id, "transcribe", 20,
+                  "Gapirilganini tinglayapman — eng sekin qismi shu")
+        scenes: list[dict] = []
+        if config.has_key("openai"):
+            # Word timings, so a caption changes on the word rather than on the
+            # sentence. Only OpenAI returns them.
+            heard = await align.transcribe_full(audio, language or None)
+            scenes = _scenes_from_words(heard["words"], total)
+        if not scenes:
+            segments = _merge_segments(
+                await align.transcribe_segments(audio, language or None), total)
+            scenes = _scenes_from_segments(segments)
+        if not scenes:
+            raise PipelineError(
+                "Bu videoda nutq eshitilmadi. Transkripsiya uchun OpenAI yoki "
+                "Gemini kaliti kerak — kutubxonadagi «API kalitlari» ga qo'shing.")
+        _ensure_sids(scenes)
+        spoken = sum(len(_tokens(s["narration"])) for s in scenes)
+        _progress(job_id, "transcribe", 46, f"{spoken} ta so'z eshitildi")
+
+        _progress(job_id, "captions", 60, "Satrlarga bo'lyapman")
+        captions = await skills.build_captions(
+            scenes=scenes, language=language or "en", width=width, height=height,
+            # The line-breaker is an AI call per block and it is worth having, but
+            # only when there is a key for it — subtitling somebody's video should
+            # not need one on top of the transcriber.
+            use_ai=config.llm_ready(),
+        )
+        if not captions:
+            raise PipelineError("Subtitr tuzib bo'lmadi — matn bo'sh chiqdi.")
+
+        srt_path = workdir / "subtitles.srt"
+        srt_path.write_text(subs.build_srt(captions), encoding="utf-8")
+
+        out_path: Path | None = None
+        if burn:
+            _progress(job_id, "render", 74,
+                      "Subtitrni videoga yozyapman", status="rendering")
+            ass_path = workdir / "subtitles.ass"
+            subs.write_ass(ass_path, subs.build_ass(
+                captions=captions, width=width, height=height,
+                font=config.subtitle_font(language),
+                style=request.get("caption_style") or request.get("subtitle_style", "bold"),
+                language=language,
+            ))
+            title = _slug(request.get("topic") or source.stem)
+            out_path = await video.burn_onto(
+                video_path=source, subtitle_file=ass_path,
+                out_path=workdir / f"{title}-subtitle.mp4",
+                speed=config.speed_profile(request.get("render_speed")),
+            )
+
+        _progress(job_id, "publish", 92, "Saqlayapman")
+        # Only a video this run actually made is published. Without burning, the
+        # picture is untouched and the file the user would get back is the one
+        # they uploaded a minute ago — so there is nothing to offer, and offering
+        # it anyway would mean a download button that hands you your own upload.
+        video_url = ""
+        if out_path is not None:
+            video_url, upload_warning = await storage.publish(
+                out_path, f"{job_id}/{out_path.name}")
+            await keep_media([{"image_path": str(out_path)}], job_id)
+            if upload_warning:
+                warnings.append(upload_warning)
+        subtitle_url, _ = await storage.publish(srt_path, f"{job_id}/subtitles.srt")
+        await keep_media([{"image_path": str(srt_path)}], job_id)
+
+        store.update_job(
+            job_id, status="done", step="done", progress=100, error="",
+            log=(f"Subtitr tayyor — {len(captions)} ta satr"
+                 + (", videoga yozildi" if burn else ", video o'zgarmadi")),
+            result={
+                "video_url": video_url,
+                **({"download_url": f"/api/jobs/{job_id}/download"} if out_path else {}),
+                "subtitle_url": subtitle_url,
+                # Kept with the job, so .srt, .vtt and .txt all come from one
+                # set of cues and cannot drift apart.
+                "captions": captions,
+                # Deliberately not "scenes". They read the same — narration with
+                # a start and a length — but a scene in this app is something you
+                # can rewrite, re-record and re-draw, and none of that is true
+                # here: there is no picture of ours to change and no voice of
+                # ours to replace. Filed under its own name, the editor leaves
+                # the job alone and the transcript still gets its paragraphs.
+                "blocks": scenes,
+                "duration": round(total, 2),
+                # Lines of subtitle, not scenes. Nothing here was cut into
+                # scenes, and reporting a scene count for a video somebody else
+                # shot would be inventing structure that is not there.
+                "caption_count": len(captions),
+                "title": request.get("topic") or source.stem,
+                "burned": burn,
+                "warnings": warnings,
+            },
+        )
+
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
+        _fail(job_id, exc, warnings)
+
+
 async def run_dub(job_id: str) -> None:
     """Replace a finished video's narration with the same thing in another
     language, leaving the picture untouched."""
