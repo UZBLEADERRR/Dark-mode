@@ -34,6 +34,7 @@ from .models import (
     SceneInsert,
     SceneOrder,
     ScenePatch,
+    ScriptNote,
     ShortCut,
     ShortsAll,
     ShotIn,
@@ -1875,6 +1876,70 @@ async def dub_video(
     })
     _launch(lambda: pipeline.run_dub(job_id), job_id)
     return {"id": job_id, "status": "queued"}
+
+
+# ── the script, before anything is made from it ───────────────────────────────
+
+def _script_stage(job_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """A job waiting at the script gate. Anything else is refused by name."""
+    job = _get_job_or_404(job_id)
+    if job["status"] != "script":
+        raise HTTPException(
+            status_code=409,
+            detail="Bu loyiha matnni ko'rish bosqichida emas "
+                   f"(hozir: {job['status']}).")
+    scenes = (job.get("result") or {}).get("scenes") or []
+    if not scenes:
+        raise HTTPException(status_code=400, detail="Bu loyihada matn yo'q.")
+    return job, scenes
+
+
+@app.post("/api/jobs/{job_id}/script/revise")
+async def revise_script(job_id: str, body: ScriptNote) -> dict[str, Any]:
+    """Rewrite the script to a note, before a picture or a recording exists.
+
+    Synchronous on purpose. This is a conversation with the text in front of you
+    — you say what is wrong, you read what came back, you say the next thing —
+    and a progress bar between the two would break the loop it exists to serve.
+    """
+    job, scenes = _script_stage(job_id)
+    if not config.llm_ready():
+        raise HTTPException(status_code=400, detail="Tuzatish uchun AI kaliti kerak.")
+
+    request = job.get("request") or {}
+    before = [str(s.get("narration") or "") for s in scenes]
+    try:
+        changed, said = await skills.revise_script(
+            scenes=scenes, note=body.note,
+            language=request.get("language", "en"),
+            tone=request.get("tone", ""),
+            title=(job.get("result") or {}).get("title") or request.get("topic", ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - the model's failure, said plainly
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
+
+    store.update_job(job_id, result={"scenes": scenes},
+                     log=f"Matn tuzatildi — {changed} ta sahna o'zgardi: {body.note[:80]}")
+    return {
+        "id": job_id,
+        "changed": changed,
+        "note_back": said,
+        # Which ones moved, so the page can mark them rather than make you read
+        # the whole thing again looking for the difference.
+        "changed_indexes": [s["index"] for s, was in zip(scenes, before)
+                            if str(s.get("narration") or "") != was],
+        "scenes": [pipeline.public_scene(job_id, s) for s in scenes],
+    }
+
+
+@app.post("/api/jobs/{job_id}/script/approve", status_code=202)
+async def approve_script(job_id: str) -> dict[str, Any]:
+    """Agree the script, and let the expensive half begin."""
+    _script_stage(job_id)
+    store.update_job(job_id, status="queued", step="queued", progress=20,
+                     log="Matn tasdiqlandi — ovoz va rasmlar boshlanmoqda")
+    _launch(lambda: pipeline.continue_after_script(job_id), job_id)
+    return {"id": job_id, "status": "queued", "place": queue_place(job_id)}
 
 
 @app.post("/api/jobs/{job_id}/shorts/suggest")

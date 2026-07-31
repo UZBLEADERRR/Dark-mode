@@ -60,11 +60,14 @@ const TRANSITIONS = {
 
 const STATUS = {
   queued: 'navbatda', running: 'ishlayapti', rendering: 'render',
-  review: "ko'rib chiqish", done: 'tayyor', failed: 'xato',
+  script: "matnni o'qish", review: "ko'rib chiqish", done: 'tayyor',
+  failed: 'xato',
 };
 
 const BUSY = ['queued', 'running', 'rendering'];
-const SETTLED = ['done', 'failed', 'review'];
+// `script` settles like the others: the job is waiting for a person, not for a
+// machine, so polling it would only ask the same question every two seconds.
+const SETTLED = ['done', 'failed', 'review', 'script'];
 
 // One click fills the art-style field, which the Imagesmith skill turns into
 // the style bible appended to every scene prompt. The 2D entries say what the
@@ -1422,6 +1425,7 @@ $('#submit-btn').addEventListener('click', async () => {
     brand_logo: $('#brand_logo').checked,
     action: $('#action').value.trim(),
     animate_actors: $('#animate_actors').checked,
+    review_script: $('#review_script').checked,
     auto_render: !$('#review_first').checked,
   };
 
@@ -1512,6 +1516,8 @@ function announce(job) {
 }
 
 function watch(jobId, { reveal = false } = {}) {
+  // Marks belong to one revision of one script, not to the next project opened.
+  SCRIPT_MARK = [];
   state.activeId = jobId;
   remember(jobId);
   // Opening a project is the moment the strip stops being what you want on
@@ -1619,6 +1625,14 @@ function drawStage(job) {
     </div>
     <div class="track ${esc(job.status)}${busy ? ' live' : ''}"><i style="width:${job.progress}%"></i></div>
     <p class="step${busy ? ' busy' : ''}">${esc(meta.join(' · '))}</p>`);
+
+  // Nothing has been drawn or recorded yet — the whole video is still just these
+  // words, which is exactly why this is the moment to read them.
+  if (job.status === 'script') {
+    $('#stage').innerHTML = p.join('');
+    drawScriptReview(job);
+    return;
+  }
 
   // Waiting for a slot is not the same as working, and a render that says
   // "rendering" while it sits behind another one is how the app looked frozen.
@@ -1936,6 +1950,134 @@ async function flush() {
 }
 
 // ── build ─────────────────────────────────────────────────────────
+// ══ the script, before anything is made from it ═══════════════════
+// Every stage after this one costs money — a picture per scene, a recording per
+// line — and all of it is made from these words. So this is the one moment when
+// changing your mind is free, and the panel is built for reading rather than for
+// editing: the lines are the whole page, and the two things you can do about
+// them sit underneath.
+
+function scriptWords(scenes) {
+  const chars = scenes.reduce((n, s) => n + (s.narration || '').length, 0);
+  // Roughly fourteen characters a second read aloud. Not a promise — a sense of
+  // scale, so a script that is twice as long as the video you wanted is obvious
+  // before it is voiced.
+  return { chars, seconds: Math.round(chars / 14) };
+}
+
+// Which lines the last revision touched. Held here rather than passed, because
+// the panel is drawn by `drawStage` — so the note handler marks the lines by
+// leaving a note for the next draw rather than by drawing a second panel on top
+// of the first.
+let SCRIPT_MARK = [];
+
+function drawScriptReview(job) {
+  const scenes = job.scenes || [];
+  const changed = SCRIPT_MARK;
+  const { seconds } = scriptWords(scenes);
+  const marked = new Set(changed);
+
+  const rows = scenes.map((s) => `
+    <div class="line${marked.has(s.index) ? ' changed' : ''}" data-line="${s.index}">
+      <span class="line-no">${s.index + 1}</span>
+      <textarea data-narration="${s.index}" rows="2"
+        aria-label="${s.index + 1}-sahna matni">${esc(s.narration || '')}</textarea>
+    </div>`).join('');
+
+  $('#stage').insertAdjacentHTML('beforeend', `
+    <div class="script-gate">
+      <p class="hint">Hozircha faqat matn — na rasm, na ovoz yaratilgan. O‘qib
+        chiqing: qo‘lda tuzatasiz yoki nimani o‘zgartirish kerakligini aytasiz.
+        Tasdiqlaganingizdan keyin ovoz yoziladi va rasmlar chiziladi.</p>
+      <p class="script-sum">${scenes.length} sahna · ~${clock(seconds)} o‘qishga</p>
+      <div class="script-lines">${rows}</div>
+
+      <label class="f"><span>Nimani tuzatish kerak?</span>
+        <textarea id="script-note" rows="2" maxlength="2000"
+          placeholder="Masalan: 3-sahna quruq chiqibdi, qiziqroq qil. Oxirini kuchaytir."></textarea></label>
+      <div class="script-acts">
+        <button class="btn" id="script-fix">AI tuzatsin</button>
+        <button class="btn primary" id="script-ok">Tasdiqlash va davom etish</button>
+      </div>
+      <p class="note" id="script-said"></p>
+    </div>`);
+
+  // Grown to fit its line. A box that clips its own text is a poor thing to ask
+  // somebody to read carefully, which is the only thing this panel is for.
+  const grow = (box) => {
+    box.style.height = 'auto';
+    box.style.height = `${box.scrollHeight + 2}px`;
+  };
+
+  // A hand edit goes up when you leave the box, so the line you approve is the
+  // line that gets recorded.
+  $$('#stage [data-narration]').forEach((box) => {
+    grow(box);
+    box.addEventListener('input', () => grow(box));
+    box.addEventListener('change', async () => {
+      const index = Number(box.dataset.narration);
+      const text = box.value.trim();
+      if (!text) { box.value = scenes[index]?.narration || ''; return; }
+      try {
+        await api(`/api/jobs/${job.id}/scenes/${index}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ narration: text }),
+        });
+        const scene = scenes.find((x) => x.index === index);
+        if (scene) scene.narration = text;
+        box.closest('.line')?.classList.remove('changed');
+      } catch (e) { toast(e.message); }
+    });
+  });
+
+  $('#script-fix').addEventListener('click', async () => {
+    const note = $('#script-note').value.trim();
+    if (!note) { toast('Nimani tuzatish kerakligini yozing'); return; }
+    const btn = $('#script-fix');
+    btn.disabled = true;
+    btn.textContent = 'Tuzatilyapti…';
+    try {
+      const out = await api(`/api/jobs/${job.id}/script/revise`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note }),
+      });
+      // Redrawn with the changed lines marked, so you can see what it did
+      // without reading the whole thing again.
+      SCRIPT_MARK = out.changed_indexes || [];
+      drawStage({ ...job, scenes: out.scenes });
+      if (out.note_back) $('#script-said').textContent = out.note_back;
+      toast(out.changed
+        ? `${out.changed} ta sahna o‘zgardi`
+        : 'Hech narsa o‘zgarmadi — boshqacha aytib ko‘ring');
+    } catch (e) {
+      toast(e.message);
+      btn.disabled = false;
+      btn.textContent = 'AI tuzatsin';
+    }
+  });
+
+  $('#script-ok').addEventListener('click', async () => {
+    const btn = $('#script-ok');
+    btn.disabled = true;
+    btn.textContent = 'Boshlanmoqda…';
+    try {
+      // Whatever is still focused has not fired its change event yet, and
+      // approving would then record the line you had just finished replacing.
+      document.activeElement?.blur();
+      await new Promise((r) => setTimeout(r, 120));
+      await api(`/api/jobs/${job.id}/script/approve`, { method: 'POST' });
+      watch(job.id);
+      toast('Tasdiqlandi — ovoz va rasmlar boshlandi');
+    } catch (e) {
+      toast(e.message);
+      btn.disabled = false;
+      btn.textContent = 'Tasdiqlash va davom etish';
+    }
+  });
+}
+
 function syncEditor(job) {
   // A render used to take the editor down with it: the moment the status left
   // `review` the whole studio was unmounted, so pressing Render threw away the

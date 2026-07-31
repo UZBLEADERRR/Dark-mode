@@ -1292,89 +1292,150 @@ async def run_draft(job_id: str) -> None:
         store.update_job(job_id, result={"title": script.get("title"),
                                          "scene_count": len(scenes)})
 
-        # --- shot list --------------------------------------------------------
-        # Decided before the prompts, because a scene covered by three pictures
-        # needs three prompts written for it, not one prompt used three times.
-        pace = (request.get("shot_pace") or "steady").lower()
-        if pace != "steady":
-            for scene in scenes:
-                count = shots.wanted_count(len(_tokens(scene["narration"])), pace)
-                scene["shots"] = [shots.blank(j) for j in range(count)] if count > 1 else []
-            _ensure_sids(scenes)
-            extra = sum(len(s["shots"]) for s in scenes if s["shots"])
-            if extra:
-                _progress(job_id, "prompts", 22,
-                          f"{extra} kadr — ba'zi sahnalar bir nechta rasmga bo'lindi")
+        # --- read it before it is paid for ------------------------------------
+        # Everything below this line costs money: a picture for every scene and a
+        # recording for every line. Reading the script first is the one place
+        # where changing your mind is free, so a video that asked for the gate
+        # stops here with nothing on screen but the words.
+        if request.get("review_script"):
+            _save_scenes(job_id, scenes, warnings=warnings)
+            store.update_job(
+                job_id, status="script", step="script", progress=20,
+                result={"title": script.get("title"), "hook": script.get("hook", ""),
+                        "scene_count": len(scenes)},
+                log=f"Matn tayyor — {len(scenes)} sahna. O'qib chiqing, kerak "
+                    "bo'lsa tuzatib, keyin davom eting.")
+            return
 
-        # --- image prompts ---------------------------------------------------
-        _progress(job_id, "prompts", 24, "Designing the look of each scene")
-        prompt_pack = await skills.build_image_prompts(
-            scenes=scenes, art_style=request.get("art_style", "cinematic photorealistic"),
-            video_format=request.get("video_format", "16:9"), heroes=heroes,
-            title=script.get("title", request["topic"]),
-        )
-        scenes = _ensure_sids(prompt_pack["scenes"])
-
-        # --- cartoon staging --------------------------------------------------
-        # Before the prompts are used, not after: the picture that gets drawn for
-        # a staged scene is a background, and asking for one that already has the
-        # characters in it would put every one of them on screen twice.
-        if request.get("animate_actors") and heroes and not cast_voices(
-                [h["id"] for h in heroes]):
-            warnings.append(
-                "Hech bir qahramonga ovoz berilmagan — gaplarni diktor o'qiydi. "
-                "Kutubxona → Herolar da har biriga ovoz bering.")
-        if request.get("animate_actors") and heroes:
-            warnings += await stage_cartoon(
-                job_id, scenes, heroes, workdir=workdir, provider=image_provider,
-                action=request.get("action") or "", language=language,
-                video_format=request.get("video_format", "16:9"),
-            )
-        # Whatever the Imagesmith returned, every shot ends up with a prompt of
-        # its own. A model that answers per scene rather than per shot would
-        # otherwise draw the same still two or three times and the cuts would
-        # be invisible.
-        for scene in scenes:
-            shots.backfill_prompts(scene)
-        _apply_brand(scenes, request, script.get("hook", ""))
-
-        # --- voice ------------------------------------------------------------
-        if not uploaded_audio:
-            _progress(job_id, "voice", 26, "Recording the voice-over")
-            warnings += await _voice_scenes(
-                scenes=scenes, targets=scenes, workdir=workdir, provider=tts_provider,
-                voice_id=request.get("voice_id"), language=language, job_id=job_id,
-                strict=False,
-            )
-            # Saved before the pictures start, so a failure during the images
-            # cannot cost the voice-over that has already been paid for.
-            _save_scenes(job_id, scenes)
-            _kept_note(job_id, scenes, await keep_media(scenes, job_id))
-
-        # --- images -----------------------------------------------------------
-        # Only the first draw of a planned video takes the batch road. A picture
-        # redrawn later is one somebody is sitting waiting for.
-        _progress(job_id, "images", 48, "Generating scene images")
-        warnings += await _render_images(
-            scenes=scenes, targets=scenes, workdir=workdir, hero_paths=hero_paths,
-            provider=image_provider, aspect=fmt["aspect"], size=(width, height), job_id=job_id,
-            batch_wanted=bool(request.get("batch")),
-            batch_patience_minutes=float(request.get("batch_patience_minutes") or 0),
-        )
-
-        _save_scenes(job_id, scenes, style_bible=prompt_pack.get("style_bible"),
-                     warnings=warnings)
-        _kept_note(job_id, scenes, await keep_media(scenes, job_id))
-
-        if request.get("auto_render", True):
-            await run_render(job_id)
-        else:
-            _progress(job_id, "review", 72,
-                      "Draft ready — review or edit the scenes, then render",
-                      status="review")
+        await _build_from_script(job_id, scenes, script, warnings)
 
     except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
         _fail(job_id, exc, warnings)
+
+
+async def continue_after_script(job_id: str) -> None:
+    """Carry on from a script you have read: prompts, voice, pictures, render.
+
+    The second half of `run_draft`, split out rather than re-entered — re-running
+    the draft would write the script a second time, and the whole point of the
+    gate is that the words you approved are the words that get made.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    warnings: list[str] = list((job.get("result") or {}).get("warnings") or [])
+    try:
+        scenes = _load_scenes(job)
+        if not scenes:
+            raise PipelineError("Bu loyihada matn yo'q.")
+        result = job.get("result") or {}
+        script = {
+            "title": result.get("title") or job["request"].get("topic", ""),
+            "hook": result.get("hook", ""),
+            "scenes": scenes,
+        }
+        await _build_from_script(job_id, scenes, script, warnings)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
+        _fail(job_id, exc, warnings)
+
+
+async def _build_from_script(job_id: str, scenes: list[dict], script: dict,
+                             warnings: list[str]) -> None:
+    """Turn an agreed script into a video: prompts, voice, pictures, render."""
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    request = job["request"]
+    workdir = workdir_for(job_id)
+    fmt = config.FORMATS.get(request.get("video_format", "16:9"), config.FORMATS["16:9"])
+    width, height = fmt["width"], fmt["height"]
+    language = request.get("language", "en")
+    heroes = store.get_heroes(request.get("hero_ids") or [])
+    hero_paths = _materialize_heroes(workdir, [h["id"] for h in heroes])
+    image_provider = (request.get("image_provider") or config.IMAGE_PROVIDER).lower()
+    uploaded_audio = request.get("narration_audio")
+    tts_provider = (request.get("tts_provider") or config.TTS_PROVIDER).lower()
+
+    # --- shot list --------------------------------------------------------
+    # Decided before the prompts, because a scene covered by three pictures
+    # needs three prompts written for it, not one prompt used three times.
+    pace = (request.get("shot_pace") or "steady").lower()
+    if pace != "steady":
+        for scene in scenes:
+            count = shots.wanted_count(len(_tokens(scene["narration"])), pace)
+            scene["shots"] = [shots.blank(j) for j in range(count)] if count > 1 else []
+        _ensure_sids(scenes)
+        extra = sum(len(s["shots"]) for s in scenes if s["shots"])
+        if extra:
+            _progress(job_id, "prompts", 22,
+                      f"{extra} kadr — ba'zi sahnalar bir nechta rasmga bo'lindi")
+
+    # --- image prompts ---------------------------------------------------
+    _progress(job_id, "prompts", 24, "Designing the look of each scene")
+    prompt_pack = await skills.build_image_prompts(
+        scenes=scenes, art_style=request.get("art_style", "cinematic photorealistic"),
+        video_format=request.get("video_format", "16:9"), heroes=heroes,
+        title=script.get("title", request["topic"]),
+    )
+    scenes = _ensure_sids(prompt_pack["scenes"])
+
+    # --- cartoon staging --------------------------------------------------
+    # Before the prompts are used, not after: the picture that gets drawn for
+    # a staged scene is a background, and asking for one that already has the
+    # characters in it would put every one of them on screen twice.
+    if request.get("animate_actors") and heroes and not cast_voices(
+            [h["id"] for h in heroes]):
+        warnings.append(
+            "Hech bir qahramonga ovoz berilmagan — gaplarni diktor o'qiydi. "
+            "Kutubxona → Herolar da har biriga ovoz bering.")
+    if request.get("animate_actors") and heroes:
+        warnings += await stage_cartoon(
+            job_id, scenes, heroes, workdir=workdir, provider=image_provider,
+            action=request.get("action") or "", language=language,
+            video_format=request.get("video_format", "16:9"),
+        )
+    # Whatever the Imagesmith returned, every shot ends up with a prompt of
+    # its own. A model that answers per scene rather than per shot would
+    # otherwise draw the same still two or three times and the cuts would
+    # be invisible.
+    for scene in scenes:
+        shots.backfill_prompts(scene)
+    _apply_brand(scenes, request, script.get("hook", ""))
+
+    # --- voice ------------------------------------------------------------
+    if not uploaded_audio:
+        _progress(job_id, "voice", 26, "Recording the voice-over")
+        warnings += await _voice_scenes(
+            scenes=scenes, targets=scenes, workdir=workdir, provider=tts_provider,
+            voice_id=request.get("voice_id"), language=language, job_id=job_id,
+            strict=False,
+        )
+        # Saved before the pictures start, so a failure during the images
+        # cannot cost the voice-over that has already been paid for.
+        _save_scenes(job_id, scenes)
+        _kept_note(job_id, scenes, await keep_media(scenes, job_id))
+
+    # --- images -----------------------------------------------------------
+    # Only the first draw of a planned video takes the batch road. A picture
+    # redrawn later is one somebody is sitting waiting for.
+    _progress(job_id, "images", 48, "Generating scene images")
+    warnings += await _render_images(
+        scenes=scenes, targets=scenes, workdir=workdir, hero_paths=hero_paths,
+        provider=image_provider, aspect=fmt["aspect"], size=(width, height), job_id=job_id,
+        batch_wanted=bool(request.get("batch")),
+        batch_patience_minutes=float(request.get("batch_patience_minutes") or 0),
+    )
+
+    _save_scenes(job_id, scenes, style_bible=prompt_pack.get("style_bible"),
+                 warnings=warnings)
+    _kept_note(job_id, scenes, await keep_media(scenes, job_id))
+
+    if request.get("auto_render", True):
+        await run_render(job_id)
+    else:
+        _progress(job_id, "review", 72,
+                  "Draft ready — review or edit the scenes, then render",
+                  status="review")
 
 
 # ── stage 2: render ───────────────────────────────────────────────────────────
