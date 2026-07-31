@@ -13,14 +13,35 @@ ilova ularni navbat bilan ishlatadi va limitga urilganda kutmaydi —
 ## Nima qiladi
 
 ```
-Mavzu ─▶ director ─▶ imagesmith ─▶ ovoz ─▶ rasmlar ─▶  ✋ KO'RIB CHIQISH
-        (skript)     (promptlar)   (TTS)    (AI)         (tahrirlash)
-                                                              │
-                     MP4 ◀── render ◀── Ken Burns ◀───────────┘
-                             (ffmpeg)   zoom / pan
+Mavzu ─▶ director ─▶ ✋ MATNNI O'QISH ─▶ imagesmith ─▶ ovoz ─▶ rasmlar
+        (skript)    (hali hech narsa      (promptlar)   (TTS)    (AI)
+                     yaratilmagan)                                 │
+                                                                   ▼
+                     MP4 ◀── render ◀── Ken Burns ◀── ✋ KO'RIB CHIQISH
+                             (ffmpeg)   zoom / pan      (tahrirlash)
 ```
 
-Qoralama tayyor bo'lgach ilova to'xtaydi va sahnalarni ko'rsatadi. Istalgan
+## Matnni avval o'qish
+
+Video ikki joyda to'xtaydi, va ular **har xil narxda** to'xtaydi.
+
+**Birinchi to'xtash — matn.** «Avval matnni o'qib chiqaman» belgilansa (standart
+holatda yoqiq), ilova skript yozilgan zahoti to'xtaydi: **hali na bitta ovoz
+yozilgan, na bitta rasm chizilgan.** Ya'ni bu — fikringizni o'zgartirish
+**bepul** bo'lgan yagona payt.
+
+Bu yerda ikki narsa qila olasiz:
+
+- **Qo'lda tuzatish** — har bir qatorni to'g'ridan-to'g'ri yozasiz.
+- **AI'ga aytish** — «3-sahna quruq chiqibdi, qiziqroq qil», «oxirini kuchaytir».
+  AI faqat aytilganini o'zgartiradi, qolgan qatorlar **harfma-harf o'z holicha
+  qoladi** — va qaysi qator o'zgargani belgilanib ko'rsatiladi, butun matnni
+  qaytadan o'qib chiqmasligingiz uchun.
+
+«Tasdiqlash va davom etish» bosilgandan keyingina ovoz yoziladi va rasm
+chiziladi — ya'ni **siz tasdiqlagan matn** ovozga aylanadi.
+
+**Ikkinchi to'xtash — qoralama.** Qoralama tayyor bo'lgach ilova to'xtaydi va sahnalarni ko'rsatadi. Istalgan
 sahnaning matnini, rasm promptini, kamera harakatini yoki ekran yozuvini
 o'zgartirasiz, kerak bo'lsa faqat o'sha sahnaning rasmini/ovozini qayta
 yaratasiz — butun video qaytadan hisoblanmaydi. Keyin **Render** bosasiz.
@@ -158,6 +179,7 @@ YOUTUBE_CLIENT_SECRET=...
 | `publisher` | YouTube sarlavha, tavsif, teglar, chapterlar, thumbnail prompt |
 | `strategist` | Kanallaringizni o'qiydi, g'oya beradi va videoni o'zi boshlaydi |
 | `shorts` | Uzun videoning ichidan alohida ishlaydigan Shorts bo'laklarini topadi |
+| `rewriter` | Matnni siz aytgan izohga qarab qayta yozadi — hech narsa yaratilishidan oldin |
 
 Reja va joylashtirish skill emas — `planner` moduli: u vaqtni kuzatib turadi va
 har bir rejani bir holatdan ikkinchisiga o'tkazadi.
@@ -777,6 +799,8 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `DELETE /api/jobs/{id}/scenes/{i}` | Sahnani o'chirish |
 | `POST /api/jobs/{id}/scenes/order` | Tartibni o'zgartirish |
 | `POST /api/jobs/{id}/scenes/{i}/regenerate` | Sahnani qayta yaratish; ovoz, ovoz oralig'i yoki **til** |
+| `POST /api/jobs/{id}/script/revise` | Matnni izohga qarab qayta yozdirish (hali hech narsa yaratilmagan) |
+| `POST /api/jobs/{id}/script/approve` | Matnni tasdiqlash — ovoz va rasmlar shundan keyin boshlanadi |
 | `POST /api/jobs/{id}/thumbnails` | Uchta muqova varianti |
 | `POST /api/jobs/{id}/shorts/suggest` | Uzun videoning ichidan Shorts bo'laklarini topish |
 | `POST /api/jobs/{id}/shorts` | Tanlangan sahnalarni alohida Short qilib kesish |

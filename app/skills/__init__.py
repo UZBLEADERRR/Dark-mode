@@ -9,6 +9,7 @@
     translator -> re-voices a script in another language, to the same length
     strategist -> reads your own channels and talks you from an idea to a video
     shorts     -> finds the Shorts already inside a long video
+    rewriter   -> revises a script to a note, before anything is made from it
 """
 
 from .director import (
@@ -17,6 +18,7 @@ from .director import (
     segment_written_script,
 )
 from .choreographer import stage_scenes
+from .rewriter import revise_script
 from .shorts import suggest_shorts
 from .imagesmith import build_image_prompts
 from .publisher import build_publish_pack
@@ -36,4 +38,5 @@ __all__ = [
     "chat",
     "read_profile",
     "suggest_shorts",
+    "revise_script",
 ]

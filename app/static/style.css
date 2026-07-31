@@ -1244,6 +1244,45 @@ input[type="range"]::-moz-range-thumb {
 .model-acts .saver { text-align: left; }
 #models-note { margin: 0; }
 
+/* ── the script, before anything is made from it ───────────────── */
+/* Built for reading. The lines are the page; the two things you can do about
+   them sit underneath, out of the way of the thing being judged. */
+.script-gate { display: grid; gap: 12px; margin-top: 14px; min-width: 0; }
+.script-sum {
+  margin: 0; font-size: .78rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.script-lines { display: grid; gap: 8px; min-width: 0; }
+.script-lines .line {
+  display: grid; grid-template-columns: 26px 1fr; gap: 9px;
+  align-items: start; min-width: 0;
+}
+.script-lines .line-no {
+  padding-top: 11px;
+  font-size: .72rem; color: var(--faint);
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.script-lines textarea {
+  width: 100%; min-width: 0; resize: none; overflow: hidden;
+  padding: 10px 12px; min-height: 44px;
+  font: inherit; font-size: .88rem; line-height: 1.5;
+  color: var(--text); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.script-lines textarea:focus {
+  outline: none; border-color: var(--line-2); background: var(--raised);
+}
+/* What the model just changed. Marked rather than announced, so a note that
+   touched two lines does not make you re-read the other eight. */
+.script-lines .line.changed textarea {
+  border-color: rgba(61, 220, 145, .45);
+  background: rgba(61, 220, 145, .05);
+}
+.script-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.script-acts .btn { width: 100%; justify-content: center; text-align: center; }
+@media (max-width: 380px) { .script-acts { grid-template-columns: 1fr; } }
+#script-said:empty { display: none; }
+
 /* ── subtitles and Shorts ──────────────────────────────────────── */
 /* Three formats of one thing, so they read as one control rather than three
    more buttons competing with "download the video". */

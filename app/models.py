@@ -184,6 +184,9 @@ class CreateJobRequest(BaseModel):
     # Cartoon mode: characters are cut out of their backgrounds and walked
     # across them, and the agents decide who moves where in each scene.
     animate_actors: bool = False
+    # Stop as soon as the script is written, before a single picture is drawn or
+    # a single line recorded — the one moment when changing your mind is free.
+    review_script: bool = False
     # False stops after the draft so scenes can be reviewed and edited first.
     auto_render: bool = True
     # Take the cheap, slow road: the provider's batch API instead of one request
@@ -404,6 +407,12 @@ class ShortCut(BaseModel):
     # into the taller frame, which is right until the subject sits near an edge.
     regenerate_images: bool = False
     render: bool = True
+
+
+class ScriptNote(BaseModel):
+    """What to fix in a script, in your own words."""
+
+    note: str = Field(min_length=2, max_length=2000)
 
 
 class ShortsAll(BaseModel):
