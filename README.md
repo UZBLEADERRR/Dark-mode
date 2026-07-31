@@ -549,7 +549,16 @@ uchun eng muhim uch soniya.
 
 ## Tarjima
 
-Ikki xil yo'l bor.
+Uch xil yo'l bor.
+
+**Shu videoning o'zini boshqa tilga o'tkazish.** Tahrirlash bo'limida
+**«Ovozni qayta yozish»** oynasida endi **til** ham tanlanadi. Tanlasangiz matn
+o'sha tilga o'giriladi va **butun video** qayta o'qiladi — oraliq tanlab
+bo'lmaydi, chunki o'rtasida tili o'zgaradigan video nuqson. **Subtitr ham o'sha
+tilda** bo'ladi: u matndan yoziladi, ya'ni alohida qadam kerak emas.
+
+Bu nusxa olmaydi — o'sha loyihaning o'zi o'zgaradi. Ikkala til ham kerak bo'lsa
+quyidagi «Boshqa tilga» dan foydalaning.
 
 **Bitta videodan bir necha til.** «Tayyor» bo'limida **Boshqa tilga** tugmasi:
 matn tarjima qilinib, tanlagan ovozingizda qaytadan o'qiladi. Rasmlar,
@@ -613,6 +622,13 @@ tugallangan bo'laklar tanlanadi. Har taklif yonida: **nechchi soniya**, nechta
 sahna, taklif qilingan **sarlavha**, ekranga chiqadigan **hook** va *nega* aynan
 shu bo'lak alohida ishlashi. Uzunlik taxmin emas — yozilgan ovozdan hisoblanadi,
 ya'ni kesishdan **oldin** bilasiz.
+
+**Hammasini bir bosishda.** «Hammasini kesib ber» — videoda nechta mustaqil
+bo'lak bo'lsa, shuncha Short. Beshtami, o'ntami — oldindan aytish shart emas,
+model videoda tugagan joyda to'xtaydi. Har biri alohida loyiha bo'lib navbatga
+qo'yiladi, ya'ni bir vaqtda emas, ketma-ket render bo'ladi. Vertikal kadr uchun
+rasmlarni qayta chizish bu yerda **standart holatda yoqiq**: hech kim qarab
+turmagan yo'lda, chetda qolgan narsani sezadigan odam yo'q.
 
 **O'zingiz ham kesasiz.** Qaysi sahnadan qaysi sahnagacha — tanlaysiz, uzunligi
 darrov ko'rinadi (60 soniyadan oshsa ogohlantiradi). Teskari tanlansa o'zi
@@ -740,10 +756,11 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs/{id}/scenes` | Yangi sahna qo'shish (prompt + ovoz + rasm) |
 | `DELETE /api/jobs/{id}/scenes/{i}` | Sahnani o'chirish |
 | `POST /api/jobs/{id}/scenes/order` | Tartibni o'zgartirish |
-| `POST /api/jobs/{id}/scenes/{i}/regenerate` | Faqat o'sha sahnani qayta yaratish |
+| `POST /api/jobs/{id}/scenes/{i}/regenerate` | Sahnani qayta yaratish; ovoz, ovoz oralig'i yoki **til** |
 | `POST /api/jobs/{id}/thumbnails` | Uchta muqova varianti |
 | `POST /api/jobs/{id}/shorts/suggest` | Uzun videoning ichidan Shorts bo'laklarini topish |
 | `POST /api/jobs/{id}/shorts` | Tanlangan sahnalarni alohida Short qilib kesish |
+| `POST /api/jobs/{id}/shorts/all` | Videodagi hamma Shortsni topib, hammasini kesish |
 | `POST /api/jobs/{id}/repurpose` | Boshqa formatga nusxa olish |
 | `POST /api/jobs/{id}/translate` | Boshqa tilga nusxa olish |
 | `POST /api/dub` | Tayyor videoni dublyaj qilish |

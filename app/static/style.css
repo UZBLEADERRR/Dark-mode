@@ -1260,8 +1260,13 @@ input[type="range"]::-moz-range-thumb {
 
 /* The button and the sentence explaining it are one block, stacked: side by side
    the sentence wrapped into the button's gutter and read as its label. */
-#short-ai { display: grid; justify-items: start; gap: 7px; margin-bottom: 4px; }
+#short-ai { display: grid; justify-items: start; gap: 8px; margin-bottom: 4px; }
 #short-ai .note { margin: 0; }
+/* Two ways in, side by side and equal width, because they are alternatives
+   rather than a step and its confirmation. */
+.short-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; width: 100%; }
+.short-acts .btn { width: 100%; justify-content: center; text-align: center; }
+@media (max-width: 380px) { .short-acts { grid-template-columns: 1fr; } }
 
 .short-pick {
   display: grid; gap: 4px; min-width: 0;

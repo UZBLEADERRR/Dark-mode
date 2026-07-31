@@ -3035,6 +3035,10 @@ function drawScenePanel() {
           </div>
           <small id="revoice-hint"></small>
         </div>
+        <label class="f"><span>Til</span>
+          <select name="language" id="revoice-lang">${(state.health?.languages || [])
+            .map((l) => `<option value="${esc(l.id)}"${l.id === ED.job.language ? ' selected' : ''}>${esc(l.label)}</option>`).join('')}
+          </select></label>
         <div class="f"><span>Qaysi sahnalar</span>
           <select name="scope" id="revoice-scope">
             <option value="one">Faqat shu sahna (${s.index + 1})</option>
@@ -3052,14 +3056,28 @@ function drawScenePanel() {
         <small class="note">Ovoz butun videoga tegishli — o‘zgartirsangiz qolgan
           sahnalar ham render paytida qayta yoziladi. Oraliq tanlasangiz faqat
           o‘shalari hozir qayta yoziladi, ya‘ni yaxshi chiqqanlari uchun
-          ikkinchi marta to‘lanmaydi.</small>`,
+          ikkinchi marta to‘lanmaydi.</small>
+        <small class="note hidden" id="revoice-lang-note">Til o‘zgarsa matn shu
+          tilga o‘giriladi va <b>butun video</b> qayta o‘qiladi — oraliq
+          ishlamaydi. Subtitr ham o‘sha tilda bo‘ladi.</small>`,
       onOpen: () => {
         fillRevoice(current, ED.job.voice_id || '');
         // The two number boxes only mean anything when a range is what is wanted.
         const scope = $('#revoice-scope');
         const range = $('#revoice-range');
-        const sync = () => range.classList.toggle('hidden', scope.value !== 'range');
+        const lang = $('#revoice-lang');
+        const sync = () => {
+          // A language change rewrites every line, so a range would be a promise
+          // the app cannot keep. Say so, and take the choice away rather than
+          // accepting it and quietly doing something else.
+          const switching = lang.value !== ED.job.language;
+          $('#revoice-lang-note').classList.toggle('hidden', !switching);
+          if (switching) scope.value = 'all';
+          scope.disabled = switching;
+          range.classList.toggle('hidden', switching || scope.value !== 'range');
+        };
         scope.addEventListener('change', sync);
+        lang.addEventListener('change', sync);
         sync();
       },
     });
@@ -3069,15 +3087,18 @@ function drawScenePanel() {
     // because that is what a scene index is.
     const from = Math.max(1, Number(answer.from_scene) || 1) - 1;
     const to = Math.max(1, Number(answer.to_scene) || ED.scenes.length) - 1;
+    const switching = answer.language && answer.language !== ED.job.language;
     regen({
       image: false,
       voice: true,
       tts_provider: answer.tts_provider || null,
       voice_id: answer.voice_id || null,
-      all_scenes: scope === 'all',
-      from_index: scope === 'range' ? Math.min(from, to) : null,
-      to_index: scope === 'range' ? Math.max(from, to) : null,
+      language: switching ? answer.language : null,
+      all_scenes: switching || scope === 'all',
+      from_index: !switching && scope === 'range' ? Math.min(from, to) : null,
+      to_index: !switching && scope === 'range' ? Math.max(from, to) : null,
     });
+    if (switching) toast('Matn tarjima qilinib, butun video qayta o‘qiladi');
   });
   $('[data-a="upload"] input', host).addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -4410,9 +4431,18 @@ async function cutShorts(job) {
     ok: 'Kesib olish',
     html: `
       <div id="short-ai">
-        <button type="button" class="btn" id="short-ask">AI mos joylarni topsin</button>
-        <small class="note">Har bir taklif — tugallangan fikr, boshidan tushunarli.
-          Uzunligi taxmin emas: yozilgan ovozdan hisoblanadi.</small>
+        <div class="short-acts">
+          <button type="button" class="btn" id="short-ask">AI mos joylarni topsin</button>
+          <button type="button" class="btn primary" id="short-all">Hammasini kesib ber</button>
+        </div>
+        <!-- One toggle for both ways in. Two of them, worded the same and set
+             differently, is a question asked twice with two answers on screen. -->
+        <label class="sw"><input type="checkbox" name="regenerate_images"
+          id="short-all-redraw" checked /><i></i>
+          <span>Rasmlarni vertikal kadr uchun qayta yaratish</span></label>
+        <small class="note">«Hammasini» — videoda nechta mustaqil bo'lak bo'lsa,
+          shuncha Short. Beshtami, o'ntami — o'zi hal qiladi. Har biri alohida
+          loyiha bo'lib navbatga qo'yiladi.</small>
       </div>
       <div id="short-list"></div>
       <hr class="rule" />
@@ -4423,8 +4453,6 @@ async function cutShorts(job) {
         <select name="to_index">${scenes.map(option).join('')}</select></label>
       <label class="f"><span>Nomi</span>
         <input name="title" maxlength="100" placeholder="Short nomi" /></label>
-      <label class="sw"><input type="checkbox" name="regenerate_images" /><i></i>
-        <span>Rasmlarni vertikal kadr uchun qayta yaratish</span></label>
       <p class="short-len" id="short-len"></p>`,
     onOpen: () => {
       const from = $('#modal-body [name="from_index"]');
@@ -4447,6 +4475,32 @@ async function cutShorts(job) {
       from.addEventListener('change', measure);
       to.addEventListener('change', measure);
       measure();
+
+      $('#short-all').addEventListener('click', async () => {
+        const btn = $('#short-all');
+        btn.disabled = true;
+        btn.textContent = 'Kesilyapti…';
+        try {
+          const out = await api(`/api/jobs/${job.id}/shorts/all`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              regenerate_images: $('#short-all-redraw').checked,
+              video_format: '9:16',
+            }),
+          });
+          // Closed with no value: the cutting is done, so the manual picker
+          // below would only be a second, contradictory instruction.
+          closeModal(null);
+          await loadJobs();
+          go('ready');
+          toast(`${out.count} ta Short kesildi — navbatda render bo'lyapti`);
+        } catch (e) {
+          $('#short-list').innerHTML = `<p class="msg err">${esc(e.message)}</p>`;
+          btn.disabled = false;
+          btn.textContent = 'Hammasini kesib ber';
+        }
+      });
 
       $('#short-ask').addEventListener('click', async () => {
         const btn = $('#short-ask');
@@ -4471,7 +4525,7 @@ async function cutShorts(job) {
               from_index: card.dataset.from,
               to_index: card.dataset.to,
               title: card.querySelector('b').textContent,
-              regenerate_images: false,
+              regenerate_images: $('#short-all-redraw').checked,
             });
           }));
         } catch (e) {

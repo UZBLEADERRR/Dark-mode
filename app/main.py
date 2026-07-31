@@ -35,6 +35,7 @@ from .models import (
     SceneOrder,
     ScenePatch,
     ShortCut,
+    ShortsAll,
     ShotIn,
     TranslateRequest,
 )
@@ -1573,10 +1574,27 @@ async def regenerate_scene(job_id: str, index: int, body: RegenerateRequest) -> 
     job, scenes = _editable_job(job_id)
     if not any(s["index"] == index for s in scenes):
         raise HTTPException(status_code=404, detail=f"Scene {index} does not exist.")
-    if not (body.image or body.voice):
+    if not (body.image or body.voice or body.language):
         raise HTTPException(status_code=400, detail="Nothing to regenerate.")
 
     redo_voice = body.voice and not job["request"].get("narration_audio")
+
+    # Changing the language is a re-record of the whole video, whatever else was
+    # asked for: the words all change, so every one of them has to be read again.
+    switching = (body.language or "").strip()
+    if switching:
+        if switching not in config.LANGUAGES:
+            raise HTTPException(status_code=400,
+                                detail=f"'{switching}' tili qo'llab-quvvatlanmaydi.")
+        if job["request"].get("narration_audio"):
+            raise HTTPException(
+                status_code=400,
+                detail="Bu videoda o'z audiongiz ishlatilgan — tilini o'zgartirib bo'lmaydi.")
+        if not config.llm_ready():
+            raise HTTPException(status_code=400,
+                                detail="Tarjima uchun AI kaliti kerak.")
+        if switching == job["request"].get("language"):
+            switching = ""
 
     # Re-recording is exactly when you notice the voice was wrong, so it can be
     # changed here. It applies to the whole video — a narrator who changes
@@ -1627,9 +1645,14 @@ async def regenerate_scene(job_id: str, index: int, body: RegenerateRequest) -> 
 
     store.update_job(job_id, status="running", step="regenerate", progress=10)
     _launch(lambda: pipeline.regenerate_scene(
-        job_id, index, redo_image=body.image, redo_voice=redo_voice,
-        redo_all_voices=body.all_scenes, voice_range=span), job_id)
-    return {"id": job_id, "status": "running", "voice_range": span}
+        job_id, index, redo_image=body.image,
+        redo_voice=redo_voice or bool(switching),
+        redo_all_voices=body.all_scenes or bool(switching),
+        voice_range=None if switching else span,
+        language=switching or None), job_id)
+    return {"id": job_id, "status": "running",
+            "voice_range": None if switching else span,
+            "language": switching or job["request"].get("language", "")}
 
 
 @app.post("/api/jobs/{job_id}/scenes/{index}/image")
@@ -1871,6 +1894,59 @@ async def suggest_shorts(job_id: str, count: int = 3) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - the model's failure, said plainly
         raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
     return {"shorts": found, "max_seconds": pipeline.SHORT_MAX_SECONDS}
+
+
+@app.post("/api/jobs/{job_id}/shorts/all", status_code=201)
+async def make_every_short(job_id: str, body: ShortsAll) -> dict[str, Any]:
+    """Find every Short in this video and cut all of them.
+
+    However many there are — five or ten makes no difference to the asking, and
+    the model is told to stop when the video stops holding stretches that stand
+    alone rather than to reach a number. Cutting is cheap: the pictures and the
+    voice already exist, so what this spends is render time, and the renders
+    queue rather than running at once.
+    """
+    job = _get_job_or_404(job_id)
+    if not config.llm_ready():
+        raise HTTPException(status_code=400, detail="Tavsiya uchun AI kaliti kerak.")
+    scenes = (job.get("result") or {}).get("scenes") or []
+    if len(scenes) < 2:
+        raise HTTPException(status_code=400, detail="Bu video bo'linish uchun juda qisqa.")
+
+    try:
+        found = await pipeline.shorts_for(job_id, count=body.limit)
+    except pipeline.PipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - the model's failure, said plainly
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
+
+    if not found:
+        raise HTTPException(
+            status_code=400,
+            detail="Bu videodan alohida ishlaydigan bo'lak topilmadi — "
+                   "o'zingiz tanlab kesib ko'ring.")
+
+    made: list[dict[str, Any]] = []
+    failed: list[str] = []
+    for pick in found:
+        try:
+            short_id = await pipeline.cut_short(
+                job_id, pick["from_index"], pick["to_index"], title=pick.get("title", ""),
+                video_format=body.video_format, regenerate_images=body.regenerate_images)
+        except pipeline.PipelineError as exc:
+            # One bad range must not cost you the other four.
+            failed.append(f"{pick['from_index'] + 1}–{pick['to_index'] + 1}: {exc}")
+            continue
+        if short_id is None:
+            continue
+        made.append({**pick, "id": short_id})
+        if body.render:
+            _launch(lambda sid=short_id: pipeline.run_render(sid, may_rebuild=True), short_id)
+
+    if not made:
+        raise HTTPException(status_code=400,
+                            detail="; ".join(failed) or "Hech narsa kesilmadi.")
+    return {"shorts": made, "count": len(made), "skipped": failed}
 
 
 @app.post("/api/jobs/{job_id}/shorts", status_code=201)
