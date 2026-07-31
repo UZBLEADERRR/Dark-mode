@@ -186,7 +186,14 @@ class CreateJobRequest(BaseModel):
     animate_actors: bool = False
     # Stop as soon as the script is written, before a single picture is drawn or
     # a single line recorded — the one moment when changing your mind is free.
-    review_script: bool = False
+    #
+    # On by default, because off by default meant it was only ever on for the one
+    # caller that remembered to ask: the create form set it, and a video started
+    # from the chat, or from a scheduled plan, silently went all the way through
+    # to a render nobody had read. A default that only holds for the path it was
+    # written on is not a default. The one place it is deliberately turned off is
+    # a planned video, which has nobody watching to approve it.
+    review_script: bool = True
     # False stops after the draft so scenes can be reviewed and edited first.
     auto_render: bool = True
     # Take the cheap, slow road: the provider's batch API instead of one request
