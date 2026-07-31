@@ -2097,6 +2097,15 @@ async def subtitles(job_id: str, kind: str) -> Response:
     if not captions and not scenes:
         raise HTTPException(status_code=404,
                             detail="Bu videoda hali subtitr yo'q — avval render qiling.")
+    # A timed format with no timings is an empty file, and an empty file that
+    # downloads with a 200 looks like a working feature until you open it. The
+    # words exist before the timings do — that is what the script stage *is* —
+    # so the text is offered and the other two say why they cannot be.
+    if not captions and kind in ("srt", "vtt"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Vaqtlar hali hisoblanmagan — .{kind} render qilingandan "
+                   "keyin tayyor bo'ladi. Hozir matnni .txt sifatida olsangiz bo'ladi.")
 
     if kind == "srt":
         body = subs.build_srt(captions)

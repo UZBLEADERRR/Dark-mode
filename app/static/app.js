@@ -1989,7 +1989,13 @@ function drawScriptReview(job) {
       <p class="hint">Hozircha faqat matn — na rasm, na ovoz yaratilgan. O‘qib
         chiqing: qo‘lda tuzatasiz yoki nimani o‘zgartirish kerakligini aytasiz.
         Tasdiqlaganingizdan keyin ovoz yoziladi va rasmlar chiziladi.</p>
-      <p class="script-sum">${scenes.length} sahna · ~${clock(seconds)} o‘qishga</p>
+      <div class="script-top">
+        <p class="script-sum">${scenes.length} sahna · ~${clock(seconds)} o‘qishga</p>
+        <!-- Reading a long script is easier somewhere else — on paper, in a
+             document, with somebody who is not looking at this phone. -->
+        <a class="btn sm" href="/api/jobs/${esc(job.id)}/subtitles.txt"
+           download>Matnni yuklab olish</a>
+      </div>
       <div class="script-lines">${rows}</div>
 
       <label class="f"><span>Nimani tuzatish kerak?</span>

@@ -1248,10 +1248,15 @@ input[type="range"]::-moz-range-thumb {
 /* Built for reading. The lines are the page; the two things you can do about
    them sit underneath, out of the way of the thing being judged. */
 .script-gate { display: grid; gap: 12px; margin-top: 14px; min-width: 0; }
+.script-top {
+  display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: 8px; min-width: 0;
+}
 .script-sum {
   margin: 0; font-size: .78rem; color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.btn.sm { padding: 6px 12px; font-size: .76rem; }
 .script-lines { display: grid; gap: 8px; min-width: 0; }
 .script-lines .line {
   display: grid; grid-template-columns: 26px 1fr; gap: 9px;

@@ -38,6 +38,14 @@ Bu yerda ikki narsa qila olasiz:
   qoladi** — va qaysi qator o'zgargani belgilanib ko'rsatiladi, butun matnni
   qaytadan o'qib chiqmasligingiz uchun.
 
+**Faylga yuklab olish.** Shu oynada **«Matnni yuklab olish»** bor — butun skript
+`.txt` bo'lib tushadi (fayl nomi videoning nomi bilan). Uzun matnni telefonda
+emas, boshqa joyda o'qish qulayroq.
+
+`.srt` va `.vtt` bu bosqichda **bo'sh fayl bermaydi**, aniq sabab bilan rad
+etadi: vaqtlar hali hisoblanmagan, ular render paytida paydo bo'ladi. So'zlar
+vaqtlardan oldin bor bo'ladi — matn bosqichi shuning o'zi.
+
 «Tasdiqlash va davom etish» bosilgandan keyingina ovoz yoziladi va rasm
 chiziladi — ya'ni **siz tasdiqlagan matn** ovozga aylanadi.
 
