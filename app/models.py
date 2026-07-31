@@ -253,6 +253,11 @@ class RegenerateRequest(BaseModel):
     # half means paying twice for the half that was already right.
     from_index: int | None = Field(default=None, ge=0)
     to_index: int | None = Field(default=None, ge=0)
+    # Re-recording is also when you notice it is in the wrong language. Unlike
+    # the range, this always covers the whole video: half a video in another
+    # language is not something anybody wants. The subtitles follow on their own,
+    # because they are written from the narration.
+    language: str | None = None
 
 
 class HeroPatch(BaseModel):
@@ -398,6 +403,24 @@ class ShortCut(BaseModel):
     # The stills were framed for the long video. Reused, they are centre-cropped
     # into the taller frame, which is right until the subject sits near an edge.
     regenerate_images: bool = False
+    render: bool = True
+
+
+class ShortsAll(BaseModel):
+    """Cut every Short this video holds, in one go.
+
+    `limit` is a ceiling on the asking, not a target: the model is told to stop
+    when the video stops holding stretches that stand alone. Ten is high enough
+    that a long video is not cut off early and low enough that one press cannot
+    queue an afternoon of rendering by accident.
+    """
+
+    limit: int = Field(default=10, ge=1, le=10)
+    video_format: Literal["9:16", "1:1", "4:5", "16:9"] = "9:16"
+    # On by default here, unlike a single hand-picked cut: cutting everything is
+    # the unattended path, and nobody is watching to notice a subject that fell
+    # outside the taller frame.
+    regenerate_images: bool = True
     render: bool = True
 
 

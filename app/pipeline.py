@@ -1881,9 +1881,67 @@ async def resume_job(job_id: str) -> None:
         _fail(job_id, exc, warnings)
 
 
+async def relanguage(job_id: str, language: str) -> list[dict]:
+    """Rewrite this video's narration in another language, in place.
+
+    Not a clone. «Boshqa tilga» makes a second video because you want both; this
+    is for the video you are already working on — you recorded it in the wrong
+    language, or decided halfway that it should be Uzbek after all.
+
+    It is all or nothing, for the same reason the narrator is: a video that
+    changes language in the middle is a defect, not a feature. The subtitles need
+    no separate step, because they are written from the narration at render time
+    — change the words and the captions follow.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return []
+    if language not in config.LANGUAGES:
+        raise PipelineError(f"Unknown language '{language}'.")
+    if job["request"].get("narration_audio"):
+        raise PipelineError(
+            "Bu videoda o'z audiongiz ishlatilgan — tilini o'zgartirib bo'lmaydi.")
+
+    scenes = _load_scenes(job)
+    if not scenes:
+        raise PipelineError("Bu videoda sahna yo'q.")
+
+    was = job["request"].get("language", "")
+    if was == language:
+        return scenes
+
+    _progress(job_id, "translate", 12,
+              f"Matn {config.LANGUAGES[language]} tiliga o'girilyapti")
+    lines = await skills.translate_lines(
+        lines=[s["narration"] for s in scenes],
+        target_language=language,
+        source_language=was,
+        tone=job["request"].get("tone", ""),
+        # The pictures are already cut to the old reading, so the new one is
+        # asked to take about as long — the same constraint dubbing works under.
+        durations=[float(s.get("audio_duration") or 0.0) for s in scenes],
+    )
+
+    for scene, line in zip(scenes, lines):
+        if line and line.strip():
+            scene["narration"] = line.strip()
+        # The old timings belong to the old words. Kept, they would put the
+        # captions on syllables that are no longer there.
+        scene["words"] = []
+        scene["needs_voice"] = True
+
+    request = dict(job["request"])
+    request["language"] = language
+    store.replace_request(job_id, request)
+    store.update_job(job_id, result={"scenes": scenes},
+                     log=f"Til o'zgardi: {was or '?'} → {language}")
+    return scenes
+
+
 async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_voice: bool,
                            redo_all_voices: bool = False,
-                           voice_range: tuple[int, int] | None = None) -> None:
+                           voice_range: tuple[int, int] | None = None,
+                           language: str | None = None) -> None:
     """Rebuild one scene's image and/or voice in place.
 
     `redo_all_voices` re-records the whole video instead — what you want after
@@ -1893,6 +1951,10 @@ async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_vo
     `voice_range` is the middle case, and the common one: half a video recorded
     in the wrong voice. Re-recording all of it to fix the second half means
     paying a second time for the half that was already right.
+
+    `language` rewrites the narration first. It always covers the whole video and
+    ignores any range, because half a video in another language is not something
+    anybody wants.
     """
     job = store.get_job(job_id)
     if job is None:
@@ -1901,6 +1963,13 @@ async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_vo
     warnings: list[str] = list(job.get("result", {}).get("warnings") or [])
 
     try:
+        if language and language != request.get("language"):
+            await relanguage(job_id, language)
+            job = store.get_job(job_id) or job
+            request = job["request"]
+            # Every line is new, so every line has to be read again.
+            redo_voice, redo_all_voices, voice_range = True, True, None
+
         scenes = _load_scenes(job)
         target = next((s for s in scenes if s["index"] == index), None)
         if target is None:
