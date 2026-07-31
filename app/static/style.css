@@ -1369,6 +1369,10 @@ input[type="range"]::-moz-range-thumb {
 .key-stat { font-size: .72rem; color: var(--muted); }
 .key-cool { font-size: .72rem; color: var(--warn); }
 .key-err { font-size: .7rem; color: #ff8f7d; overflow-wrap: anywhere; }
+/* Monospace on purpose: this line exists to be compared, character by character,
+   with the key on the provider's dashboard. */
+.key-id { font-size: .72rem; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.key-tip { font-size: .7rem; color: var(--muted); }
 .key-acts { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
 .key-acts .chip {
   padding: 5px 9px; font-size: .72rem;
