@@ -8,6 +8,7 @@
     publisher  -> title, description, tags, thumbnail prompt, music mood
     translator -> re-voices a script in another language, to the same length
     strategist -> reads your own channels and talks you from an idea to a video
+    shorts     -> finds the Shorts already inside a long video
 """
 
 from .director import (
@@ -16,6 +17,7 @@ from .director import (
     segment_written_script,
 )
 from .choreographer import stage_scenes
+from .shorts import suggest_shorts
 from .imagesmith import build_image_prompts
 from .publisher import build_publish_pack
 from .strategist import chat, read_profile
@@ -33,4 +35,5 @@ __all__ = [
     "translate_lines",
     "chat",
     "read_profile",
+    "suggest_shorts",
 ]

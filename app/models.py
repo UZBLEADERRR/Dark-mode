@@ -383,6 +383,24 @@ class PlanPatch(BaseModel):
 KeyProvider = Literal["gemini", "anthropic", "openai", "elevenlabs", "fal"]
 
 
+class ShortCut(BaseModel):
+    """One Short to cut out of a finished video, by scene range.
+
+    A range, not a pair of timestamps: the app knows exactly how long every
+    scene runs because it recorded the voice-over, so a range is a real duration
+    and cuts land on a sentence rather than mid-word.
+    """
+
+    from_index: int = Field(ge=0)
+    to_index: int = Field(ge=0)
+    title: str = Field(default="", max_length=200)
+    video_format: Literal["9:16", "1:1", "4:5", "16:9"] = "9:16"
+    # The stills were framed for the long video. Reused, they are centre-cropped
+    # into the taller frame, which is right until the subject sits near an edge.
+    regenerate_images: bool = False
+    render: bool = True
+
+
 class ApiKeyIn(BaseModel):
     """One key to store. Several per provider is the point, so nothing is unique.
 

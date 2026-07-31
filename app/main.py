@@ -34,6 +34,7 @@ from .models import (
     SceneInsert,
     SceneOrder,
     ScenePatch,
+    ShortCut,
     ShotIn,
     TranslateRequest,
 )
@@ -1847,6 +1848,49 @@ async def dub_video(
     return {"id": job_id, "status": "queued"}
 
 
+@app.post("/api/jobs/{job_id}/shorts/suggest")
+async def suggest_shorts(job_id: str, count: int = 3) -> dict[str, Any]:
+    """Which parts of this long video would stand alone as Shorts.
+
+    Suggesting costs a model call, so it is asked for rather than run on every
+    finished video — and the answer carries the real length of each cut, taken
+    from the recorded voice-over, so nothing here is a guess you pay for later.
+    """
+    job = _get_job_or_404(job_id)
+    if not config.llm_ready():
+        raise HTTPException(status_code=400,
+                            detail="Tavsiya uchun AI kaliti kerak.")
+    scenes = (job.get("result") or {}).get("scenes") or []
+    if len(scenes) < 2:
+        raise HTTPException(status_code=400,
+                            detail="Bu video bo'linish uchun juda qisqa.")
+    try:
+        found = await pipeline.shorts_for(job_id, count=max(1, min(count, 6)))
+    except pipeline.PipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - the model's failure, said plainly
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
+    return {"shorts": found, "max_seconds": pipeline.SHORT_MAX_SECONDS}
+
+
+@app.post("/api/jobs/{job_id}/shorts", status_code=201)
+async def make_short(job_id: str, body: ShortCut) -> dict[str, Any]:
+    """Cut one run of scenes into a Short of its own, and start rendering it."""
+    _get_job_or_404(job_id)
+    try:
+        short_id = await pipeline.cut_short(
+            job_id, body.from_index, body.to_index, title=body.title,
+            video_format=body.video_format, regenerate_images=body.regenerate_images)
+    except pipeline.PipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if short_id is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if body.render:
+        _launch(lambda: pipeline.run_render(short_id, may_rebuild=True), short_id)
+        return {"id": short_id, "status": "queued", "place": queue_place(short_id)}
+    return {"id": short_id, "status": "review"}
+
+
 @app.post("/api/jobs/{job_id}/repurpose", status_code=201)
 async def repurpose_job(job_id: str, body: RepurposeRequest) -> dict[str, Any]:
     """Clone this video into another aspect ratio, reusing the voice and timings."""
@@ -1861,6 +1905,68 @@ async def repurpose_job(job_id: str, body: RepurposeRequest) -> dict[str, Any]:
 
 
 # ── files ─────────────────────────────────────────────────────────────────────
+
+SUBTITLE_KINDS = {
+    "srt": ("application/x-subrip", "srt"),
+    "vtt": ("text/vtt", "vtt"),
+    "txt": ("text/plain; charset=utf-8", "txt"),
+}
+
+
+async def _captions_for(job: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every cue in this video, whatever it was rendered by.
+
+    Videos rendered from now on keep their cues with the job. Older ones only
+    left an SRT on disk, so that file is read back and parsed — a subtitle you
+    could download last week must not become undownloadable because the app
+    learned a second format.
+    """
+    stored = (job.get("result") or {}).get("captions")
+    if stored:
+        return list(stored)
+
+    path = config.PROJECTS_DIR / job["id"] / "subtitles.srt"
+    if not path.exists():
+        await _bring_back(f"{job['id']}/subtitles.srt", path)
+    if path.exists():
+        return subs.parse_srt(path.read_text(encoding="utf-8", errors="replace"))
+    return []
+
+
+@app.get("/api/jobs/{job_id}/subtitles.{kind}")
+async def subtitles(job_id: str, kind: str) -> Response:
+    """The whole video's subtitles, in the shape you are about to use them in.
+
+    `srt` for an editor or a YouTube upload, `vtt` for a web player, `txt` for
+    the description box — the same cues, so they cannot drift apart.
+    """
+    kind = (kind or "srt").lower()
+    if kind not in SUBTITLE_KINDS:
+        raise HTTPException(status_code=404,
+                            detail=f"Subtitr formati '{kind}' yo'q — srt, vtt yoki txt.")
+    job = _get_job_or_404(job_id)
+    captions = await _captions_for(job)
+    scenes = (job.get("result") or {}).get("scenes") or []
+    if not captions and not scenes:
+        raise HTTPException(status_code=404,
+                            detail="Bu videoda hali subtitr yo'q — avval render qiling.")
+
+    if kind == "srt":
+        body = subs.build_srt(captions)
+    elif kind == "vtt":
+        body = subs.build_vtt(captions)
+    else:
+        body = subs.build_text(captions, scenes)
+
+    media, ext = SUBTITLE_KINDS[kind]
+    stem = pipeline._slug((job.get("result") or {}).get("title")
+                 or (job.get("request") or {}).get("topic") or job_id)
+    return Response(
+        content=body,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{stem}.{ext}"'},
+    )
+
 
 @app.get("/api/jobs/{job_id}/download")
 async def download(job_id: str) -> FileResponse:

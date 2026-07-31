@@ -153,6 +153,9 @@ function ask({ title, html, ok = 'Qo‘shish', onOpen = null }) {
   $('#modal-title').textContent = title;
   $('#modal-body').innerHTML = html;
   $('#modal-ok').textContent = ok;
+  // Reset: one dialog that disabled its confirm button must not hand the next
+  // one a button that cannot be pressed.
+  $('#modal-ok').disabled = false;
   $('#modal').classList.remove('hidden');
   const first = $('#modal-body textarea, #modal-body input, #modal-body select');
   first?.focus();
@@ -1687,7 +1690,11 @@ function drawStage(job) {
     p.push(`<video controls playsinline preload="metadata" src="${esc(job.video_url)}"></video>
       <div class="acts">
         <a class="btn primary" href="${esc(job.download_url || job.video_url)}" download>Videoni yuklab olish</a>
-        ${job.subtitle_url ? `<a class="btn" href="${esc(job.subtitle_url)}" download>Subtitr .srt</a>` : ''}
+        <span class="subs">Subtitr:
+          <a href="/api/jobs/${esc(job.id)}/subtitles.srt" download>.srt</a>
+          <a href="/api/jobs/${esc(job.id)}/subtitles.vtt" download>.vtt</a>
+          <a href="/api/jobs/${esc(job.id)}/subtitles.txt" download>matn</a>
+        </span>
         <button class="btn ghost" data-go="ready">Matnlarni ko‘rish</button>
       </div>`);
   }
@@ -3563,7 +3570,14 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
         </div>
         <div class="acts" style="margin-top:0">
           <a class="btn primary" href="${esc(j.download_url || j.video_url || '')}" download>Videoni yuklab olish</a>
-          ${j.subtitle_url ? `<a class="btn" href="${esc(j.subtitle_url)}" download>.srt</a>` : ''}
+          <!-- The same cues in the shape you are about to use them in: an editor
+               takes .srt, a web player only loads .vtt, and the description box
+               wants the words with no timings at all. -->
+          <span class="subs">Subtitr:
+            <a href="/api/jobs/${esc(j.id)}/subtitles.srt" download>.srt</a>
+            <a href="/api/jobs/${esc(j.id)}/subtitles.vtt" download>.vtt</a>
+            <a href="/api/jobs/${esc(j.id)}/subtitles.txt" download>matn</a>
+          </span>
           <button class="btn" data-music="${esc(j.id)}" data-track="${esc(j.music_id || '')}"
             data-at="${esc(String(j.music_start || 0))}">${j.music_id ? 'Musiqani almashtirish' : 'Musiqa qo‘shish'}</button>
           <button class="btn" data-thumbs="${esc(j.id)}">Muqova yaratish</button>
@@ -3571,6 +3585,12 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
             ? `<a class="btn ok" href="${esc(j.youtube.url)}" target="_blank" rel="noopener">
                  YouTube'da ochish${j.youtube.publish_at ? ' · rejalashtirilgan' : ''}</a>`
             : `<button class="btn yt" data-publish="${esc(j.id)}">YouTube'ga joylash</button>`}
+          <!-- Offered whenever there is something to divide: three scenes is
+               enough to take a piece out of, and a forty-second video can still
+               hold a fifteen-second Short. Only a Short itself is excluded —
+               cutting one of those again is cutting a cut. -->
+          ${j.kind === 'short' || (j.scene_count || 0) < 3 ? '' :
+            `<button class="btn" data-shorts="${esc(j.id)}">Shortsga bo‘lish</button>`}
           <button class="btn" data-repurpose="${esc(j.id)}" data-fmt="${esc(j.video_format)}">Boshqa formatga</button>
           ${j.kind === 'dub' ? '' :
             `<button class="btn" data-translate="${esc(j.id)}" data-lang="${esc(j.language)}">Boshqa tilga</button>`}
@@ -3710,6 +3730,11 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
       b.disabled = false;
       b.textContent = 'Boshqa tilga';
     }
+  }));
+
+  $$('#ready-list [data-shorts]').forEach((b) => b.addEventListener('click', () => {
+    const job = state.jobs.find((j) => j.id === b.dataset.shorts);
+    if (job) cutShorts(job);
   }));
 
   $$('#ready-list [data-repurpose]').forEach((b) => b.addEventListener('click', async () => {
@@ -4348,6 +4373,134 @@ async function publishToYouTube(job) {
     } else {
       toast(made.publish_at ? 'Joylandi — belgilangan vaqtda chiqadi' : 'YouTube\'ga joylandi');
     }
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// ══ Shorts inside a long video ════════════════════════════════════
+// A long video usually contains two or three moments that would stand alone,
+// and finding them by scrubbing is the job nobody does. The app already knows
+// where every sentence starts and how long it lasts, so a cut is chosen by
+// scene rather than by dragging a handle — which is why every offer here comes
+// with the real length attached instead of an estimate you discover afterwards.
+
+const SHORT_MAX = 60;
+
+/** Sum of the scene lengths in a range, in seconds. What the cut will run to. */
+const spanSeconds = (scenes, from, to) => scenes
+  .filter((s) => s.index >= from && s.index <= to)
+  .reduce((total, s) => total + (s.duration || 0), 0);
+
+async function cutShorts(job) {
+  let scenes = [];
+  try {
+    scenes = (await api(`/api/jobs/${job.id}`)).scenes || [];
+  } catch (e) {
+    toast(e.message);
+    return;
+  }
+  if (scenes.length < 2) { toast('Bu video bo‘linish uchun juda qisqa'); return; }
+
+  const option = (s) => `<option value="${s.index}">${s.index + 1}. ${
+    esc((s.narration || '').slice(0, 44))}${(s.narration || '').length > 44 ? '…' : ''}</option>`;
+
+  const answer = await ask({
+    title: 'Shortsga bo‘lish',
+    ok: 'Kesib olish',
+    html: `
+      <div id="short-ai">
+        <button type="button" class="btn" id="short-ask">AI mos joylarni topsin</button>
+        <small class="note">Har bir taklif — tugallangan fikr, boshidan tushunarli.
+          Uzunligi taxmin emas: yozilgan ovozdan hisoblanadi.</small>
+      </div>
+      <div id="short-list"></div>
+      <hr class="rule" />
+      <p class="hint">Yoki o‘zingiz tanlang:</p>
+      <label class="f"><span>Qaysi sahnadan</span>
+        <select name="from_index">${scenes.map(option).join('')}</select></label>
+      <label class="f"><span>Qaysi sahnagacha</span>
+        <select name="to_index">${scenes.map(option).join('')}</select></label>
+      <label class="f"><span>Nomi</span>
+        <input name="title" maxlength="100" placeholder="Short nomi" /></label>
+      <label class="sw"><input type="checkbox" name="regenerate_images" /><i></i>
+        <span>Rasmlarni vertikal kadr uchun qayta yaratish</span></label>
+      <p class="short-len" id="short-len"></p>`,
+    onOpen: () => {
+      const from = $('#modal-body [name="from_index"]');
+      const to = $('#modal-body [name="to_index"]');
+      const out = $('#short-len');
+      to.value = String(Math.min(scenes[scenes.length - 1].index, scenes[0].index + 2));
+
+      const measure = () => {
+        let a = Number(from.value);
+        let b = Number(to.value);
+        if (b < a) { b = a; to.value = String(a); }
+        const secs = spanSeconds(scenes, a, b);
+        // Said before you cut, not after: going over is the one mistake here
+        // that costs a whole render.
+        out.textContent = `Uzunligi: ${secs.toFixed(0)} soniya`
+          + (secs > SHORT_MAX ? ` — Shorts uchun ${SHORT_MAX}s dan uzun` : '');
+        out.classList.toggle('over', secs > SHORT_MAX);
+        $('#modal-ok').disabled = secs <= 0;
+      };
+      from.addEventListener('change', measure);
+      to.addEventListener('change', measure);
+      measure();
+
+      $('#short-ask').addEventListener('click', async () => {
+        const btn = $('#short-ask');
+        btn.disabled = true;
+        btn.textContent = 'Qidirilyapti…';
+        try {
+          const { shorts } = await api(`/api/jobs/${job.id}/shorts/suggest`, { method: 'POST' });
+          $('#short-list').innerHTML = shorts.length ? shorts.map((s, i) => `
+            <div class="short-pick" data-from="${s.from_index}" data-to="${s.to_index}">
+              <b>${esc(s.title || `Short ${i + 1}`)}</b>
+              <span class="short-meta">${s.seconds}s · ${s.scene_count} sahna ·
+                ${s.from_index + 1}–${s.to_index + 1}</span>
+              ${s.hook ? `<span class="short-hook">“${esc(s.hook)}”</span>` : ''}
+              ${s.why ? `<span class="short-why">${esc(s.why)}</span>` : ''}
+              <button type="button" class="chip" data-take="${i}">Shuni kesish</button>
+            </div>`).join('')
+            : '<p class="note">Mos keladigan tugallangan bo‘lak topilmadi.</p>';
+
+          $$('#short-list [data-take]').forEach((take) => take.addEventListener('click', () => {
+            const card = take.closest('.short-pick');
+            closeModal({
+              from_index: card.dataset.from,
+              to_index: card.dataset.to,
+              title: card.querySelector('b').textContent,
+              regenerate_images: false,
+            });
+          }));
+        } catch (e) {
+          $('#short-list').innerHTML = `<p class="msg err">${esc(e.message)}</p>`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'AI mos joylarni topsin';
+        }
+      });
+    },
+  });
+  if (!answer) return;
+
+  try {
+    const made = await api(`/api/jobs/${job.id}/shorts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from_index: Number(answer.from_index),
+        to_index: Number(answer.to_index),
+        title: answer.title || '',
+        regenerate_images: !!answer.regenerate_images,
+        video_format: '9:16',
+      }),
+    });
+    await loadJobs();
+    go('edit');
+    watch(made.id, { reveal: true });
+    toast('Short kesildi — render boshlandi');
   } catch (e) {
     alert(e.message);
   }

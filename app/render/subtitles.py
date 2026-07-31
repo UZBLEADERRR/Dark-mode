@@ -12,6 +12,7 @@ encode.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .. import config
@@ -417,20 +418,84 @@ def write_ass(path: Path, content: str) -> Path:
     return path
 
 
+def _clock(seconds: float, millis_sep: str) -> str:
+    seconds = max(0.0, seconds)
+    hours, rem = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rem, 60)
+    millis = int(round((seconds - int(seconds)) * 1000))
+    if millis == 1000:
+        millis, secs = 0, secs + 1
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}{millis_sep}{millis:03d}"
+
+
 def build_srt(captions: list[dict]) -> str:
     """Plain SRT alongside the burned-in captions, for YouTube uploads."""
-    def srt_ts(seconds: float) -> str:
-        seconds = max(0.0, seconds)
-        hours, rem = divmod(int(seconds), 3600)
-        minutes, secs = divmod(rem, 60)
-        millis = int(round((seconds - int(seconds)) * 1000))
-        if millis == 1000:
-            millis, secs = 0, secs + 1
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
-
     blocks = []
     for i, caption in enumerate(captions, start=1):
         start = float(caption["start"])
         end = max(float(caption["end"]), start + 0.35)
-        blocks.append(f"{i}\n{srt_ts(start)} --> {srt_ts(end)}\n{caption['text'].strip()}\n")
+        blocks.append(f"{i}\n{_clock(start, ',')} --> {_clock(end, ',')}\n"
+                      f"{caption['text'].strip()}\n")
     return "\n".join(blocks)
+
+
+def build_vtt(captions: list[dict]) -> str:
+    """The same cues as WebVTT — what a browser player and YouTube both take.
+
+    Worth having next to the SRT rather than instead of it: an editor wants SRT,
+    a `<track>` element will only load VTT, and converting between them by hand
+    is exactly the kind of chore this app exists to remove.
+    """
+    blocks = ["WEBVTT\n"]
+    for i, caption in enumerate(captions, start=1):
+        start = float(caption["start"])
+        end = max(float(caption["end"]), start + 0.35)
+        blocks.append(f"{i}\n{_clock(start, '.')} --> {_clock(end, '.')}\n"
+                      f"{caption['text'].strip()}\n")
+    return "\n".join(blocks)
+
+
+def build_text(captions: list[dict], scenes: list[dict] | None = None) -> str:
+    """The whole script as prose, with no timings — for a description or a blog.
+
+    Built from the scenes when they are to hand, because that is the text as it
+    was written and read: whole sentences, one paragraph per scene. Captions are
+    the fallback, and they are chopped into three-word cues for the screen, so
+    they are re-joined rather than listed — a transcript of one phrase per line
+    is not a transcript anybody wants to read.
+    """
+    if scenes:
+        paragraphs = [str(s.get("narration") or "").strip() for s in scenes]
+        body = "\n\n".join(p for p in paragraphs if p)
+        if body:
+            return body + "\n"
+    words = " ".join(str(c.get("text") or "").strip() for c in captions)
+    return " ".join(words.split()) + "\n"
+
+
+def parse_srt(text: str) -> list[dict]:
+    """Read cues back out of an SRT. Used for videos rendered before captions
+    were kept with the job, so their subtitles are still downloadable in any
+    format rather than only the one shape that happens to be on disk."""
+    def seconds(stamp: str) -> float:
+        stamp = stamp.strip().replace(",", ".")
+        parts = stamp.split(":")
+        try:
+            hours, minutes, rest = (parts + ["0", "0", "0"])[:3]
+            return int(hours) * 3600 + int(minutes) * 60 + float(rest)
+        except (TypeError, ValueError):
+            return 0.0
+
+    captions: list[dict] = []
+    for block in re.split(r"\n\s*\n", (text or "").strip()):
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            continue
+        timing = next((ln for ln in lines if "-->" in ln), "")
+        if not timing:
+            continue
+        start, _, end = timing.partition("-->")
+        body = "\n".join(lines[lines.index(timing) + 1:]).strip()
+        if body:
+            captions.append({"start": seconds(start), "end": seconds(end), "text": body})
+    return captions
