@@ -122,9 +122,26 @@ VIDEO_PRESET = _env("VIDEO_PRESET", "medium")
 SECONDS_PER_SCENE = float(_env("SECONDS_PER_SCENE", "6.5"))
 MAX_SCENES = _int("MAX_SCENES", 90)
 SUBTITLE_FONT = _env("SUBTITLE_FONT", "DejaVu Sans")
+
 MUSIC_VOLUME = float(_env("MUSIC_VOLUME", "0.10"))
 GEMINI_USE_IMAGE_CONFIG = _flag("GEMINI_USE_IMAGE_CONFIG", True)
 IMAGE_CONCURRENCY = _int("IMAGE_CONCURRENCY", 3)
+
+# DejaVu has no Hangul, and a missing glyph is not an error — libass draws
+# nothing and the subtitle comes out blank. So a language whose script the house
+# font cannot draw names its own font, and the image installs it.
+SCRIPT_FONTS: dict[str, str] = {
+    "ko": _env("SUBTITLE_FONT_KO", "NanumGothic"),
+}
+
+
+def subtitle_font(language: str = "") -> str:
+    """The font to set captions in for this language.
+
+    A style that names its own font still wins — this is the default, not a
+    rule.
+    """
+    return SCRIPT_FONTS.get((language or "").lower(), SUBTITLE_FONT)
 
 # How long one provider call may take, and how long all of its retries may take
 # together. The second number is the one that matters: three retries behind a
@@ -198,7 +215,13 @@ LANGUAGES: dict[str, str] = {
     "hi": "Hindi (हिन्दी)",
     "de": "German (Deutsch)",
     "fr": "French (Français)",
+    "ko": "Korean (한국어)",
 }
+
+# Languages written without spaces between words, in characters that are about
+# twice as wide as a Latin letter. Both facts change how a caption is broken, so
+# they are named once here rather than guessed at each place that breaks one.
+DENSE_SCRIPTS = {"ko", "ja", "zh"}
 
 
 # --- which model each stage calls --------------------------------------------
@@ -326,12 +349,18 @@ def speed_profile(name: str | None = None) -> dict:
     return {**profile, "workers": workers, "threads": max(1, CPU_COUNT // workers)}
 
 
-def caption_budget(width: int, height: int) -> dict[str, int | float]:
-    """How wide a caption line may be, for this canvas.
+def caption_budget(width: int, height: int,
+                   language: str = "") -> dict[str, int | float]:
+    """How wide a caption line may be, for this canvas and this script.
 
     A 9:16 frame is 1080px across where 16:9 is 1920, so a line length tuned for
     landscape runs straight off the edge of a Short. Both the line-breaking skill
     and the ASS font size derive from this one budget so they can never disagree.
+
+    Korean, Japanese and Chinese need their own answer: a Hangul syllable paints
+    about twice the width of a Latin letter, so a line of forty-two characters
+    that fits in English runs past both edges in Korean. Measured, not guessed —
+    thirty characters of Korean already paint three quarters of a 1920 frame.
     """
     ratio = width / max(height, 1)
     if ratio >= 1.3:            # 16:9 and wider
@@ -341,9 +370,21 @@ def caption_budget(width: int, height: int) -> dict[str, int | float]:
     else:                       # 9:16, 4:5 and other portrait
         max_chars, max_words, margin = 24, 4, 0.06
 
+    # A Hangul syllable is close to a full em wide where a Latin letter averages
+    # a little over half of one, so the same line runs almost twice as far. The
+    # word cap goes up rather than down: Korean words are short, and holding a
+    # line to seven of them would break it long before the width ran out.
+    dense = (language or "").lower() in DENSE_SCRIPTS
+    advance = 0.55
+    if dense:
+        max_chars = max(8, int(max_chars * 0.55))
+        max_words = max_words + 3
+        advance = 1.0
+
     usable = width * (1 - 2 * margin)
-    # DejaVu Sans Bold averages ~0.55em of advance per character.
-    font_size = int(usable / (max_chars * 0.55))
+    # DejaVu Sans Bold averages ~0.55em of advance per character; a CJK face is
+    # square, so one character is one em.
+    font_size = int(usable / (max_chars * advance))
     return {
         "max_chars": max_chars,
         "max_words": max_words,

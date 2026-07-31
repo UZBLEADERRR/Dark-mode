@@ -2525,8 +2525,15 @@ function drawCaptionSample(time = null) {
   const cw = $('#canvas').clientWidth || 1;
   const ch = $('#canvas').clientHeight || 1;
   const scale = cw / f.width;
-  const px = (f.caption?.font_size || 96) * (st.size ?? 1) * scale;
-  const budget = f.caption || { max_chars: 42, max_words: 7 };
+  // Korean and its neighbours are written in square characters, so a line that
+  // fits by English character count runs off the frame. The server works both
+  // budgets out; here we only pick the one that matches the video's language, so
+  // the preview breaks its line exactly where the render will.
+  const dense = (state.health?.dense_scripts || []).includes(ED.job?.language);
+  const budget = (dense ? f.caption_dense : f.caption)
+    || { max_chars: 42, max_words: 7 };
+  const px = (budget.font_size || f.caption?.font_size || 96)
+    * (st.size ?? 1) * scale;
 
   // Playing: the line that is actually being spoken, word by word. Idle: as much
   // of the narration as one line can hold, so the look can be judged at rest.

@@ -1496,9 +1496,11 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
 
         ass_path = workdir / "subtitles.ass"
         subs.write_ass(ass_path, subs.build_ass(
-            captions=captions, width=width, height=height, font=config.SUBTITLE_FONT,
+            captions=captions, width=width, height=height,
+            # A language whose script the house font cannot draw brings its own.
+            font=config.subtitle_font(language),
             style=caption_style, title_cards=title_cards, overlays=text_layers,
-            include_captions=burn_captions,
+            include_captions=burn_captions, language=language,
         ))
         srt_path = workdir / "subtitles.srt"
         srt_path.write_text(subs.build_srt(captions), encoding="utf-8")

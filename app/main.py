@@ -475,9 +475,15 @@ async def health() -> dict[str, Any]:
         # The caption budget rides along so the editor's live preview can size
         # its text exactly the way the renderer will, instead of guessing.
         "formats": [
-            {"id": k, **v, "caption": config.caption_budget(v["width"], v["height"])}
+            {"id": k, **v,
+             "caption": config.caption_budget(v["width"], v["height"]),
+             # The same budget for a script written in square characters. Both
+             # are computed here so the editor's preview can pick between them
+             # without a second copy of the arithmetic in the browser.
+             "caption_dense": config.caption_budget(v["width"], v["height"], "ko")}
             for k, v in config.FORMATS.items()
         ],
+        "dense_scripts": sorted(config.DENSE_SCRIPTS),
         "languages": [{"id": k, "label": v} for k, v in config.LANGUAGES.items()],
     }
 

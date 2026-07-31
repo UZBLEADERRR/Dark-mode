@@ -166,5 +166,10 @@ async def suggest_shorts(
         f"Offer up to {count} Shorts, best first.\n\n"
         "Scenes:\n" + describe(scenes)
     )
-    raw = await call_json(SYSTEM, user, SCHEMA, max_tokens=4000)
+    # Sized for the answer, not for a typical one. Each Short costs perhaps eighty
+    # tokens of JSON, but a reasoning model spends far more than that thinking
+    # before it writes any — and thinking comes out of the same budget. Ten Shorts
+    # under a four-thousand ceiling is how the reply came back cut off mid-word.
+    budget = max(8000, 2000 + count * 1200)
+    raw = await call_json(SYSTEM, user, SCHEMA, max_tokens=budget)
     return tidy(raw, scenes, max_seconds=max_seconds)[:count]

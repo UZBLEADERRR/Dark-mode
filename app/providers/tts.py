@@ -85,6 +85,7 @@ LANG_HINTS = {
     "hi": "hi",
     "de": "de",
     "fr": "fr",
+    "ko": "ko",
 }
 
 

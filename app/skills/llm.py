@@ -258,6 +258,72 @@ def _json_instruction(schema: dict | None) -> str:
     )
 
 
+def _repair_truncated(text: str) -> Any | None:
+    """Salvage what is complete out of an answer that stopped mid-sentence.
+
+    A model that runs out of output tokens does not fail — it stops, often in the
+    middle of a word, and the reply is valid JSON up to that point and nothing
+    after. Throwing it away costs the user the six good items the model *did*
+    finish, and hands them a wall of raw JSON as an error message.
+
+    So the string is rewound to the last position where every bracket was closed
+    and every string was terminated, the open containers are closed, and the
+    result is parsed. Whatever was complete survives; the half-written item does
+    not. If nothing at all is complete, this returns None and the caller reports
+    a truncated answer honestly rather than a mangled one.
+    """
+    depth: list[str] = []
+    in_string = False
+    escaped = False
+    safe = -1                       # last index where a value was cleanly closed
+
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch in "{[":
+            depth.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if depth and depth[-1] == ch:
+                depth.pop()
+        # A complete element of an array or object ends at its comma, and the
+        # value before that comma is the last thing known to be whole.
+        if not in_string and ch == "," and len(depth) <= 2:
+            safe = i
+
+    if safe < 0 or not depth:
+        return None
+    candidate = text[:safe]         # drop the trailing comma and the half item
+    # Close whatever is still open, innermost first.
+    opened: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in candidate:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch in "{[":
+            opened.append("}" if ch == "{" else "]")
+        elif ch in "}]" and opened and opened[-1] == ch:
+            opened.pop()
+    try:
+        return json.loads(candidate + "".join(reversed(opened)))
+    except json.JSONDecodeError:
+        return None
+
+
 def _extract_json(text: str) -> Any:
     text = (text or "").strip()
     fence = re.search(r"```(?:json)?\s*(.+?)```", text, re.S)
@@ -275,7 +341,14 @@ def _extract_json(text: str) -> Any:
                 return json.loads(text[start : end + 1])
             except json.JSONDecodeError:
                 continue
-    raise LLMError(f"The model did not return valid JSON. Got: {text[:400]}")
+    # Nothing parsed whole. Before giving up, keep whatever the model finished
+    # before it ran out of room — six good ideas beat an error message.
+    repaired = _repair_truncated(text)
+    if repaired is not None:
+        return repaired
+    raise LLMError(
+        "Model javobi to'liq kelmadi — javob uzilib qolgan. Qaytadan urinib "
+        f"ko'ring yoki kamroq narsa so'rang. Boshlanishi: {text[:200]}")
 
 
 async def call_json(

@@ -167,7 +167,7 @@ async def build_captions(
     Line length comes from the canvas: a Short gets short lines, a 16:9 video
     gets long ones, and `render.subtitles` sizes the font from the same budget.
     """
-    budget = config.caption_budget(width, height)
+    budget = config.caption_budget(width, height, language)
     max_chars = int(budget["max_chars"])
     max_words = int(budget["max_words"])
 
