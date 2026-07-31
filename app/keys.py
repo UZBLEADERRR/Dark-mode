@@ -24,6 +24,7 @@ empty, and it can be told apart from a stored key because it has no id.
 from __future__ import annotations
 
 import threading
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -73,8 +74,34 @@ def clean(secret: str) -> str:
     quotes = {"\"": "\"", "'": "'", "`": "`", "‘": "’", "“": "”", "«": "»"}
     while len(text) > 1 and quotes.get(text[0]) == text[-1]:
         text = text[1:-1].strip()
+    # Characters with no width and no meaning: a zero-width space, a soft hyphen
+    # left behind by a wrapped line, the BOM a text editor writes, the bidi marks
+    # an Arabic or Hebrew keyboard adds around Latin text. None of them survive a
+    # round trip through the provider, and none of them are visible on screen — so
+    # a key that carries one looks perfect and is rejected, which is the worst
+    # combination there is. `Cf` is the format category, `Cc` the control one.
+    text = "".join(c for c in text if unicodedata.category(c) not in ("Cf", "Cc"))
     # Every kind of space, not just the ends: a wrapped paste has them inside.
     return "".join(text.split())
+
+
+def unsendable(secret: str) -> str:
+    """Why this key cannot even be put in a header, or "" if it can.
+
+    A key is an HTTP header value, and a header is ASCII. A Cyrillic `А` pasted in
+    place of a Latin `A` — which is what a phone keyboard left in Russian layout
+    produces, and which no amount of staring at the screen will reveal — makes the
+    request fail inside the HTTP client with an encoding error, long before any
+    provider sees it. Catching it here means the answer names the character
+    instead of quoting a stack trace.
+    """
+    for i, ch in enumerate(secret or ""):
+        if ord(ch) > 127:
+            name = unicodedata.name(ch, f"U+{ord(ch):04X}")
+            return (f"Kalitning {i + 1}-belgisi lotincha emas: «{ch}» ({name}). "
+                    "Ehtimol boshqa klaviaturadan tushib qolgan — kalitni "
+                    "brauzerdan qaytadan nusxalang.")
+    return ""
 
 
 def _now() -> datetime:
@@ -270,6 +297,11 @@ async def probe(provider: str, secret: str) -> tuple[bool, str, float]:
     secret = clean(secret)
     if not secret:
         return False, "Kalit bo'sh", 0.0
+    wrong = unsendable(secret)
+    if wrong:
+        # Not benched: the key on the dashboard may be perfectly good, and it is
+        # the copy that is broken. Re-pasting is the fix, not waiting an hour.
+        return False, wrong, 0.0
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=15.0)) as client:
             if provider == "gemini":

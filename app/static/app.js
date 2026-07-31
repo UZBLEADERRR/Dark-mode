@@ -4788,14 +4788,22 @@ function drawKeys() {
         ${rows.length ? rows.map((k) => `
           <div class="key-row${k.enabled ? '' : ' off'}" data-key="${k.id}">
             <div class="key-what">
-              <b>${esc(k.label || 'nomsiz')}</b>
+              <b>${esc(k.label || k.mask || 'nomsiz')}</b>
+              <!-- The ends and the length, always. When a provider says a key is
+                   invalid the only question is whether this is the key on the
+                   dashboard, and a name somebody typed cannot answer it. -->
+              ${k.mask ? `<span class="key-id">${k.label ? `${esc(k.mask)} · ` : ''}${k.length} belgi</span>` : ''}
               <span class="key-stat">${k.uses} marta ishlatildi${k.fails ? ` · ${k.fails} xato` : ''}</span>
               ${k.cooldown_seconds > 0
                 ? `<span class="key-cool">${coolText(k.cooldown_seconds)} dam oladi</span>` : ''}
               ${k.last_error ? `<span class="key-err">${esc(k.last_error)}</span>` : ''}
+              ${k.last_error ? `<span class="key-tip">Yuqoridagi boshi-oxiri va uzunligi
+                provayder saytidagi kalitga to‘g‘ri kelyaptimi? Kelmasa —
+                «Qayta qo‘yish».</span>` : ''}
             </div>
             <div class="key-acts">
               <button class="chip" data-act="test">Tekshirish</button>
+              <button class="chip" data-act="paste">Qayta qo‘yish</button>
               <button class="chip" data-act="toggle">${k.enabled ? 'O‘chirish' : 'Yoqish'}</button>
               ${k.cooldown_seconds > 0 ? '<button class="chip" data-act="wake">Darhol ishlat</button>' : ''}
               <button class="chip danger" data-act="del">Olib tashlash</button>
@@ -4835,6 +4843,15 @@ async function keyAction(id, act, btn) {
     } else if (act === 'toggle') {
       await keyApi(`/api/keys/${id}`, 'PATCH', { enabled: !row.enabled });
       toast(row.enabled ? 'O‘chirildi' : 'Yoqildi');
+    } else if (act === 'paste') {
+      // Replacing beats deleting and re-adding: the key keeps its place, and a
+      // fresh secret comes with a cleared cooldown, so it is usable at once.
+      const next = prompt('Kalitni qaytadan qo‘ying:', '');
+      if (!next || !next.trim()) { btn.disabled = false; return; }
+      await keyApi(`/api/keys/${id}`, 'PATCH', { secret: next });
+      btn.textContent = 'Tekshirilyapti…';
+      const out = await keyApi(`/api/keys/${id}/test`, 'POST');
+      toast(out.detail || (out.ok ? 'Ishlaydi' : 'Ishlamadi'));
     } else if (act === 'wake') {
       await keyApi(`/api/keys/${id}`, 'PATCH', { clear_cooldown: true });
       toast('Yana ishlatiladi');

@@ -1098,18 +1098,24 @@ async def available_models(provider: str) -> dict[str, Any]:
 
 # ── API keys ──────────────────────────────────────────────────────────────────
 
-def _key_out(row: dict[str, Any]) -> dict[str, Any]:
+def _key_out(row: dict[str, Any], secret: str = "") -> dict[str, Any]:
     """One key as the page may see it: everything except the key.
 
-    The secret is never returned, not even to the client that just sent it. A
-    masked tail is enough to tell two keys apart, which is the only thing the
-    page actually needs it for.
+    The secret is never returned, not even to the client that just sent it. What
+    is returned is its ends and its length, and those are worth returning: when a
+    provider says a key is invalid, the only useful question is whether the thing
+    stored here is the thing on the dashboard, and `AQ.A…54SQ · 53 belgi` answers
+    it at a glance. A partial paste is a different length; a stale key has
+    different ends. Neither is visible from a name somebody typed.
     """
     left = keys.cooling(row)
+    secret = secret or ""
     return {
         "id": row.get("id", ""),
         "provider": row.get("provider", ""),
         "label": row.get("label", ""),
+        "mask": keys.mask(secret),
+        "length": len(secret),
         "enabled": bool(row.get("enabled")),
         "uses": int(row.get("uses") or 0),
         "fails": int(row.get("fails") or 0),
@@ -1121,8 +1127,34 @@ def _key_out(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _label_for(label: str, secret: str) -> str:
+    """The name to store, which is never the key itself.
+
+    With no name shown on the card there was nothing to recognise a key by, so
+    people pasted the key into the name box — and then the whole key sat on the
+    screen, in a library that gets opened in front of other people and
+    screenshotted when something goes wrong. The card shows the masked ends now,
+    so a name that is really the key is dropped rather than displayed.
+    """
+    text = (label or "").strip()
+    if not secret or not text:
+        return text
+    # A name that *contains* the key is dropped whatever its length. A name that
+    # is merely part of the key has to be long enough to be one — "AQ" is a
+    # perfectly good name for an account, and it is also the first two characters
+    # of every Google key issued this year.
+    if secret in text or (len(text) >= 12 and text in secret):
+        return ""
+    return text
+
+
 def _keys_out() -> dict[str, Any]:
     rows = store.list_keys()
+    # The secrets are read here and never leave: `_key_out` turns each one into
+    # four characters and a number. Reading them provider by provider keeps
+    # `list_keys` what it is — the query that cannot leak a key.
+    held = {r.get("id"): r.get("secret", "")
+            for name in keys.PROVIDERS for r in keys.stored(name)}
     return {
         "providers": [
             {
@@ -1130,7 +1162,8 @@ def _keys_out() -> dict[str, Any]:
                 "env_var": env,
                 # Which provider each stage will actually call, so a page can say
                 # what a missing key would break rather than just listing names.
-                "keys_list": [_key_out(r) for r in rows if r.get("provider") == name],
+                "keys_list": [_key_out(r, held.get(r.get("id"), ""))
+                              for r in rows if r.get("provider") == name],
             }
             for name, env in keys.PROVIDERS.items()
         ],
@@ -1154,11 +1187,17 @@ async def add_key(body: ApiKeyIn) -> dict[str, Any]:
     secret = keys.clean(body.secret)
     if not secret:
         raise HTTPException(status_code=400, detail="Kalit bo'sh.")
+    # The one thing worth judging: a key that cannot be put in a header will fail
+    # every call with an error about encoding rather than about the key, so it is
+    # refused now, while the person who pasted it is still looking at the form.
+    wrong = keys.unsendable(secret)
+    if wrong:
+        raise HTTPException(status_code=400, detail=wrong)
     existing = {r.get("secret") for r in keys.stored(body.provider)}
     if secret in existing:
         raise HTTPException(status_code=409, detail="Bu kalit allaqachon qo'shilgan.")
-    row = store.add_key(body.provider, secret, body.label.strip())
-    return {"key": _key_out(row), "keys": _keys_out()}
+    row = store.add_key(body.provider, secret, _label_for(body.label, secret))
+    return {"key": _key_out(row, secret), "keys": _keys_out()}
 
 
 @app.patch("/api/keys/{key_id}")
@@ -1166,22 +1205,38 @@ async def patch_key(key_id: str, body: ApiKeyPatch) -> dict[str, Any]:
     if not store.get_key(key_id):
         raise HTTPException(status_code=404, detail="Kalit topilmadi.")
     fields: dict[str, Any] = {}
-    if body.label is not None:
-        fields["label"] = body.label.strip()
-    if body.enabled is not None:
-        fields["enabled"] = body.enabled
-    if body.secret is not None and keys.clean(body.secret):
-        fields["secret"] = keys.clean(body.secret)
+    secret = keys.clean(body.secret or "")
+    if body.secret is not None and secret:
+        wrong = keys.unsendable(secret)
+        if wrong:
+            raise HTTPException(status_code=400, detail=wrong)
+        # Same rule as adding one. Two cards holding the same key would take two
+        # turns in the rotation for one allowance, and a refusal recorded against
+        # either of them would be written to whichever was found first.
+        twice = any(r.get("secret") == secret and r.get("id") != key_id
+                    for r in keys.stored(store.get_key(key_id)["provider"]))
+        if twice:
+            raise HTTPException(status_code=409, detail="Bu kalit allaqachon qo'shilgan.")
+        fields["secret"] = secret
         # A new secret has its own allowance, so the old one's cooldown and
-        # remembered error do not apply to it.
+        # remembered error do not apply to it. The failure count goes too: eight
+        # failures belonged to the key that was replaced.
         fields["cooldown_until"] = ""
         fields["last_error"] = ""
+        fields["fails"] = 0
+    if body.label is not None:
+        fields["label"] = _label_for(body.label, secret)
+    if body.enabled is not None:
+        fields["enabled"] = body.enabled
     if body.clear_cooldown:
         fields["cooldown_until"] = ""
         fields["last_error"] = ""
     if fields:
         store.update_key(key_id, **fields)
-    return {"key": _key_out(store.get_key(key_id) or {}), "keys": _keys_out()}
+    row = store.get_key(key_id) or {}
+    kept = next((r.get("secret", "") for r in keys.stored(row.get("provider", ""))
+                 if r.get("id") == key_id), "")
+    return {"key": _key_out(row, kept), "keys": _keys_out()}
 
 
 @app.post("/api/keys/{key_id}/test")
@@ -1208,7 +1263,7 @@ async def test_key(key_id: str) -> dict[str, Any]:
             keys.penalise(provider, secret, seconds=hold, body=detail)
         store.update_key(key_id, last_error=detail)
     return {"ok": ok, "detail": detail,
-            "key": _key_out(store.get_key(key_id) or {}), "keys": _keys_out()}
+            "key": _key_out(store.get_key(key_id) or {}, secret), "keys": _keys_out()}
 
 
 @app.delete("/api/keys/{key_id}")

@@ -230,7 +230,20 @@ Deploy qilish, env o'zgartirish shart emas: qo'shdingiz — shu zahoti ishlatila
   provayderning o'ziga urib ko'radi — video ishga tushmasdan avval bilinadi.
 - Kalitni **o'chirib-yoqib** qo'yish mumkin; o'chirilgani navbatda qatnashmaydi.
 - Kalit **hech qachon qaytarib ko'rsatilmaydi** — qo'shgandan keyin faqat nomi,
-  holati va statistikasi ko'rinadi.
+  holati va statistikasi ko'rinadi. Kalitning o'zi o'rniga **boshi, oxiri va
+  uzunligi** yoziladi (`AQ.A…54SQ · 53 belgi`). Provayder "kalit noto'g'ri" desa,
+  yagona kerakli savol — ilovadagi kalit saytdagi kalitmi yoki yo'q; shu satr
+  shuni bir qarashda ko'rsatadi: yarim nusxalangan kalit boshqa uzunlikda,
+  eskirgani boshqa oxirda bo'ladi. Shu sababli **kalitni nom sifatida yozish
+  shart emas** — nomga kalit qo'yilsa, ilova uni saqlamaydi (aks holda kalit
+  ekranda ochiq turadi va skrinshotga tushadi).
+- Kalit rad etilsa, uni **«Qayta qo'yish»** bilan o'rnida almashtirasiz —
+  o'chirib qaytadan qo'shish shart emas. Yangi kalit bilan eski xatolar va dam
+  olish muddati ham tozalanadi.
+- Ko'rinmas belgilar (nol kenglikdagi bo'shliq, yumshoq tire, BOM, yo'nalish
+  belgilari) **olib tashlanadi** — ular ekranda ko'rinmaydi, lekin kalitni
+  buzadi. Lotincha bo'lmagan harf (masalan, rus klaviaturasidagi `А`) qolsa,
+  ilova uni **nechanchi belgi ekanini aytib** rad etadi.
 - Kalitning **shakli tekshirilmaydi**: Google ham `AIza…`, ham `AQ.…` ko'rinishidagi
   kalitlar beradi, uzunliklari ham har xil — shuning uchun ilova hech qanday
   "shunday bo'lishi kerak" qoidasi qo'ymaydi. Kalit to'g'ri yoki noto'g'riligini
