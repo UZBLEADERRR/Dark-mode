@@ -146,6 +146,12 @@ o'tkazadi, lekin bilib qo'ygan yaxshi).
 Tokenni jiddiy tanlang — `1111` emas. O'sha havolani bilgan odam sizning
 Google seansingiz turgan brauzerni boshqara oladi.
 
+Yuqorida **manzil satri** bor. Flow ochilmasa (Google `400` yoki boshqa xato
+bersa), o'sha yerga to'g'ri manzilni yozib **«Ochish»** bosasiz — brauzer o'sha
+yerga o'tadi. Qayerga tushgani satrda ko'rinadi, ya'ni redirect ham bilinadi.
+Ishlagan manzilni topsangiz, uni `SARIDEO_FLOW_URL` o'zgaruvchisiga yozing —
+shunda `run` ham o'shani ochadi.
+
 **6. Ishga tushiring.** Start Command'ni **bo'shating** (image'ning o'zi
 `run` bilan boshlanadi), yoki shunday yozing:
 
@@ -172,6 +178,7 @@ birga render'ni o'ldiradi.
 | `SARIDEO_CHROME` | Boshqa Chromium ishlatmoqchi bo'lsangiz |
 | `SARIDEO_LOGIN_TOKEN` | Kirish sahifasining paroli (bermasangiz o'zi o'ylab topadi va log'ga yozadi) |
 | `PORT` | Kirish sahifasi qaysi portda — hosting o'zi beradi, qo'lda yozish shart emas |
+| `SARIDEO_FLOW_URL` | Flow manzili. Google uni o'zgartirsa, kodga tegmasdan shu yerdan to'g'irlaysiz |
 
 Bir nechta mashina bir vaqtda ishlashi mumkin — har biri o'z promptini oladi,
 navbat ularni chalkashtirmaydi.
