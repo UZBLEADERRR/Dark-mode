@@ -72,12 +72,23 @@ def dom_source() -> str:
     return FLOW_DOM.read_text(encoding="utf-8")
 
 
+# Headless Chromium announces itself in the User-Agent as `HeadlessChrome`, and
+# some Google pages answer that with "400. That's an error. The server cannot
+# process the request because it is malformed" rather than a page. This is the
+# same browser either way — same engine, same version — so it says so in the
+# ordinary way. Bump the version when the base image is bumped.
+CHROME_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+             "Chrome/131.0.0.0 Safari/537.36")
+
+
 async def browser(play, *, headless: bool):
     PROFILE.mkdir(parents=True, exist_ok=True)
     return await play.chromium.launch_persistent_context(
         str(PROFILE),
         headless=headless,
         viewport={"width": 1280, "height": 900},
+        user_agent=os.environ.get("SARIDEO_USER_AGENT") or CHROME_UA,
+        locale="en-US",
         args=["--disable-blink-features=AutomationControlled"],
         executable_path=os.environ.get("SARIDEO_CHROME") or None,
     )
@@ -217,15 +228,34 @@ async def serve_login(page, host: str, port: int, token: str) -> None:
         wanted = str((await request.json()).get("url", "")).strip()
         if not wanted:
             return web.json_response({"url": page.url})
+        # A bare `#` at the end is what a phone keyboard leaves behind, and it
+        # makes the address differ from the current one only by fragment — which
+        # Chromium treats as a same-document jump and Playwright reports as
+        # ERR_ABORTED. Nothing to do with the site being unreachable.
+        wanted = wanted.rstrip("#").strip()
         if "://" not in wanted:
             wanted = f"https://{wanted}"
-        try:
-            await page.goto(wanted, wait_until="domcontentloaded", timeout=45000)
-        except Exception as exc:  # noqa: BLE001 - reported, never fatal
-            # Reported rather than raised: the whole point of this view is to be
-            # usable when a page will not load.
-            return web.json_response({"url": page.url, "error": str(exc)[:200]})
-        return web.json_response({"url": page.url})
+        last = ""
+        # Twice, because a navigation that just failed can leave one pending that
+        # interrupts the next — so the attempt *after* a bad address fails too,
+        # with a message about interruption that has nothing to do with the
+        # address you have now typed. One retry turns that into a non-event.
+        for attempt in range(2):
+            try:
+                await page.goto(wanted, wait_until="domcontentloaded", timeout=45000)
+                return web.json_response({"url": page.url})
+            except Exception as exc:  # noqa: BLE001 - reported, never fatal
+                last = str(exc)
+                # Landed on it anyway: a same-document jump reports as aborted.
+                if page.url.rstrip("/") == wanted.rstrip("/"):
+                    return web.json_response({"url": page.url})
+                if attempt == 0 and ("interrupted" in last or "ERR_ABORTED" in last):
+                    await asyncio.sleep(0.5)
+                    continue
+                break
+        # Reported rather than raised: the whole point of this view is to be
+        # usable when a page will not load.
+        return web.json_response({"url": page.url, "error": last[:200]})
 
     async def done(request):
         if not allowed(request):
