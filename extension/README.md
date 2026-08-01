@@ -57,7 +57,9 @@ ko'rinadigan qilib qo'ymang: manzilni bilgan har kim navbatga qarashi mumkin.
 ## Buzilganda
 
 Flow — Google'ning sahifasi, va u xohlagan payti o'zgaradi. Sahifaga tegishli
-hamma narsa **bitta faylda** — `flow.js`, eng boshidagi `SELECTORS` bloki:
+hamma narsa **bitta faylda** — `flow-dom.js`, eng boshidagi `SELECTORS` bloki.
+O'sha fayl telefon uchun mo'ljallangan `agent/` bilan **umumiy**: bir marta
+to'g'irlasangiz, ikkalasi ham tuzaladi.
 
 ```js
 const SELECTORS = {
@@ -76,12 +78,16 @@ Har biri — ro'yxat: birinchisi topilmasa, keyingisi sinaladi. Buzilsa:
 3. Uni tegishli ro'yxatning **boshiga** qo'shing va `chrome://extensions` da
    kengaytmani yangilang.
 
-Boshqa fayllarga tegish shart emas: `background.js` faqat "prompt yubordim,
-rasm keldi" ni biladi.
+Boshqa fayllarga tegish shart emas: `flow.js` faqat xabar almashadi va
+`background.js` faqat "prompt yubordim, rasm keldi" ni biladi.
 
 ## Kengaytmasiz
 
-Kengaytma shart emas. Sarideo'ning **Kutubxona → Flow navbati** bo'limida har
+Telefonda kengaytma **ishlamaydi** — Android'dagi Chrome uni qo'llamaydi. Unga
+javob `agent/` da: brauzer boshqa mashinada turadi va hammasini o'zi qiladi
+([agent/README.md](../agent/README.md)).
+
+Umuman kengaytmasiz ham bo'ladi. Sarideo'ning **Kutubxona → Flow navbati** bo'limida har
 bir kutayotgan prompt turadi: promptni nusxalaysiz, Flow'da (yoki xohlagan
 joyda) rasm yasaysiz, va o'sha yerga yuklaysiz. Telefondan ham ishlaydi.
 

@@ -306,6 +306,17 @@ provayderi» ro'yxatidan tanlaysiz.
 prompt turadi: nusxalaysiz, xohlagan joyda rasm yasaysiz, o'sha yerga
 yuklaysiz. Telefondan ham bo'ladi. Bir sahna kerak bo'lmasa — «Bekor qilish».
 
+**Telefon uchun — agent.** Kengaytma faqat kompyuterda ishlaydi (Android'dagi
+Chrome kengaytmalarni qo'llamaydi). Shuning uchun `agent/` da alohida dastur
+bor: u doim yoqiq turadigan mashinada — uydagi kompyuter, VPS, yoki Sarideo
+yonidagi ikkinchi servis — brauzerni o'zi yuritadi. Siz **bir marta** Google'ga
+kirasiz, va buni ham telefondan qilasiz: agent brauzerning ekranini
+telefoningizga uzatadi, siz bosib-yozib kirasiz. Undan keyin telefonda hech
+narsa qilmaysiz. Batafsil: [agent/README.md](agent/README.md).
+
+Uchala yo'l ham **bitta navbatni** ishlaydi — qaysi biri ishlayotgani ilovaga
+farqi yo'q, xohlasangiz ikkitasini birga qo'yasiz.
+
 Bilib qo'yish kerak bo'lgan narsalar:
 
 - Sahna rasmini **20 daqiqa** kutadi (`FLOW_PATIENCE`). Kelmasa — o'sha sahnaga
@@ -985,6 +996,15 @@ app/
 ├── providers/         Tashqi API adapterlari (images, tts, align, storage)
 ├── render/            ffmpeg: kenburns, subtitles (ASS), overlays, video
 └── static/            UI (vanilla HTML/CSS/JS, build kerak emas)
+
+extension/             Chrome kengaytmasi — kompyuterdagi brauzerda Flow
+├── flow-dom.js        Flow sahifasini yuritadigan yagona fayl (agent ham shuni o'qiydi)
+├── flow.js            Kengaytmaning xabar almashish qismi
+└── background.js      Navbat ↔ Flow varag'i ko'prigi
+
+agent/                 Telefon uchun: brauzer boshqa mashinada
+├── sarideo_agent.py   login (ekranni telefonga uzatadi) va run (navbatni ishlaydi)
+└── Dockerfile         Alohida servis sifatida deploy qilish uchun
 ```
 
 ## Eslatmalar

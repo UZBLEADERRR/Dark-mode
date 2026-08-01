@@ -1,17 +1,38 @@
 {
   "manifest_version": 3,
-  "name": "Sarideo — Flow bridge",
+  "name": "Sarideo \u2014 Flow bridge",
   "version": "1.0.0",
   "description": "Sarideo sahnalari uchun rasmlarni Google Flow'da yasab, ilovaga qaytaradi.",
-  "permissions": ["storage", "tabs", "scripting", "alarms"],
-  "host_permissions": ["https://labs.google/*", "http://*/*", "https://*/*"],
-  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://labs.google/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "options_page": "options.html",
-  "action": { "default_popup": "options.html", "default_title": "Sarideo — Flow bridge" },
+  "action": {
+    "default_popup": "options.html",
+    "default_title": "Sarideo \u2014 Flow bridge"
+  },
   "content_scripts": [
     {
-      "matches": ["https://labs.google/fx/*", "https://labs.google/*/fx/*"],
-      "js": ["flow.js"],
+      "matches": [
+        "https://labs.google/fx/*",
+        "https://labs.google/*/fx/*"
+      ],
+      "js": [
+        "flow-dom.js",
+        "flow.js"
+      ],
       "run_at": "document_idle"
     }
   ]
