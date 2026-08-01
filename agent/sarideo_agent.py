@@ -204,7 +204,13 @@ async def serve_login(page, host: str, port: int, token: str) -> None:
     await runner.setup()
     site = web.TCPSite(runner, host, port)
     await site.start()
-    print(f"\n  Telefoningizdan oching:  http://<shu-mashina>:{port}/?t={token}\n"
+    # Printed rather than assumed: on a hosting platform the address is the
+    # service's public URL, and on a home machine it is an address on the LAN.
+    # Only the path and the token are ours to state.
+    public = os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("PUBLIC_URL", "")
+    where = (f"https://{public.replace('https://', '').rstrip('/')}"
+             if public else f"http://<shu-mashina>:{port}")
+    print(f"\n  Telefoningizdan oching:  {where}/?t={token}\n"
           f"  Google'ga kirib bo'lgach «Kirdim — saqla» ni bosing.\n", flush=True)
     await finished.wait()
     await runner.cleanup()
@@ -214,7 +220,13 @@ async def login(args) -> None:
     async with async_playwright() as play:
         ctx = await browser(play, headless=args.headless)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        await page.goto(args.url, wait_until="domcontentloaded")
+        try:
+            await page.goto(args.url, wait_until="domcontentloaded")
+        except Exception as exc:  # noqa: BLE001 - the view is the way to fix this
+            # A first load that fails is exactly when the remote view is most
+            # wanted: you can see the error, go back, try again. Dying with a
+            # traceback instead leaves nothing to look at.
+            print(f"Sahifa ochilmadi ({exc}). Oyna baribir ochiladi.", flush=True)
         if args.headless:
             await serve_login(page, args.host, args.port, args.token or secrets.token_urlsafe(9))
         else:
@@ -324,8 +336,13 @@ def main() -> None:
                          help="Google'ga bir marta kirib, profilni saqlash")
     lg.add_argument("--headless", action="store_true", default=True)
     lg.add_argument("--host", default="0.0.0.0")
-    lg.add_argument("--port", type=int, default=8777)
-    lg.add_argument("--token", default="")
+    # `PORT` is what every hosting platform hands a service, and this is the one
+    # command that has to be reachable from outside — a login page on a port the
+    # platform is not routing is a login page nobody can open.
+    lg.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8777))
+    # From the environment too, so the token can be set before the deploy rather
+    # than fished out of the logs on a phone.
+    lg.add_argument("--token", default=os.environ.get("SARIDEO_LOGIN_TOKEN", ""))
     lg.set_defaults(func=login)
 
     rn = subs.add_parser("run", parents=[parent], help="navbatni ishlash")
