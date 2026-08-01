@@ -39,11 +39,22 @@ import secrets
 import sys
 from pathlib import Path
 
-try:
-    from playwright.async_api import async_playwright
-except ImportError:  # pragma: no cover - the message is the whole point
-    sys.exit("playwright kerak:  pip install -r requirements.txt "
-             "&& playwright install chromium")
+
+def playwright():
+    """Imported when a browser is actually wanted, not at startup.
+
+    `bridge` drives no browser — Flow Agent has one — so requiring Playwright to
+    be installed before the file will even load would make the lightest of the
+    three modes carry the heaviest dependency for nothing.
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:  # pragma: no cover - the message is the whole point
+        sys.exit("Bu buyruq uchun playwright kerak:\n"
+                 "  pip install -r requirements.txt && playwright install chromium\n"
+                 "(`bridge` uchun kerak emas — unga faqat aiohttp yetadi.)")
+    return async_playwright()
+
 
 HERE = Path(__file__).resolve().parent
 # Beside the repo checkout normally; the container image copies it to /extension,
@@ -307,7 +318,7 @@ async def serve_login(page, host: str, port: int, token: str) -> None:
 
 
 async def login(args) -> None:
-    async with async_playwright() as play:
+    async with playwright() as play:
         ctx = await browser(play, headless=args.headless)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         try:
@@ -485,7 +496,7 @@ async def run(args) -> None:
     import aiohttp
 
     api = Sarideo(args.server, args.worker)
-    async with async_playwright() as play:
+    async with playwright() as play:
         ctx = await browser(play, headless=not args.headed)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(args.url, wait_until="domcontentloaded")
@@ -517,7 +528,7 @@ async def run(args) -> None:
 
 
 async def probe(args) -> None:
-    async with async_playwright() as play:
+    async with playwright() as play:
         ctx = await browser(play, headless=not args.headed)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(args.url, wait_until="domcontentloaded")

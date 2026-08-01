@@ -42,8 +42,12 @@ Agent'ning `127.0.0.1:8001` dagi endpointiga uzatadi:
 flow status          # extension_connected: True, has_flow_key: True
 
 # 2. Shu yerdan ko'prikni ishga tushiring
+pip install aiohttp
 SARIDEO_URL=https://<sarideo-manzilingiz> python sarideo_agent.py bridge
 ```
+
+`bridge` uchun **playwright ham, brauzer ham kerak emas** — faqat `aiohttp`.
+Brauzerni Flow Agent yuritadi.
 
 | O'zgaruvchi | Nima |
 |---|---|
