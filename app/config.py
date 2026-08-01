@@ -194,6 +194,13 @@ def tts_rate_limit(provider: str) -> int:
     return _TTS_RATE_DEFAULTS.get(provider, 0)
 IMAGE_TIMEOUT = float(_env("IMAGE_TIMEOUT", "150"))
 IMAGE_DEADLINE = float(_env("IMAGE_DEADLINE", "330"))
+# How long a scene will wait for a picture that is being made somewhere else.
+# Nothing like the deadline above: that one bounds an API call, this one bounds a
+# browser queue and, at the far end of it, possibly a person. Twenty minutes is
+# long enough to open the laptop and let the extension work through a backlog,
+# and short enough that a render does not sit there overnight.
+FLOW_PATIENCE = float(_env("FLOW_PATIENCE", "1200"))
+FLOW_POLL_SECONDS = float(_env("FLOW_POLL_SECONDS", "2"))
 TTS_CONCURRENCY = _int("TTS_CONCURRENCY", 3)
 MAX_CONCURRENT_JOBS = _int("MAX_CONCURRENT_JOBS", 1)
 
@@ -465,6 +472,12 @@ def llm_ready() -> bool:
 
 def image_provider_ready(provider: str | None = None) -> bool:
     provider = (provider or IMAGE_PROVIDER).lower()
+    # `flow` has no key to check and never will: the pictures are made in a
+    # browser that is already signed in to Google, and this app never sees the
+    # account. It is ready as soon as it is chosen — whether anything is actually
+    # listening for the prompts is answered by the queue, not by a key.
+    if provider == "flow":
+        return True
     return has_key(provider) if provider in {"gemini", "fal", "openai"} else False
 
 

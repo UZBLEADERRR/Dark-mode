@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import mimetypes
 import shutil
 from contextlib import asynccontextmanager
@@ -13,10 +14,12 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
+from PIL import Image as PILImage
 
 from . import config, keys, pgstore, pipeline, planner, skills, store
 from .models import (
     ApiKeyIn,
+    FlowFail,
     ApiKeyPatch,
     BrandKit,
     ChatTurn,
@@ -434,7 +437,11 @@ async def health() -> dict[str, Any]:
         # that belongs to some other provider's key would only mislead.
         "tts_rate_limit": config.tts_rate_limit(config.TTS_PROVIDER),
         "image_providers": {n: config.image_provider_ready(n)
-                            for n in ("gemini", "fal", "openai")},
+                            for n in ("gemini", "fal", "openai", "flow")},
+        # How many scene prompts are sitting in the queue right now. Zero is the
+        # normal answer; a number that is not going down is a browser that is not
+        # open, and that is worth being able to see from the health panel.
+        "flow_waiting": len(store.list_image_tasks()),
         "tts_providers": {n: config.tts_provider_ready(n)
                           for n in ("elevenlabs", "openai", "gemini")},
         "transcription": config.has_key("openai"),
@@ -1956,6 +1963,89 @@ async def dub_video(
     })
     _launch(lambda: pipeline.run_dub(job_id), job_id)
     return {"id": job_id, "status": "queued"}
+
+
+# ── pictures made somewhere else ──────────────────────────────────────────────
+#
+# The `flow` image provider does not call anything. It parks each scene's prompt
+# in a queue and waits, and these are the two ends of that queue: something takes
+# a prompt, and something hands back a picture. What that something is — the
+# browser extension in `extension/`, or a person with a file picker — is not this
+# app's business, which is the point. The pictures are made in a browser that is
+# already signed in to Google; no account, no cookie and no token for it ever
+# reaches the server.
+
+def _task_out(task: dict[str, Any]) -> dict[str, Any]:
+    job = store.get_job(task.get("job_id", "")) or {}
+    return {
+        "id": task.get("id", ""),
+        "job_id": task.get("job_id", ""),
+        "title": (job.get("result") or {}).get("title")
+                 or (job.get("request") or {}).get("topic", ""),
+        "scene": task.get("scene", 0),
+        "prompt": task.get("prompt", ""),
+        "aspect": task.get("aspect", "16:9"),
+        "status": task.get("status", ""),
+        "taken_by": task.get("taken_by", ""),
+        "error": task.get("error", ""),
+        "created_at": task.get("created_at", ""),
+    }
+
+
+@app.get("/api/flow/tasks")
+async def flow_tasks(job_id: str = "", pending: bool = True) -> dict[str, Any]:
+    """What is still waiting for a picture. Read-only, and safe to poll."""
+    rows = store.list_image_tasks(job_id=job_id, pending_only=pending)
+    return {"tasks": [_task_out(t) for t in rows], "waiting": len(rows)}
+
+
+@app.post("/api/flow/next")
+async def flow_next(worker: str = "") -> dict[str, Any]:
+    """Claim the oldest prompt nobody is working on.
+
+    A claim is soft: it expires, so a browser tab closed halfway through hands
+    the scene back instead of holding the render until it gives up.
+    """
+    task = store.claim_image_task(worker.strip()[:60] or "anon")
+    return {"task": _task_out(task) if task else None}
+
+
+@app.post("/api/flow/tasks/{task_id}/image")
+async def flow_deliver(task_id: str, image: UploadFile = File(...)) -> dict[str, Any]:
+    """Here is the picture. Write it where the render is waiting for it."""
+    task = store.get_image_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Bunday so'rov yo'q.")
+    if task["status"] == "done":
+        raise HTTPException(status_code=409, detail="Bu so'rovga rasm allaqachon berilgan.")
+
+    data, _mime, _ext = await _read_upload(image, IMAGE_TYPES)
+    target = Path(task["out_path"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        # Normalised here rather than at the far end, because the far end is a
+        # browser download and could be anything the model felt like producing.
+        # RGB PNG is what ffmpeg will not trip over.
+        with PILImage.open(io.BytesIO(data)) as img:
+            img.convert("RGB").save(target, format="PNG")
+    except Exception as exc:  # noqa: BLE001 - a bad file is the caller's problem
+        raise HTTPException(status_code=400,
+                            detail=f"Rasmni o'qib bo'lmadi: {exc}") from exc
+
+    store.finish_image_task(task_id)
+    return {"ok": True, "task": _task_out(store.get_image_task(task_id) or {})}
+
+
+@app.post("/api/flow/tasks/{task_id}/fail")
+async def flow_fail(task_id: str, body: FlowFail) -> dict[str, Any]:
+    """It did not work. Say so, rather than letting the render wait it out."""
+    if not store.get_image_task(task_id):
+        raise HTTPException(status_code=404, detail="Bunday so'rov yo'q.")
+    if body.retry:
+        store.release_image_task(task_id)
+    else:
+        store.finish_image_task(task_id, error=body.reason or "Flow'da chiqmadi")
+    return {"ok": True, "task": _task_out(store.get_image_task(task_id) or {})}
 
 
 @app.post("/api/videos/subtitle", status_code=202)

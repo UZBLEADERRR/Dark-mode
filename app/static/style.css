@@ -1372,6 +1372,20 @@ input[type="range"]::-moz-range-thumb {
 /* Monospace on purpose: this line exists to be compared, character by character,
    with the key on the provider's dashboard. */
 .key-id { font-size: .72rem; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* The Flow queue. Same shape as a key row, because it is the same kind of thing:
+   a list of small items each with a couple of actions. */
+.flow-row { padding: .7rem 0; border-top: 1px solid var(--line); }
+.flow-row:first-child { border-top: 0; }
+.flow-what b { display: block; font-size: .86rem; }
+.flow-meta { font-size: .72rem; color: var(--muted); }
+/* The prompt is the thing you are about to paste somewhere else, so it is shown
+   in full rather than clipped — a truncated prompt makes a different picture. */
+.flow-prompt { margin: .35rem 0 .5rem; font-size: .78rem; color: var(--fg);
+  overflow-wrap: anywhere; white-space: pre-wrap; }
+.flow-acts { display: flex; flex-wrap: wrap; gap: .4rem; }
+.flow-acts .chip.file { position: relative; overflow: hidden; }
+.flow-acts .chip.file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .key-tip { font-size: .7rem; color: var(--muted); }
 .key-acts { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
 .key-acts .chip {

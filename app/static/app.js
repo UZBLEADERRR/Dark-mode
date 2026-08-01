@@ -532,7 +532,11 @@ async function loadHealth() {
     ['ffmpeg', h.ffmpeg],
     [`skript — ${h.llm_provider}`, h.llm],
     ['transkripsiya', h.transcription],
-    ...Object.entries(h.image_providers).map(([n, v]) => [`rasm — ${n}`, v]),
+    // `flow` is left out on purpose: it has no key, so it is always "ready",
+    // and a green row saying so would mean nothing. Whether anything is actually
+    // answering its prompts is the Flow queue's business, not this list's.
+    ...Object.entries(h.image_providers)
+      .filter(([n]) => n !== 'flow').map(([n, v]) => [`rasm — ${n}`, v]),
     ...Object.entries(h.tts_providers).map(([n, v]) => [`ovoz — ${n}`, v]),
     [`fayllar — ${h.storage}`, true],
     // Worth its own row, and worth being strict about: whether your work
@@ -557,7 +561,11 @@ async function loadHealth() {
   const bad = checks.filter(([, ok]) => !ok).length;
   libCount('health', bad ? `${bad} ta yetishmaydi` : 'hammasi joyida', bad > 0);
 
-  const core = h.ffmpeg && h.llm && Object.values(h.image_providers).some(Boolean);
+  // Same reasoning: a deployment with no image key at all is not set up, unless
+  // it has deliberately chosen the provider that needs no key.
+  const canDraw = Object.entries(h.image_providers || {})
+    .some(([n, ok]) => ok && n !== 'flow') || h.defaults?.image_provider === 'flow';
+  const core = h.ffmpeg && h.llm && canDraw;
   const voice = Object.values(h.tts_providers).some(Boolean);
   const pill = $('#health-pill');
   pill.className = `health-pill ${core && voice ? 'ok' : core ? 'part' : 'bad'}`;
@@ -4799,6 +4807,96 @@ async function loadKeys() {
   drawKeys();
 }
 
+// ── the Flow queue ────────────────────────────────────────────────────────────
+// Prompts the app is not going to draw itself. The extension normally empties
+// this without anyone looking at it; this panel exists so that it still works
+// when the extension is not running, and so a render that is standing still can
+// be seen to be waiting rather than stuck.
+let FLOW = { tasks: [], waiting: 0 };
+
+let flowPoll = null;
+
+async function loadFlow() {
+  try { FLOW = await api('/api/flow/tasks'); } catch (e) { FLOW = { tasks: [], waiting: 0 }; }
+  drawFlow();
+  // Polled only when there is a reason to: something is queued, or a video is
+  // being made and might queue something. An idle library asks nothing.
+  const want = (FLOW.waiting > 0) || !!state.activeId;
+  if (want && !flowPoll) flowPoll = setInterval(loadFlow, 5000);
+  if (!want && flowPoll) { clearInterval(flowPoll); flowPoll = null; }
+}
+
+function drawFlow() {
+  const box = $('#flow-box');
+  if (!box) return;
+  const tasks = FLOW.tasks || [];
+  libCount('flow', tasks.length ? `${tasks.length} ta kutilyapti` : 'bo‘sh', tasks.length > 0);
+
+  box.innerHTML = tasks.length ? tasks.map((t) => `
+    <div class="flow-row" data-task="${esc(t.id)}">
+      <div class="flow-what">
+        <b>${esc(t.title || t.job_id)} · ${t.scene + 1}-sahna</b>
+        <span class="flow-meta">${esc(t.aspect)}${
+          t.status === 'taken' ? ` · ${esc(t.taken_by)} olib ketdi` : ' · navbatda'}</span>
+        <p class="flow-prompt">${esc(t.prompt)}</p>
+      </div>
+      <div class="flow-acts">
+        <button class="chip" data-flow="copy">Promptni nusxalash</button>
+        <label class="chip file"><input type="file" accept="image/*" data-flow="give" />
+          <span>Rasmni yuklash</span></label>
+        <button class="chip danger" data-flow="skip">Bekor qilish</button>
+      </div>
+    </div>`).join('')
+    : '<p class="key-none">Hech narsa kutilmayapti.</p>';
+
+  $$('#flow-box [data-flow]').forEach((el) => {
+    const id = el.closest('.flow-row').dataset.task;
+    if (el.dataset.flow === 'give') {
+      el.addEventListener('change', () => flowGive(id, el.files[0]));
+    } else {
+      el.addEventListener('click', () => flowAct(id, el.dataset.flow));
+    }
+  });
+}
+
+async function flowAct(id, act) {
+  const task = (FLOW.tasks || []).find((t) => t.id === id);
+  if (!task) return;
+  if (act === 'copy') {
+    try {
+      await navigator.clipboard.writeText(task.prompt);
+      toast('Prompt nusxalandi');
+    } catch {
+      // Clipboard access is refused on an insecure origin, which a self-hosted
+      // app on a bare IP often is. Selecting the text is the honest fallback.
+      toast('Nusxalab bo‘lmadi — promptni belgilab oling');
+    }
+    return;
+  }
+  if (act === 'skip') {
+    if (!confirm('Bu sahna rasmsiz qoladi. Davom etamizmi?')) return;
+    await api(`/api/flow/tasks/${id}/fail`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'Qo‘lda bekor qilindi' }),
+    });
+    toast('Bekor qilindi');
+    await loadFlow();
+  }
+}
+
+async function flowGive(id, file) {
+  if (!file) return;
+  const body = new FormData();
+  body.append('image', file);
+  try {
+    await api(`/api/flow/tasks/${id}/image`, { method: 'POST', body });
+    toast('Rasm yuborildi');
+  } catch (e) {
+    toast(e.message);
+  }
+  await loadFlow();
+}
+
 /** "2 daqiqa" rather than "132s" — a cooldown is read, not measured. */
 function coolText(seconds) {
   if (seconds <= 0) return '';
@@ -4990,7 +5088,7 @@ $('#key-form')?.addEventListener('submit', async (e) => {
     wireFades();
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
     await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat(),
-                       loadYouTube(), loadPlans(), loadKeys()]);
+                       loadYouTube(), loadPlans(), loadKeys(), loadFlow()]);
     applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.
