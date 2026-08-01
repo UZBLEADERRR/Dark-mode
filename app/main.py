@@ -1862,6 +1862,12 @@ async def cancel_job(job_id: str) -> dict[str, Any]:
     if task and not task.done():
         task.cancel()
 
+    # Anything this job had queued for somebody else to draw is dropped with it.
+    # Without this a cancelled render leaves prompts in the Flow queue that
+    # nobody is waiting for, and the extension dutifully makes pictures for a
+    # video that no longer exists.
+    dropped = store.drop_image_tasks(job_id)
+
     scenes = (job.get("result") or {}).get("scenes") or []
     store.update_job(
         job_id,
@@ -1871,7 +1877,8 @@ async def cancel_job(job_id: str) -> dict[str, Any]:
         # Scenes are only written between stages, so a cancel during the first
         # pass has nothing to go back to; one that lands later keeps the draft.
         error="" if scenes else "Stopped before it finished.",
-        log="Stopped by you.",
+        log=("Stopped by you."
+             + (f" {dropped} ta Flow so'rovi ham bekor qilindi." if dropped else "")),
     )
     return _job_payload(_get_job_or_404(job_id))
 

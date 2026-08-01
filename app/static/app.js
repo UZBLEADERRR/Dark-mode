@@ -1683,7 +1683,13 @@ function drawStage(job) {
       <span class="stage-pct">${job.progress}%</span>
     </div>
     <div class="track ${esc(job.status)}${busy ? ' live' : ''}"><i style="width:${job.progress}%"></i></div>
-    <p class="step${busy ? ' busy' : ''}">${esc(meta.join(' · '))}</p>`);
+    <p class="step${busy ? ' busy' : ''}">${esc(meta.join(' · '))}</p>
+    ${busy ? `<div class="stage-stop">
+      <!-- Available for the whole of a busy job, not only once it looks stuck.
+           Changing your mind about a video is not an error condition, and a
+           forty-scene render is a long time to have no way out of. -->
+      <button class="btn ghost sm" data-stop="${esc(job.id)}">To‘xtatish</button>
+    </div>` : ''}`);
 
   // Nothing has been drawn or recorded yet — the whole video is still just these
   // words, which is exactly why this is the moment to read them.
@@ -1705,8 +1711,6 @@ function drawStage(job) {
       <span>${idle >= IDLE_STOP
         ? `Provayder ${idle} soniyadan beri javob bermayapti.`
         : `Kutilmoqda… ${idle} s`}</span>
-      ${idle >= IDLE_STOP
-        ? `<button class="btn ghost sm" data-stop="${esc(job.id)}">To‘xtatish</button>` : ''}
     </div>`);
   }
 
