@@ -1,0 +1,2 @@
+playwright>=1.44
+aiohttp>=3.9
