@@ -20,6 +20,7 @@ from . import config, keys, pgstore, pipeline, planner, skills, store
 from .models import (
     ApiKeyIn,
     FlowFail,
+    FlowMode,
     ApiKeyPatch,
     BrandKit,
     ChatTurn,
@@ -107,6 +108,10 @@ async def lifespan(app: FastAPI):
         # environment, so they have to be loaded back before the first request.
         config.set_model_overrides(store.get_setting(MODELS_KEY) or {})
         config.set_voice_overrides(store.get_setting(VOICES_KEY) or {})
+        # Same reasoning for the image provider: switching to `flow` from the
+        # library must survive a restart, or it is a setting you re-apply every
+        # deploy and eventually stop trusting.
+        config.set_image_provider(store.get_setting(IMAGE_PROVIDER_KEY) or "")
     except Exception as exc:  # noqa: BLE001 - reported, never fatal
         print(f"[sarideo] Baza bilan ishlanmadi: {pgstore.explain(exc)}", flush=True)
     # Provisioning the remote bucket is a network call. Never put one between
@@ -1071,6 +1076,7 @@ async def remove_asset(asset_id: str) -> dict[str, bool]:
 # ── models and voices ─────────────────────────────────────────────────────────
 
 MODELS_KEY = "models"
+IMAGE_PROVIDER_KEY = "image_provider"
 VOICES_KEY = "voices"
 
 
@@ -1439,12 +1445,53 @@ async def get_job(job_id: str) -> dict[str, Any]:
     return _job_payload(_get_job_or_404(job_id))
 
 
+def _staged_uploads(request: dict[str, Any]) -> list[Path]:
+    """Files the user handed us for this project, staged outside its folder.
+
+    A voice-over, or the video being dubbed or subtitled, is written to
+    `uploads/` before there is a project folder to put it in — so deleting the
+    folder never touched it, and the largest file in the whole app quietly
+    outlived the project it belonged to.
+
+    Only paths inside `uploads/` are returned. A request is stored JSON, and JSON
+    is the kind of thing that ends up holding `/etc/passwd` if nobody checks.
+    """
+    root = (config.DATA_DIR / "uploads").resolve()
+    out: list[Path] = []
+    for field in ("narration_audio", "source_video"):
+        raw = request.get(field)
+        if not raw:
+            continue
+        try:
+            path = Path(str(raw)).resolve()
+            if path.is_relative_to(root) and path.is_file():
+                out.append(path)
+        except (OSError, ValueError):
+            continue
+    return out
+
+
 @app.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str) -> dict[str, bool]:
+async def delete_job(job_id: str) -> dict[str, Any]:
+    """Delete a project — everywhere it exists, not only where it is cheapest.
+
+    The row, the database copies, the local folder, the file you uploaded, the
+    prompts it still had queued, and the bucket. Somebody deleting a video wants
+    it gone, and a copy left at a public URL is the one that matters.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    uploads = _staged_uploads(job.get("request") or {})
+
     if not store.delete_job(job_id):
         raise HTTPException(status_code=404, detail="Job not found.")
     shutil.rmtree(config.PROJECTS_DIR / job_id, ignore_errors=True)
-    return {"deleted": True}
+    store.drop_image_tasks(job_id)
+    for path in uploads:
+        path.unlink(missing_ok=True)
+    remote = await storage.remove_folder(job_id)
+    return {"deleted": True, "uploads_removed": len(uploads), "remote_removed": remote}
 
 
 # ── scene editing ─────────────────────────────────────────────────────────────
@@ -2003,7 +2050,23 @@ def _task_out(task: dict[str, Any]) -> dict[str, Any]:
 async def flow_tasks(job_id: str = "", pending: bool = True) -> dict[str, Any]:
     """What is still waiting for a picture. Read-only, and safe to poll."""
     rows = store.list_image_tasks(job_id=job_id, pending_only=pending)
-    return {"tasks": [_task_out(t) for t in rows], "waiting": len(rows)}
+    return {"tasks": [_task_out(t) for t in rows], "waiting": len(rows),
+            "on": config.IMAGE_PROVIDER == "flow",
+            # What it goes back to when switched off, so the button can say it.
+            "off_provider": config.IMAGE_PROVIDER_ENV}
+
+
+@app.post("/api/flow/mode")
+async def flow_mode(body: FlowMode) -> dict[str, Any]:
+    """Turn Flow on or off for every video from now on.
+
+    A per-video dropdown was the only way to choose this, which made it a thing
+    you had to remember every time rather than a mode the app is in. Stored, so
+    it survives a restart.
+    """
+    chosen = config.set_image_provider("flow" if body.on else config.IMAGE_PROVIDER_ENV)
+    store.set_setting(IMAGE_PROVIDER_KEY, chosen)
+    return await flow_tasks()
 
 
 @app.post("/api/flow/next")
