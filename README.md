@@ -319,7 +319,20 @@ uchun**, va Railway uni dashboard sozlamalaridan ustun qo'yadi — ya'ni agent
 servisi ham o'shani o'qib, noto'g'ri Dockerfile'ni quradi. Agent servisining
 **Config-as-code** yo'liga `agent/railway.json` deb yozing.
 
-Uchala yo'l ham **bitta navbatni** ishlaydi — qaysi biri ishlayotgani ilovaga
+**Eng ishonchlisi — Flow Agent.** [`kodelyx/flow-agent`](https://github.com/kodelyx/flow-agent)
+degan alohida ochiq loyiha bor: uning kengaytmasi kirgan Flow seansingizdan
+kalitni oladi va lokal serveri Flow'ning **haqiqiy API'siga** murojaat qiladi —
+sahifani bosib yurish yo'q, Google tugmani ko'chirsa ham buzilmaydi. Sarideo
+u bilan `agent/` dagi **`bridge`** buyrug'i orqali gaplashadi (brauzer ochmaydi):
+
+```bash
+SARIDEO_URL=https://<sarideo-manzilingiz> python sarideo_agent.py bridge
+```
+
+Uning kodi bu repoga ko'chirilmagan — o'z loyihasi bo'lib qolaveradi, biz u
+bilan faqat HTTP orqali gaplashamiz.
+
+To'rtala yo'l ham **bitta navbatni** ishlaydi — qaysi biri ishlayotgani ilovaga
 farqi yo'q, xohlasangiz ikkitasini birga qo'yasiz.
 
 Bilib qo'yish kerak bo'lgan narsalar:
@@ -1008,7 +1021,8 @@ extension/             Chrome kengaytmasi — kompyuterdagi brauzerda Flow
 └── background.js      Navbat ↔ Flow varag'i ko'prigi
 
 agent/                 Telefon uchun: brauzer boshqa mashinada
-├── sarideo_agent.py   login (ekranni telefonga uzatadi) va run (navbatni ishlaydi)
+├── sarideo_agent.py   login (ekranni telefonga uzatadi), run (brauzerni yuritadi),
+│                      bridge (Flow Agent orqali — brauzersiz)
 └── Dockerfile         Alohida servis sifatida deploy qilish uchun
 ```
 
