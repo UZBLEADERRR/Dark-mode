@@ -21,10 +21,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY extension/flow-dom.js /extension/flow-dom.js
 COPY agent/sarideo_agent.py ./
 
-# The signed-in browser profile. Mount a volume here — without one, every
-# restart is a fresh browser and a fresh sign-in.
+# Where the signed-in browser profile is kept. Attach a volume at this path —
+# without one, every restart is a fresh browser and a fresh sign-in.
+#
+# Declared as an environment variable and *not* as a `VOLUME` instruction:
+# Railway refuses a Dockerfile that contains one ("docker VOLUME at Line 27 is
+# not supported, use Railway Volumes") because it manages mounts itself. The
+# instruction bought nothing anyway — a mount at this path works with or without
+# it, on Railway and on Docker alike.
 ENV SARIDEO_PROFILE=/profile
-VOLUME ["/profile"]
 
 # `login` first, once, to sign in; then `run`. Overridden per deployment.
 CMD ["python", "sarideo_agent.py", "run"]
