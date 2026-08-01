@@ -79,18 +79,58 @@ Flow sahifasida prompt maydoni va tugma topilyaptimi — shuni aytadi. Topilmasa
 `extension/flow-dom.js` dagi `SELECTORS` ni to'g'irlash kerak (o'sha fayl
 kengaytma bilan **umumiy** — bir marta tuzatsangiz, ikkalasi ham tuzaladi).
 
-## Servis sifatida (Railway va h.k.)
+## Railway'da — telefondan, kompyutersiz
 
-`agent/Dockerfile` bor. Sarideo image'iga qo'shilmagan — Chromium bir necha yuz
+Agar sizda faqat telefon bo'lsa, agentni Sarideo yonida **ikkinchi servis** qilib
+qo'yasiz. Hammasi telefon brauzeridan bajariladi.
+
+**1. Servis yarating.** Railway loyihangizda `+ New` → `GitHub Repo` → shu repo.
+
+**2. Sozlang** (Settings):
+
+| Nima | Qiymat |
+|---|---|
+| Builder | Dockerfile |
+| Dockerfile Path | `agent/Dockerfile` |
+| Volume | `/profile` ga ulang — **majburiy**, aks holda har restartda qaytadan kirasiz |
+
+**3. O'zgaruvchilar** (Variables):
+
+```
+SARIDEO_URL=https://<sarideo-manzilingiz>
+SARIDEO_LOGIN_TOKEN=<o'zingiz o'ylab topgan parol>
+```
+
+**4. Bir marta kiring.** Start Command'ni vaqtincha shunga o'zgartiring:
+
+```
+python sarideo_agent.py login
+```
+
+Deploy bo'lgach servisga **Public Domain** bering (Settings → Networking →
+Generate Domain). Log'da manzil chiqadi:
+
+```
+Telefoningizdan oching:  https://<agent-manzili>/?t=<parolingiz>
+```
+
+Shu havolani telefonda oching → brauzerning ekranini ko'rasiz → Google'ga
+kiring → **«Kirdim — saqla»**.
+
+**5. Ishga tushiring.** Start Command'ni qaytaring:
+
+```
+python sarideo_agent.py run
+```
+
+Tamom. Endi Sarideo'da video buyursangiz, rasmlar o'zi yasaladi.
+
+**Public Domain'ni o'chirib qo'ying** — u faqat kirish uchun kerak edi, va
+`run` rejimida hech qanday port ochilmaydi.
+
+`agent/Dockerfile` Sarideo image'iga qo'shilmagan: Chromium bir necha yuz
 megabayt va ffmpeg'ga kerak bo'lgan xotirani yeydi; kichik konteynerda ikkovi
-birga render'ni o'ldiradi. Alohida servis qiling:
-
-- Dockerfile: `agent/Dockerfile`, kontekst — reponing ildizi
-- `SARIDEO_URL` — Sarideo manzili
-- `/profile` ga **volume** ulang, aks holda har qayta ishga tushganda yangi
-  brauzer va yangi kirish bo'ladi
-- birinchi marta buyruqni `python sarideo_agent.py login --port 8777` qilib,
-  portni ochib, telefondan kirasiz; keyin `run` ga qaytarasiz
+birga render'ni o'ldiradi.
 
 ## Sozlamalar
 
@@ -100,6 +140,8 @@ birga render'ni o'ldiradi. Alohida servis qiling:
 | `SARIDEO_WORKER` | Bu mashinaning nomi (navbatda kim olganini ko'rsatadi) |
 | `SARIDEO_PROFILE` | Brauzer profili qayerda saqlanadi |
 | `SARIDEO_CHROME` | Boshqa Chromium ishlatmoqchi bo'lsangiz |
+| `SARIDEO_LOGIN_TOKEN` | Kirish sahifasining paroli (bermasangiz o'zi o'ylab topadi va log'ga yozadi) |
+| `PORT` | Kirish sahifasi qaysi portda — hosting o'zi beradi, qo'lda yozish shart emas |
 
 Bir nechta mashina bir vaqtda ishlashi mumkin — har biri o'z promptini oladi,
 navbat ularni chalkashtirmaydi.
