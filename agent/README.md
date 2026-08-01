@@ -139,6 +139,13 @@ Telefoningizdan oching:  https://<agent-manzili>/?t=<parolingiz>
 Shu havolani telefonda oching → brauzerning ekranini ko'rasiz → Google'ga
 kiring → **«Kirdim — saqla»**.
 
+Token **`?t=`** dan keyin turadi, yo'l sifatida emas: `…app/?t=1111` to'g'ri,
+`…app/1111` noto'g'ri (ikkinchisini ham tushunadi va o'zi to'g'ri manzilga
+o'tkazadi, lekin bilib qo'ygan yaxshi).
+
+Tokenni jiddiy tanlang — `1111` emas. O'sha havolani bilgan odam sizning
+Google seansingiz turgan brauzerni boshqara oladi.
+
 **6. Ishga tushiring.** Start Command'ni **bo'shating** (image'ning o'zi
 `run` bilan boshlanadi), yoki shunday yozing:
 

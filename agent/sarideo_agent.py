@@ -194,11 +194,32 @@ async def serve_login(page, host: str, port: int, token: str) -> None:
         finished.set()
         return web.json_response({"ok": True})
 
+    async def elsewhere(request):
+        """Anything else. Usually the token typed as a path instead of a query.
+
+        `.../1111` rather than `.../?t=1111` is the obvious mistake to make when
+        copying a long URL on a phone, and it used to be answered with a bare
+        404 that explained nothing. If the path *is* the token this redirects to
+        the real address — the check is the same either way, so nothing is
+        loosened — and if it is not, it says what the address should look like
+        without repeating the token back to whoever guessed wrong.
+        """
+        guess = request.match_info.get("rest", "").strip("/")
+        if guess and secrets.compare_digest(guess, token):
+            raise web.HTTPFound(f"/?t={token}")
+        return web.Response(
+            status=403,
+            text="Manzil noto'g'ri.\n\n"
+                 "Token yo'l emas, so'rov qismida bo'lishi kerak:\n"
+                 "    https://<manzil>/?t=<token>\n",
+            content_type="text/plain")
+
     app = web.Application()
     app.add_routes([
         web.get("/", index), web.get("/shot", shot),
         web.post("/tap", tap), web.post("/type", type_text), web.post("/key", key),
         web.post("/back", back), web.post("/done", done),
+        web.get("/{rest:.*}", elsewhere),
     ])
     runner = web.AppRunner(app)
     await runner.setup()
