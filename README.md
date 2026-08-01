@@ -300,9 +300,16 @@ yuklaysiz. Telefondan ham bo'ladi. Bir sahna kerak bo'lmasa — «Bekor qilish»
 
 Bilib qo'yish kerak bo'lgan narsalar:
 
-- Sahna rasmini **20 daqiqa** kutadi (`FLOW_PATIENCE`), keyin nima yetishmayotganini
-  aytib to'xtaydi. Kutayotganini jurnalga yozib turadi, shuning uchun to'xtab
+- Sahna rasmini **20 daqiqa** kutadi (`FLOW_PATIENCE`). Kelmasa — o'sha sahnaga
+  vaqtinchalik rasm qo'yib, sababini yozib, **davom etadi**. Bitta rasm tufayli
+  100 sahnalik render yo'qolmaydi; keyin o'sha sahnani tahrirlash bo'limidan
+  qayta yaratasiz. Kutayotganini jurnalga yozib turadi, shuning uchun to'xtab
   qolganday ko'rinmaydi.
+- **Nechta sahna bo'lsa ham ishlayveradi.** Ilova bir vaqtda faqat
+  `IMAGE_CONCURRENCY` (default 3) ta promptni navbatga qo'yadi va biri tayyor
+  bo'lgach keyingisini qo'yadi — ya'ni 40 sahnalik ham, 200 sahnalik ham video
+  navbatni uzaytirmaydi va hech bir prompt kutib qolmaydi. Umumiy vaqt esa
+  oddiy ko'paytma: Flow'da bitta rasm ~40 soniya bo'lsa, 100 rasm ~1 soat.
 - Bir brauzer olgan prompt **5 daqiqadan keyin** qaytib navbatga tushadi — varaq
   yopilib qolsa, sahna abadiy band bo'lib qolmaydi.
 - Bir nechta brauzer bir vaqtda ishlashi mumkin; har biri o'z promptini oladi.
@@ -962,8 +969,12 @@ app/
   `TTS_DEADLINE` / `IMAGE_DEADLINE` chegarasi bor. Ovozi chiqmagan sahna
   `needs_voice` bo'lib qoladi va qolgan sahnalar saqlanadi — render bosqichi
   uni qaytadan urinib ko'radi. Rasm chiqmasa gradient qo'yiladi.
-- Jarayon 45 soniyadan ortiq jim qolsa progress kartasida "To'xtatish" tugmasi
-  chiqadi. To'xtatilgan job tayyor sahnalari bilan tahrirlash bo'limida qoladi.
+- **«To'xtatish» tugmasi** ishlayotgan videoning progress kartasida doim turadi —
+  skript, ovoz, rasm, render, qaysi bosqichda bo'lsa ham. (Ilgari u faqat
+  jarayon 45 soniya jim qolganda chiqardi, ya'ni fikringizni o'zgartirish uchun
+  avval nimadir buzilishi kerak edi.) To'xtatilgan job tayyor sahnalari bilan
+  tahrirlash bo'limida qoladi, va `flow` rejimida o'sha videoning navbatdagi
+  promptlari ham birga bekor qilinadi.
 - **Ovozni keyin ham almashtirsa bo'ladi.** Sahna panelidagi «Ovozni qayta
   yozish» endi provayder va ovozni tanlashni so'raydi, namunasini ▶ bilan shu
   yerda eshitasiz. Ovoz butun videoga tegishli, shuning uchun o'zgartirsangiz

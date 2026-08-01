@@ -329,8 +329,19 @@ async def generate_image(
     # That deadline bounds an HTTP call to a provider; this waits on a queue and
     # a browser, and retrying it would mean queueing the same prompt three times.
     if provider == "flow":
-        return await _flow(prompt=prompt, aspect=aspect, out_path=out_path,
-                           job_id=job_id, scene=scene, on_wait=on_wait), None
+        try:
+            return await _flow(prompt=prompt, aspect=aspect, out_path=out_path,
+                               job_id=job_id, scene=scene, on_wait=on_wait), None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - same answer as every other provider
+            # A placeholder and a warning, not an exception. One picture nobody
+            # made must not take a hundred-scene render down with it — the scene
+            # can be redrawn from the editor afterwards, and a video that is
+            # ninety-nine per cent finished is worth having.
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(_placeholder(size, prompt))
+            return out_path, f"Flow'dan rasm kelmadi, o'rniga vaqtinchalik rasm: {exc}"
 
     full_prompt = prompt
     if negative_prompt and provider in {"gemini", "openai"}:
