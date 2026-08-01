@@ -11,6 +11,7 @@
   ],
   "host_permissions": [
     "https://labs.google/*",
+    "https://flow.google/*",
     "http://*/*",
     "https://*/*"
   ],
@@ -26,8 +27,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://labs.google/fx/*",
-        "https://labs.google/*/fx/*"
+        "https://labs.google/*",
+        "https://flow.google/*"
       ],
       "js": [
         "flow-dom.js",
