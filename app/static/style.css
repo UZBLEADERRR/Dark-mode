@@ -1391,6 +1391,18 @@ input[type="range"]::-moz-range-thumb {
 .flow-prompt { margin: .35rem 0 .5rem; font-size: .78rem; color: var(--fg);
   overflow-wrap: anywhere; white-space: pre-wrap; }
 .flow-acts { display: flex; flex-wrap: wrap; gap: .4rem; }
+/* Deliberately taller than the chips elsewhere. This is the one panel meant to
+   be tapped over and over on a phone — copy, leave, come back, upload, next —
+   so the targets are thumb-sized rather than dense. */
+.flow-acts .chip {
+  display: inline-flex; align-items: center; min-height: 40px;
+  padding: 0 .8rem; font-size: .78rem;
+  color: var(--muted); background: transparent;
+  border: 1px solid var(--line); border-radius: 99px;
+  cursor: pointer; white-space: nowrap;
+}
+.flow-acts .chip:hover { color: var(--text); border-color: var(--line-2); }
+.flow-acts .chip.danger:hover { color: #ff8f7d; border-color: rgba(255, 92, 71, .4); }
 .flow-acts .chip.file { position: relative; overflow: hidden; }
 .flow-acts .chip.file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .key-tip { font-size: .7rem; color: var(--muted); }
