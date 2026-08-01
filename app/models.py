@@ -477,3 +477,9 @@ class FlowFail(BaseModel):
     # difference matters: a Flow tab that was closed mid-generation should be
     # tried again, a prompt the model refuses should not be tried forever.
     retry: bool = False
+
+
+class FlowMode(BaseModel):
+    """Whether the scenes are drawn in your own browser or bought from an API."""
+
+    on: bool

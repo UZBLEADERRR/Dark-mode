@@ -294,6 +294,14 @@ tayyor PNG keladi.
 [extension/README.md](extension/README.md) da. Chrome → `chrome://extensions` →
 Developer mode → Load unpacked.
 
+**Yoqish va o'chirish.** *Kutubxona → Flow navbati* da **«Rasmlarni Flow'da
+yasash»** tugmachasi bor. Yoqsangiz — shu paytdan boshlab hamma videoda rasm
+brauzeringizda yasaladi; o'chirsangiz — avvalgi provayderga (`gemini` yoki
+`IMAGE_PROVIDER` da nima yozilgan bo'lsa) qaytadi. Bu **saqlanadi**: ilova
+qayta ishga tushsa ham, deploy qilsangiz ham o'sha holatda qoladi. Bitta
+video uchun boshqacha qilmoqchi bo'lsangiz, yaratish formasidagi «Rasm
+provayderi» ro'yxatidan tanlaysiz.
+
 **Kengaytmasiz ham ishlaydi.** *Kutubxona → Flow navbati* da kutayotgan har bir
 prompt turadi: nusxalaysiz, xohlagan joyda rasm yasaysiz, o'sha yerga
 yuklaysiz. Telefondan ham bo'ladi. Bir sahna kerak bo'lmasa — «Bekor qilish».
@@ -479,6 +487,29 @@ o'chirmaguningizcha turadi.
 Yuqorida `STORAGE_BACKEND=supabase` ham qo'shsangiz, kattaroq fayllar bazaga
 emas **Storage bucket'ga** chiqadi — bu tavsiya etiladi, chunki baza hajmi
 arzonroq ishlatiladi va tayyor videoga to'g'ridan-to'g'ri havola beriladi.
+
+### Loyihani o'chirganda nima o'chadi
+
+Hammasi — va bu ataylab sanab o'tilgan, chunki "o'chirildi" degani chindan
+o'chgan degani bo'lishi kerak:
+
+| Nima | Qayerda |
+|---|---|
+| Loyiha yozuvi | Baza (`jobs`) |
+| Sahna rasmlari, ovoz bo'laklari, tayyor MP4 | Baza (`media`) va konteyner diski |
+| **Siz yuklagan fayl** (ovoz, dublyaj yoki subtitr uchun video) | `uploads/` |
+| **Navbatda turgan Flow promptlari** | Baza (`imagetasks`) |
+| **Supabase bucket'dagi hamma fayl** | Storage |
+
+Oxirgi uchtasi ilgari **qolib ketardi**. Eng jiddiysi — bucket: tayyor video
+ochiq havolada turaverardi, ya'ni videoni aynan ko'rinmasin deb o'chirganingizda
+internetda qolgani o'sha nusxa bo'lardi. Endi bucket'dagi o'sha loyihaning
+papkasi ham tozalanadi (boshqa loyihalarga tegilmaydi), va o'chirish javobida
+nechta fayl olib tashlangani yoziladi.
+
+Bucket'ga ulanib bo'lmasa ham o'chirish **baribir bajariladi** — lokal nusxalar
+ketadi, bucket keyingi safar tozalanmaydi. O'chirish bucket tufayli to'xtab
+qolmaydi.
 
 ---
 
@@ -928,6 +959,7 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/flow/next` | Navbatdan bitta promptni olish |
 | `POST /api/flow/tasks/{id}/image` | Tayyor rasmni qaytarish |
 | `POST /api/flow/tasks/{id}/fail` | Chiqmadi (`retry: true` — navbatga qaytarsin) |
+| `POST /api/flow/mode` | Flow'ni yoqish/o'chirish (`{"on": true}`) — saqlanadi |
 | `GET/PUT /api/brand` | Brend to'plami |
 | `GET/PUT /api/models` | Har bosqich qaysi modelni chaqiradi |
 | `GET /api/models/available?provider=` | Provayderdagi mavjud modellar |

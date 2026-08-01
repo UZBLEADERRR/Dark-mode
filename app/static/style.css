@@ -1377,6 +1377,9 @@ input[type="range"]::-moz-range-thumb {
    being made, but not competing with it for attention. */
 .stage-stop { display: flex; justify-content: flex-end; margin: -.2rem 0 .5rem; }
 
+.flow-switch { padding-bottom: .6rem; border-bottom: 1px solid var(--line); margin-bottom: .2rem; }
+.flow-switch .note { margin: .35rem 0 0; }
+
 /* The Flow queue. Same shape as a key row, because it is the same kind of thing:
    a list of small items each with a couple of actions. */
 .flow-row { padding: .7rem 0; border-top: 1px solid var(--line); }

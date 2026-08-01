@@ -485,10 +485,15 @@ async function loadHealth() {
       .join('');
   }
 
+  // A bare provider name says nothing about what choosing it costs you. The one
+  // that needs saying most is `flow`, which is the only one that spends no money
+  // and the only one that will not work unless a browser is helping.
+  const PROVIDER_NOTE = { flow: ' — o‘z brauzeringiz, kalitsiz' };
   const fill = (sel, map, preferred) => {
     const pick = map[preferred] ? preferred : Object.keys(map).find((k) => map[k]);
     $(sel).innerHTML = Object.entries(map).map(([n, ok]) =>
-      `<option value="${n}"${ok ? '' : ' disabled'}${n === pick ? ' selected' : ''}>${n}${ok ? '' : ' — kalit yo‘q'}</option>`
+      `<option value="${n}"${ok ? '' : ' disabled'}${n === pick ? ' selected' : ''}>${n}${
+        ok ? (PROVIDER_NOTE[n] || '') : ' — kalit yo‘q'}</option>`
     ).join('');
   };
   fill('#image_provider', h.image_providers, h.defaults.image_provider);
@@ -4834,7 +4839,41 @@ function drawFlow() {
   const box = $('#flow-box');
   if (!box) return;
   const tasks = FLOW.tasks || [];
-  libCount('flow', tasks.length ? `${tasks.length} ta kutilyapti` : 'bo‘sh', tasks.length > 0);
+  libCount('flow', tasks.length ? `${tasks.length} ta kutilyapti`
+    : FLOW.on ? 'yoqilgan' : 'o‘chirilgan', tasks.length > 0);
+
+  // The switch lives here, next to the queue it fills, because this is where
+  // somebody looking for "how do I turn Flow on" will look. It is a mode the app
+  // is in, not a box to re-tick on every video, so it is stored.
+  const sw = $('#flow-switch');
+  if (sw) {
+    sw.innerHTML = `
+      <label class="sw"><input type="checkbox" id="flow-on"${FLOW.on ? ' checked' : ''} /><i></i>
+        <span>Rasmlarni Flow'da yasash</span></label>
+      <p class="note">${FLOW.on
+        ? `Yoqilgan — har sahnaning prompti pastdagi navbatga tushadi, API'ga
+           murojaat qilinmaydi. O‘chirsangiz <b>${esc(FLOW.off_provider || 'gemini')}</b>
+           ga qaytadi.`
+        : `O‘chirilgan — rasmlar <b>${esc(FLOW.off_provider || 'gemini')}</b> orqali,
+           API hisobidan yasaladi. Yoqsangiz ular brauzeringizga o‘tadi.`}</p>`;
+    $('#flow-on').addEventListener('change', async (e) => {
+      const on = e.target.checked;
+      e.target.disabled = true;
+      try {
+        FLOW = await api('/api/flow/mode', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ on }),
+        });
+        toast(on ? 'Flow yoqildi' : 'Flow o‘chirildi');
+        drawFlow();
+        loadHealth();
+      } catch (err) {
+        toast(err.message);
+        e.target.checked = !on;
+        e.target.disabled = false;
+      }
+    });
+  }
 
   box.innerHTML = tasks.length ? tasks.map((t) => `
     <div class="flow-row" data-task="${esc(t.id)}">

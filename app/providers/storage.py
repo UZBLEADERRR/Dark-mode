@@ -196,6 +196,46 @@ async def mirror(local_path: Path, remote_path: str) -> bool:
         return False
 
 
+async def remove_folder(prefix: str) -> int:
+    """Delete everything stored under one project. Returns how many files went.
+
+    Deleting a project used to remove the row, the local folder and the database
+    copies — and leave the bucket exactly as it was, including the finished video
+    at a public URL. "Deleted" has to mean deleted, or the word is doing harm:
+    somebody removes a video precisely because they do not want it reachable, and
+    the one copy on the open internet is the one that survived.
+
+    Never raises. A bucket that cannot be reached is worth reporting, but not
+    worth refusing to delete the project over — the local copies going is still
+    better than nothing going.
+    """
+    if backend() != "supabase" or not prefix:
+        return 0
+    base = f"{config.SUPABASE_URL}/storage/v1/object"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0)) as client:
+            # `list` is per-folder and not recursive, so the project folder is
+            # asked for by name rather than swept for.
+            resp = await client.post(
+                f"{base}/list/{config.SUPABASE_BUCKET}",
+                headers=_headers("application/json"),
+                json={"prefix": prefix, "limit": 1000},
+            )
+            if resp.status_code >= 400:
+                return 0
+            names = [row.get("name") for row in resp.json() if row.get("name")]
+            if not names:
+                return 0
+            gone = await client.request(
+                "DELETE", f"{base}/{config.SUPABASE_BUCKET}",
+                headers=_headers("application/json"),
+                json={"prefixes": [f"{prefix}/{name}" for name in names]},
+            )
+            return len(names) if gone.status_code < 400 else 0
+    except Exception:  # noqa: BLE001 - a delete that cannot reach the bucket
+        return 0
+
+
 async def fetch(remote_path: str, local_path: Path) -> bool:
     """Pull a file back down. Used when a redeploy left the disk empty."""
     if backend() != "supabase":

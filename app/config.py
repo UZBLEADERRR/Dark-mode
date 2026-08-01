@@ -77,7 +77,12 @@ GEMINI_TEXT_MODEL = _env("GEMINI_TEXT_MODEL", "gemini-3.1-pro-preview")
 GEMINI_TEXT_FALLBACK = _env("GEMINI_TEXT_FALLBACK", "gemini-2.5-flash")
 
 # --- image generation --------------------------------------------------------
-IMAGE_PROVIDER = _env("IMAGE_PROVIDER", "gemini").lower()  # gemini | fal | openai
+IMAGE_PROVIDER = _env("IMAGE_PROVIDER", "gemini").lower()  # gemini | fal | openai | flow
+# What the environment asked for, kept apart from what is in force. Switching to
+# `flow` from the app has to be reversible without knowing what it was before —
+# and "before" is this, not whatever was last chosen.
+IMAGE_PROVIDER_ENV = IMAGE_PROVIDER
+IMAGE_PROVIDERS = ("gemini", "fal", "openai", "flow")
 
 GEMINI_API_KEY = _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY")
 GEMINI_IMAGE_MODEL = _env("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
@@ -272,6 +277,20 @@ MODEL_OVERRIDES: dict[str, str] = {}
 
 def model(key: str) -> str:
     return (MODEL_OVERRIDES.get(key) or _MODEL_DEFAULTS.get(key, "")).strip()
+
+
+def set_image_provider(name: str | None) -> str:
+    """Change which provider draws the scenes, for every video from now on.
+
+    Reassigns the module attribute rather than hiding behind a getter, because
+    every reader already says `config.IMAGE_PROVIDER` at the moment it needs it —
+    so this is one line here instead of a rename in a dozen places. An empty name
+    means "back to whatever the environment said".
+    """
+    global IMAGE_PROVIDER
+    wanted = (name or "").strip().lower()
+    IMAGE_PROVIDER = wanted if wanted in IMAGE_PROVIDERS else IMAGE_PROVIDER_ENV
+    return IMAGE_PROVIDER
 
 
 def model_defaults() -> dict[str, str]:
