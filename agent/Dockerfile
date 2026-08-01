@@ -6,6 +6,9 @@
 # talks over HTTP, so it can live on a different service, a different plan, or a
 # PC at home.
 
+# Playwright's own image: Chromium and its system libraries are already in it,
+# which is the whole reason to use it. The tag and `agent/requirements.txt` name
+# the same version on purpose — see the note there.
 FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
 
 WORKDIR /app

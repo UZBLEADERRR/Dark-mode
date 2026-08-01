@@ -86,22 +86,40 @@ qo'yasiz. Hammasi telefon brauzeridan bajariladi.
 
 **1. Servis yarating.** Railway loyihangizda `+ New` → `GitHub Repo` → shu repo.
 
-**2. Sozlang** (Settings):
+**2. Config faylini ko'rsating.** Bu **eng muhim qadam** va uni o'tkazib
+yuborish oson.
 
-| Nima | Qiymat |
-|---|---|
-| Builder | Dockerfile |
-| Dockerfile Path | `agent/Dockerfile` |
-| Volume | `/profile` ga ulang — **majburiy**, aks holda har restartda qaytadan kirasiz |
+Repo ildizida `railway.json` bor va u **Sarideo uchun**. Railway config faylini
+dashboard sozlamalaridan **ustun** qo'yadi, ya'ni agent servisi ham o'shani
+o'qiydi: Sarideo'ning Dockerfile'ini quradi va Sarideo'ning `/api/health` ini
+kutadi. Natijada log'da shunday chiqadi:
 
-**3. O'zgaruvchilar** (Variables):
+```
+python: can't open file '/srv/sarideo_agent.py': No such file or directory
+1/1 replicas never became healthy!
+```
+
+Shuning uchun agent servisining Settings'ida **Config-as-code** (yoki *Railway
+Config File*) maydoniga shuni yozing:
+
+```
+agent/railway.json
+```
+
+O'sha faylda to'g'ri Dockerfile ham, healthcheck yo'qligi ham yozilgan —
+Dockerfile Path'ni qo'lda o'zgartirish shart emas.
+
+**3. Volume ulang** — `/profile` ga. Loyiha ekranida `+ New` → `Volume` →
+servisni tanlaysiz. Bo'lmasa ham ishlaydi, faqat har restartda qayta kirasiz.
+
+**4. O'zgaruvchilar** (Variables):
 
 ```
 SARIDEO_URL=https://<sarideo-manzilingiz>
 SARIDEO_LOGIN_TOKEN=<o'zingiz o'ylab topgan parol>
 ```
 
-**4. Bir marta kiring.** Start Command'ni vaqtincha shunga o'zgartiring:
+**5. Bir marta kiring.** Start Command'ni vaqtincha shunga o'zgartiring:
 
 ```
 python sarideo_agent.py login
@@ -117,7 +135,8 @@ Telefoningizdan oching:  https://<agent-manzili>/?t=<parolingiz>
 Shu havolani telefonda oching → brauzerning ekranini ko'rasiz → Google'ga
 kiring → **«Kirdim — saqla»**.
 
-**5. Ishga tushiring.** Start Command'ni qaytaring:
+**6. Ishga tushiring.** Start Command'ni **bo'shating** (image'ning o'zi
+`run` bilan boshlanadi), yoki shunday yozing:
 
 ```
 python sarideo_agent.py run
