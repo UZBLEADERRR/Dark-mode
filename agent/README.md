@@ -24,7 +24,42 @@ yasaladi, video tayyor bo'ladi.
 - **Sahifani avtomatlashtirish Google shartlariga zid bo'lishi mumkin.** Bu o'z
   akkauntingiz, lekin xavf sizning zimmangizda.
 
-## O'rnatish
+## Uchinchi yo'l: Flow Agent orqali (tavsiya etiladi)
+
+[`kodelyx/flow-agent`](https://github.com/kodelyx/flow-agent) shu masalaning
+qiyin yarmini ancha yaxshi hal qiladi: uning Chrome kengaytmasi sizning
+kirgan Flow seansingizdan **kalitni** oladi, lokal serveri esa Flow'ning
+**haqiqiy API'siga** murojaat qiladi. Ya'ni sahifani bosib yurish yo'q —
+Google tugmani ko'chirsa ham buzilmaydi.
+
+U bilan gaplashish uchun bu yerda **`bridge`** buyrug'i bor. Brauzer ochmaydi,
+Playwright ishlatmaydi — faqat Sarideo navbatidan promptni oladi va Flow
+Agent'ning `127.0.0.1:8001` dagi endpointiga uzatadi:
+
+```bash
+# 1. Flow Agent'ni o'z yo'riqnomasi bo'yicha o'rnating va ishga tushiring
+#    (kengaytmasi + `flow` buyrug'i), keyin:
+flow status          # extension_connected: True, has_flow_key: True
+
+# 2. Shu yerdan ko'prikni ishga tushiring
+SARIDEO_URL=https://<sarideo-manzilingiz> python sarideo_agent.py bridge
+```
+
+| O'zgaruvchi | Nima |
+|---|---|
+| `FLOW_AGENT_URL` | Flow Agent manzili (standarti `http://127.0.0.1:8001`) |
+| `FLOW_AGENT_KEY` | Flow Agent'da `SERVER_API_KEY` qo'ygan bo'lsangiz |
+| `FLOW_AGENT_MODEL` | Rasm modeli — `gem_pix_2` (pro), `narwhal`, `harbor_seal` |
+
+Flow Agent'ning kodi bu repoga **ko'chirilmagan** — u o'z loyihasi bo'lib
+qolaveradi, biz u bilan faqat HTTP orqali gaplashamiz. Uni o'z manbasidan
+o'rnatasiz.
+
+Ko'prik ishga tushganda avval Flow Agent'ning holatini so'raydi va kengaytma
+ulanmagan bo'lsa yoki kalit hali olinmagan bo'lsa, generatsiyani boshlamasdan
+turib shuni aytadi.
+
+## O'rnatish (brauzerni o'zi yuritadigan yo'l)
 
 ```bash
 cd agent

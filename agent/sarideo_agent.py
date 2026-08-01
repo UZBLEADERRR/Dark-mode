@@ -368,6 +368,119 @@ async def draw(page, prompt: str) -> bytes:
     return base64.b64decode(body)
 
 
+# ── the bridge: let Flow Agent do the drawing ─────────────────────────────────
+#
+# `flow-agent` (github.com/kodelyx/flow-agent) solves the hard half of this
+# problem better than driving a page does. Its Chrome extension captures the key
+# from your signed-in Flow session and its local backend calls Flow's own API —
+# so there is no DOM to walk and nothing that breaks when Google changes a
+# button. It speaks an OpenAI-shaped endpoint on `127.0.0.1:8001`.
+#
+# None of its code is copied here, and none needs to be: this talks to it over
+# HTTP, which is what it is for. Install it from its own repository, and it stays
+# its own project on its own release cycle.
+#
+# What is left for this file is the half `flow-agent` does not do: Sarideo's
+# queue lives on a server somewhere else, so something on this machine has to
+# fetch prompts and post pictures back. That is all `bridge` is.
+
+# Flow thinks in named aspects rather than pixels, and its backend derives the
+# name from the size string. These are sizes that map to the right name.
+ASPECT_SIZES = {
+    "16:9": "1792x1024",
+    "9:16": "1024x1792",
+    "1:1": "1024x1024",
+    "4:5": "1024x1280",
+}
+
+
+async def draw_via_agent(session, args, prompt: str, aspect: str) -> bytes:
+    """One picture from a local Flow Agent backend."""
+    headers = {}
+    if args.flow_key:
+        headers["Authorization"] = f"Bearer {args.flow_key}"
+    payload = {
+        "prompt": prompt,
+        "model": args.model,
+        "n": 1,
+        "size": ASPECT_SIZES.get(aspect, "1024x1024"),
+        # Asked for inline rather than as a URL: the picture is wanted here, and
+        # a URL would mean a second request and a second thing to go wrong.
+        "response_format": "b64_json",
+    }
+    async with session.post(f"{args.flow_agent.rstrip('/')}/v1/images/generations",
+                            json=payload, headers=headers) as resp:
+        body = await resp.text()
+        if resp.status >= 400:
+            raise RuntimeError(f"Flow Agent {resp.status}: {body[:200]}")
+        data = json.loads(body).get("data") or []
+    if not data:
+        raise RuntimeError("Flow Agent rasm qaytarmadi")
+    first = data[0]
+    if first.get("b64_json"):
+        return base64.b64decode(first["b64_json"])
+    # It generated but could not save locally, and handed back the remote link
+    # instead. Worth following rather than failing the scene over.
+    if first.get("url"):
+        async with session.get(first["url"]) as resp:
+            resp.raise_for_status()
+            return await resp.read()
+    raise RuntimeError(f"Flow Agent javobi tushunarsiz: {str(first)[:150]}")
+
+
+async def check_agent(session, args) -> str:
+    """Is Flow Agent up, and is its extension actually connected?"""
+    try:
+        async with session.get(f"{args.flow_agent.rstrip('/')}/health") as resp:
+            health = await resp.json()
+    except Exception as exc:  # noqa: BLE001 - the whole point is to say why
+        return (f"Flow Agent'ga ulanib bo'lmadi ({args.flow_agent}): {exc}\n"
+                "  `flow` ishga tushganmi?")
+    # Its own readiness fields: a backend that is up but whose extension is not
+    # connected will accept a request and then fail it, which is a worse place to
+    # find out.
+    if not health.get("extension_connected"):
+        return ("Flow Agent ishlayapti, lekin kengaytma ulanmagan — Chrome'da "
+                "Flow varag'ini oching va yangilang.")
+    if not health.get("has_flow_key"):
+        return ("Flow Agent kalitni hali ushlamadi — Flow varag'ini yangilang "
+                "(kirgan holda turishi kerak).")
+    return ""
+
+
+async def bridge(args) -> None:
+    """Sarideo's queue on one side, Flow Agent on the other. No browser here."""
+    import aiohttp
+
+    api = Sarideo(args.server, args.worker)
+    async with aiohttp.ClientSession() as session:
+        note = await check_agent(session, args)
+        print(note or f"Flow Agent tayyor: {args.flow_agent}", flush=True)
+        while True:
+            try:
+                task = await api.claim(session)
+            except Exception as exc:  # noqa: BLE001 - the server may be asleep
+                print(f"Sarideo javob bermadi: {exc}", flush=True)
+                await asyncio.sleep(args.idle)
+                continue
+            if task is None:
+                await asyncio.sleep(args.idle)
+                continue
+
+            print(f"{task['scene'] + 1}-sahna: {task['prompt'][:60]}…", flush=True)
+            try:
+                png = await draw_via_agent(session, args, task["prompt"], task["aspect"])
+                await api.deliver(session, task["id"], png)
+                print(f"{task['scene'] + 1}-sahna yuborildi", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                # Retryable for the same reason as everywhere else here: almost
+                # everything that goes wrong is the network or a tab, and neither
+                # is a reason to leave a scene without a picture.
+                print(f"Xato: {exc}", flush=True)
+                await api.give_up(session, task["id"], str(exc), True)
+            await asyncio.sleep(args.gap)
+
+
 async def run(args) -> None:
     import aiohttp
 
@@ -443,6 +556,21 @@ def main() -> None:
     rn.add_argument("--gap", type=float, default=6.0)
     rn.add_argument("--idle", type=float, default=15.0)
     rn.set_defaults(func=run)
+
+    # No `parents=[parent]`: this one drives no browser at all, so a `--url` or
+    # `--headed` on it would be a lie about what it does.
+    br = subs.add_parser("bridge", help="navbatni Flow Agent orqali ishlash "
+                                        "(brauzer kerak emas)")
+    br.add_argument("--server", default=os.environ.get("SARIDEO_URL", "http://localhost:8000"))
+    br.add_argument("--worker", default=os.environ.get("SARIDEO_WORKER", "bridge"))
+    br.add_argument("--flow-agent",
+                    default=os.environ.get("FLOW_AGENT_URL", "http://127.0.0.1:8001"))
+    br.add_argument("--flow-key", default=os.environ.get("FLOW_AGENT_KEY", ""),
+                    help="Flow Agent'da SERVER_API_KEY qo'yilgan bo'lsa")
+    br.add_argument("--model", default=os.environ.get("FLOW_AGENT_MODEL", "gem_pix_2"))
+    br.add_argument("--gap", type=float, default=3.0)
+    br.add_argument("--idle", type=float, default=10.0)
+    br.set_defaults(func=bridge)
 
     pb = subs.add_parser("probe", parents=[parent],
                          help="Flow sahifasi tanilyaptimi — tekshirish")
