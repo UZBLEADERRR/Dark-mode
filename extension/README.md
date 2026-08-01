@@ -23,17 +23,26 @@ chiqqan rasm Sarideo'ga yuboriladi, keyingisiga o'tiladi.
 
 ## O'rnatish
 
-1. Sarideo'da **Kutubxona → Modellar** dan yoki video yaratayotganda **Rasm
-   provayderi** ni `flow` qilib qo'ying.
-2. Chrome'da `chrome://extensions` ni oching, o'ng yuqoridan **Developer mode**
+1. Sarideo'da **Kutubxona → Flow navbati** dagi tugmachani yoqing.
+2. Arxivni **doimiy papkaga** chiqaring — Temp emas. Chrome papkani o'z joyida
+   o'qib turadi, Temp esa tozalanib ketadi.
+3. Chrome'da `chrome://extensions` ni oching, o'ng yuqoridan **Developer mode**
    ni yoqing.
-3. **Load unpacked** → shu `extension/` papkasini tanlang.
-4. Kengaytma belgisini bosing, **Sarideo manzili** ga ilovangiz manzilini yozing
-   (masalan `https://sarideo.up.railway.app`).
-5. `labs.google/fx/tools/flow` ni oching va Google akkauntingiz bilan kiring.
-6. Kengaytmada **Boshlash** ni bosing.
+4. **Load unpacked** → o'sha **papkani** tanlang.
+5. Kengaytma belgisini bosing (Chrome panelida), **Sarideo manzili** ga
+   ilovangiz manzilini yozing — masalan `https://dark-mode-production.up.railway.app`.
+   **Ushbu brauzer nomi** — shunchaki nom (`laptop`), manzil emas.
+6. `labs.google/fx/tools/flow` ni oching va Google akkauntingiz bilan kiring.
+   Google sizni o'z tilingizdagi manzilga o'tkazishi mumkin
+   (`labs.google/fx/uz/tools/flow/...`) — bu normal, kengaytma baribir ulanadi.
+7. **Bittasini hozir bajarish** bilan sinab ko'ring, ishlasa **Boshlash**.
 
 Endi video yaratganingizda sahnalarning rasmlari o'sha varaqda yasaladi.
+
+> **`options.html` ni ikki marta bosib ochmang.** U oddiy fayl bo'lib ochiladi
+> (`file:///…`), bunda `chrome.*` API'lari mavjud emas — oyna ko'rinadi, lekin
+> birorta tugma bosilmaydi. Sahifa buni endi o'zi aytadi va nima qilishni
+> tushuntiradi. To'g'ri yo'l — yuqoridagi 3-4 qadam.
 
 ## Tugmalar
 
