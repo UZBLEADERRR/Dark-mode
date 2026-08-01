@@ -5,6 +5,34 @@ const $ = (id) => document.getElementById(id);
 
 const DEFAULTS = { server: "http://localhost:8000", worker: "", running: false, logs: [] };
 
+/** Opened as a file rather than installed as an extension.
+ *
+ *  Unzipping and double-clicking `options.html` is the obvious thing to do with
+ *  a folder full of files, and on a `file://` page every `chrome.*` API is
+ *  undefined — so the panel looked completely normal and not one button did
+ *  anything. A page that cannot work should say so instead of sitting there.
+ */
+function looksInstalled() {
+  return typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id;
+}
+
+if (!looksInstalled()) {
+  document.body.innerHTML = `
+    <h1>Kengaytma o‘rnatilmagan</h1>
+    <p class="sub">Bu sahifa oddiy fayl sifatida ochilgan, shuning uchun tugmalar
+      ishlamaydi. Kengaytmani o‘rnatish kerak:</p>
+    <ol style="font-size:13px;line-height:1.7;padding-left:18px">
+      <li>Arxivni <b>doimiy papkaga</b> chiqaring (Temp emas — masalan
+        <code>Hujjatlar\\sarideo-flow</code>).</li>
+      <li>Chrome'da <code>chrome://extensions</code> ni oching.</li>
+      <li>O‘ng yuqoridan <b>Developer mode</b> ni yoqing.</li>
+      <li><b>Load unpacked</b> → o‘sha <b>papkani</b> tanlang (faylni emas).</li>
+      <li>Chrome panelidagi kengaytma belgisini bosing — shu oyna qaytadan
+        ochiladi va ishlaydi.</li>
+    </ol>`;
+  throw new Error("not installed");
+}
+
 async function load() {
   const s = await chrome.storage.local.get(DEFAULTS);
   $("server").value = s.server;
