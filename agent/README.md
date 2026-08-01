@@ -112,6 +112,10 @@ Dockerfile Path'ni qo'lda o'zgartirish shart emas.
 **3. Volume ulang** — `/profile` ga. Loyiha ekranida `+ New` → `Volume` →
 servisni tanlaysiz. Bo'lmasa ham ishlaydi, faqat har restartda qayta kirasiz.
 
+Dockerfile'da `VOLUME` ko'rsatmasi **yo'q** va bo'lmasligi kerak ham: Railway
+mount'larni o'zi boshqaradi va bunday Dockerfile'ni umuman qurmaydi —
+`dockerfile invalid: docker VOLUME ... is not supported, use Railway Volumes`.
+
 **4. O'zgaruvchilar** (Variables):
 
 ```
