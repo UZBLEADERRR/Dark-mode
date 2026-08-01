@@ -467,3 +467,13 @@ class ApiKeyPatch(BaseModel):
     # Forget a cooldown on request — a limit the provider has since lifted should
     # not keep a key benched because we wrote down a pessimistic guess.
     clear_cooldown: bool = False
+
+
+class FlowFail(BaseModel):
+    """A picture that did not come out, reported by whatever was making it."""
+
+    reason: str = Field(default="", max_length=300)
+    # True puts the prompt back in the queue instead of failing the scene. The
+    # difference matters: a Flow tab that was closed mid-generation should be
+    # tried again, a prompt the model refuses should not be tried forever.
+    retry: bool = False

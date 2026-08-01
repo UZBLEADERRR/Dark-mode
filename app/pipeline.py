@@ -64,6 +64,23 @@ def _retry_note(job_id: str, label: str) -> Callable[[int, Exception], None]:
     return note
 
 
+def _flow_note(job_id: str, label: str) -> Callable[[int, int], None]:
+    """Say that a scene is waiting for a picture, and how much is still queued.
+
+    Without this a render using the `flow` provider is indistinguishable from a
+    frozen one: nothing is being called, so nothing errors, and the progress bar
+    sits at the same number for ten minutes. The queue length is in the message
+    because it is the number that tells you whether anything is working through
+    it — a backlog that shrinks is progress, one that does not is a browser that
+    is not open.
+    """
+    def note(seconds: int, left: int) -> None:
+        _note(job_id, f"{label} — Flow'dan rasm kutilyapti ({seconds}s, "
+                      f"navbatda {left} ta)")
+
+    return note
+
+
 def _wait_note(job_id: str, label: str) -> Callable[[float, str], None]:
     """Report a deliberate wait, so pacing never looks like a hang.
 
@@ -1041,6 +1058,12 @@ async def _render_images(
             out_path=image_dir / (f"shot_{shot['sid']}.png" if shot is not None
                                   else f"scene_{scene['sid']}.png"),
             on_retry=_retry_note(job_id, f"{label} image"),
+            # Only the `flow` provider uses these: which job and scene the prompt
+            # belongs to, so the queue can say what is waiting and for what, and
+            # a note while it waits, because a render that is standing still for
+            # ten minutes has to say why.
+            job_id=job_id, scene=scene["index"],
+            on_wait=_flow_note(job_id, label),
         )
         holder["image_path"] = str(path)
         holder["needs_image"] = False

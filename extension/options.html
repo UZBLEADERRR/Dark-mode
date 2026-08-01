@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sarideo — Flow bridge</title>
+<style>
+  :root { color-scheme: dark; }
+  body { width: 340px; margin: 0; padding: 14px 14px 18px;
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: #14161a; color: #e8eaed; }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  p.sub { margin: 0 0 14px; font-size: 12px; color: #9aa0a6; }
+  label { display: block; margin-bottom: 10px; font-size: 12px; color: #9aa0a6; }
+  input { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px 10px;
+          border: 1px solid #2c3036; border-radius: 8px; background: #1c1f24;
+          color: #e8eaed; font: inherit; }
+  .row { display: flex; gap: 8px; margin: 12px 0 10px; }
+  button { flex: 1; padding: 9px 10px; border: 1px solid #2c3036; border-radius: 8px;
+           background: #22262c; color: #e8eaed; font: inherit; cursor: pointer; }
+  button.go { background: #ff3b30; border-color: #ff3b30; color: #fff; font-weight: 600; }
+  button.wide { flex: none; width: 100%; }
+  #status { font-size: 12px; padding: 8px 10px; border-radius: 8px;
+            background: #1c1f24; margin-bottom: 10px; }
+  #log { font-size: 11px; color: #9aa0a6; max-height: 150px; overflow: auto;
+         white-space: pre-wrap; border-top: 1px solid #2c3036; padding-top: 8px;
+         margin-top: 4px; }
+</style>
+</head>
+<body>
+  <h1>Sarideo — Flow bridge</h1>
+  <p class="sub">Sarideo navbatidagi promptlarni Google Flow'da yasab qaytaradi.
+    Google akkauntingizga shu brauzerdagi seansingiz orqali kiriladi — parol
+    ham, cookie ham hech qayerga yuborilmaydi.</p>
+
+  <label>Sarideo manzili
+    <input id="server" type="url" placeholder="https://sarideo.up.railway.app" />
+  </label>
+  <label>Ushbu brauzer nomi
+    <input id="worker" type="text" placeholder="chrome-uy" />
+  </label>
+
+  <div id="status">…</div>
+
+  <div class="row">
+    <button id="start" class="go">Boshlash</button>
+    <button id="stop">To‘xtatish</button>
+  </div>
+  <div class="row">
+    <button id="once" class="wide">Bittasini hozir bajarish</button>
+  </div>
+  <div class="row">
+    <button id="probe" class="wide">Flow sahifasini tekshirish</button>
+  </div>
+
+  <div id="log"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

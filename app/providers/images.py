@@ -257,6 +257,50 @@ CUTOUT_NEGATIVE = (
 
 # --- public API --------------------------------------------------------------
 
+async def _flow(
+    *, prompt: str, aspect: str, out_path: Path, job_id: str, scene: int,
+    on_wait: Callable[[int, int], None] | None = None,
+) -> Path:
+    """Park the prompt and wait for somebody else's browser to answer it.
+
+    This is not a provider in the sense the other three are — nothing is called,
+    nothing is paid for, and no key is involved. The prompt goes into a queue,
+    and a picture appears at `out_path` when whatever is watching that queue puts
+    one there: a browser extension driving Google Flow in a tab you are already
+    signed into, or you, with a file picker, on a phone.
+
+    Which means the failure this has to handle well is *nobody is listening*. So
+    the wait is bounded, the task is dropped when it expires, and the message
+    says what was missing rather than reporting a provider error for a provider
+    that was never contacted.
+    """
+    from .. import store  # local: store imports config, and config imports keys
+
+    task = store.add_image_task(job_id=job_id, scene=scene, prompt=prompt,
+                                aspect=aspect, out_path=str(out_path))
+    task_id = task.get("id", "")
+    waited = 0.0
+    while waited < config.FLOW_PATIENCE:
+        await asyncio.sleep(config.FLOW_POLL_SECONDS)
+        waited += config.FLOW_POLL_SECONDS
+        row = store.get_image_task(task_id)
+        if row is None:  # cancelled from the outside
+            raise ImageError("Rasm so'rovi bekor qilindi.")
+        if row["status"] == "done" and out_path.exists():
+            return out_path
+        if row["status"] == "failed":
+            raise ImageError(row.get("error") or "Flow'da rasm chiqmadi.")
+        if on_wait and int(waited) % 15 == 0:
+            left = len(store.list_image_tasks(job_id=job_id))
+            on_wait(int(waited), left)
+
+    store.finish_image_task(task_id, error="Kutish vaqti tugadi")
+    raise ImageError(
+        f"{max(1, round(config.FLOW_PATIENCE / 60))} daqiqa kutildi, rasm kelmadi. "
+        "Kengaytma ishlayaptimi va Flow varag'i ochiqmi — tekshiring; "
+        "yoki «Flow navbati» bo'limidan rasmni o'zingiz yuklang.")
+
+
 async def generate_image(
     *,
     prompt: str,
@@ -268,6 +312,9 @@ async def generate_image(
     out_path: Path,
     attempts: int = 3,
     on_retry: Callable[[int, Exception], None] | None = None,
+    job_id: str = "",
+    scene: int = 0,
+    on_wait: Callable[[int, int], None] | None = None,
 ) -> tuple[Path, str | None]:
     """Generate one scene image. Returns the path and a warning if it fell back.
 
@@ -277,6 +324,14 @@ async def generate_image(
     A placeholder now beats a perfect frame that never arrives.
     """
     provider = (provider or config.IMAGE_PROVIDER).lower()
+
+    # Deliberately above the retry-and-deadline machinery below, not inside it.
+    # That deadline bounds an HTTP call to a provider; this waits on a queue and
+    # a browser, and retrying it would mean queueing the same prompt three times.
+    if provider == "flow":
+        return await _flow(prompt=prompt, aspect=aspect, out_path=out_path,
+                           job_id=job_id, scene=scene, on_wait=on_wait), None
+
     full_prompt = prompt
     if negative_prompt and provider in {"gemini", "openai"}:
         # These two have no negative-prompt field, so fold it into the instruction.

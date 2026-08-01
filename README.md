@@ -212,7 +212,7 @@ Hammasi adapter — `.env` orqali almashtirasiz, kod o'zgarmaydi.
 | Tur | Variantlar |
 |---|---|
 | Skript | `gemini` (default), `anthropic` (Claude) |
-| Rasm | `gemini`, `fal` (Flux Kontext), `openai` (gpt-image-1) |
+| Rasm | `gemini`, `fal` (Flux Kontext), `openai` (gpt-image-1), `flow` (o'z brauzeringiz) |
 | Ovoz | `gemini`, `elevenlabs`, `openai`, yoki **o'z audiongizni yuklash** |
 | Til | en, uz, ru, tr, es, ar, hi, de, fr, **ko** |
 | Subtitr vaqti | ElevenLabs timestamps → Whisper → proporsional taxmin |
@@ -268,6 +268,49 @@ Deploy qilish, env o'zgartirish shart emas: qo'shdingiz — shu zahoti ishlatila
 
 Daqiqalik cheklov (`TTS_RATE_LIMIT`) kalit soniga ko'paytiriladi — uchta kalit
 uchta limit degani.
+
+## Rasmni API'siz — o'z brauzeringizda (`flow`)
+
+Rasm generatsiyasi eng qimmat qismi. Agar sizda **Google Flow** obunasi bo'lsa,
+u allaqachon to'langan — shuning uchun rasm provayderi sifatida `flow` ni
+tanlash mumkin. Bunda ilova **hech qanday API'ga murojaat qilmaydi**: har
+sahnaning prompti navbatga tushadi, rasm esa sizning brauzeringizda, sizning
+akkauntingiz bilan yasaladi.
+
+```
+Sarideo (serverda)                      brauzeringiz (uyda)
+  sahna prompti  ──── navbat ────►  kengaytma olib ketadi
+                                          │
+                                     Google Flow varag'i
+                                          │
+  sahnaga tushadi ◄─── PNG ─────────  kengaytma qaytaradi
+```
+
+Ilova Google akkauntingizni **umuman ko'rmaydi** — na parol, na cookie, na
+token. Kirish brauzeringizdagi mavjud seans orqali bo'ladi; serverga faqat
+tayyor PNG keladi.
+
+**Kengaytma** — `extension/` papkasida, o'rnatish yo'riqnomasi
+[extension/README.md](extension/README.md) da. Chrome → `chrome://extensions` →
+Developer mode → Load unpacked.
+
+**Kengaytmasiz ham ishlaydi.** *Kutubxona → Flow navbati* da kutayotgan har bir
+prompt turadi: nusxalaysiz, xohlagan joyda rasm yasaysiz, o'sha yerga
+yuklaysiz. Telefondan ham bo'ladi. Bir sahna kerak bo'lmasa — «Bekor qilish».
+
+Bilib qo'yish kerak bo'lgan narsalar:
+
+- Sahna rasmini **20 daqiqa** kutadi (`FLOW_PATIENCE`), keyin nima yetishmayotganini
+  aytib to'xtaydi. Kutayotganini jurnalga yozib turadi, shuning uchun to'xtab
+  qolganday ko'rinmaydi.
+- Bir brauzer olgan prompt **5 daqiqadan keyin** qaytib navbatga tushadi — varaq
+  yopilib qolsa, sahna abadiy band bo'lib qolmaydi.
+- Bir nechta brauzer bir vaqtda ishlashi mumkin; har biri o'z promptini oladi.
+- Flow — Google'ning sahifasi va u o'zgarib turadi. Sahifaga tegishli hamma
+  narsa bitta faylda (`extension/flow.js`, `SELECTORS`), tuzatish uchun
+  kengaytmada «Flow sahifasini tekshirish» tugmasi bor.
+- Sahifani avtomatlashtirish Google'ning shartlariga zid bo'lishi mumkin — bu
+  o'z akkauntingiz, lekin xavfni bilib turing.
 
 ## Modellar
 
@@ -848,6 +891,8 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `VIDEO_PRESET` | `medium` | `ultrafast`…`veryslow` — render tezligi |
 | `MUSIC_VOLUME` | `0.10` | Fon musiqasi (ovoz ostida avtomatik pasayadi) |
 | `MAX_CONCURRENT_JOBS` | `1` | Bir vaqtda nechta render — RAM yetsa oshiring |
+| `IMAGE_PROVIDER` | `gemini` | `gemini` / `fal` / `openai` / `flow` (brauzeringiz) |
+| `FLOW_PATIENCE` | `1200` | `flow` rejimida bitta rasmni necha soniya kutish |
 
 ## API
 
@@ -872,6 +917,10 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs/{id}/translate` | Boshqa tilga nusxa olish |
 | `POST /api/dub` | Tayyor videoni dublyaj qilish |
 | `POST /api/videos/subtitle` | O'z videongizga subtitr (`burn_subtitles` — rasmga yozilsinmi) |
+| `GET /api/flow/tasks` | Rasm kutayotgan promptlar |
+| `POST /api/flow/next` | Navbatdan bitta promptni olish |
+| `POST /api/flow/tasks/{id}/image` | Tayyor rasmni qaytarish |
+| `POST /api/flow/tasks/{id}/fail` | Chiqmadi (`retry: true` — navbatga qaytarsin) |
 | `GET/PUT /api/brand` | Brend to'plami |
 | `GET/PUT /api/models` | Har bosqich qaysi modelni chaqiradi |
 | `GET /api/models/available?provider=` | Provayderdagi mavjud modellar |

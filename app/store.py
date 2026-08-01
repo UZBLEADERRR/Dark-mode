@@ -21,7 +21,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from . import config, pgstore
@@ -184,6 +184,36 @@ CREATE TABLE IF NOT EXISTS profiles (
     image      {blob} NOT NULL,
     created_at TEXT NOT NULL
 );
+
+-- A picture the app wants but is not going to generate itself. When the image
+-- provider is `flow`, the render stops at each scene and parks its prompt here
+-- instead of calling an API; something outside — a browser extension driving
+-- Google Flow in a tab you are already signed into, or you with a file picker —
+-- takes the prompt, makes the picture and hands it back.
+--
+-- The reason this is a table and not a queue in memory: a render that is waiting
+-- for pictures may wait half an hour, and a deploy in the middle of that must not
+-- lose the list of what it was waiting for.
+CREATE TABLE IF NOT EXISTS imagetasks (
+    id         TEXT PRIMARY KEY,
+    job_id     TEXT NOT NULL,
+    scene      INTEGER NOT NULL DEFAULT 0,
+    prompt     TEXT NOT NULL,
+    aspect     TEXT NOT NULL DEFAULT '16:9',
+    -- Where the render is waiting for the file to appear. Absolute, because the
+    -- upload arrives on an HTTP handler that has no idea which job it belongs to.
+    out_path   TEXT NOT NULL,
+    -- waiting → taken → done, or failed. `taken` is a soft claim: a worker that
+    -- disappears mid-task has its claim expire rather than stranding the render.
+    status     TEXT NOT NULL DEFAULT 'waiting',
+    taken_by   TEXT NOT NULL DEFAULT '',
+    taken_at   TEXT NOT NULL DEFAULT '',
+    error      TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS imagetasks_status_idx ON imagetasks (status, created_at);
 """
 
 
@@ -604,6 +634,105 @@ def bump_key(key_id: str, *, ok: bool, when: str, cooldown_until: str = "",
 def delete_key(key_id: str) -> bool:
     with _conn() as conn:
         return conn.execute("DELETE FROM apikeys WHERE id = ?", (key_id,)).rowcount > 0
+
+
+# --- pictures somebody else is making ----------------------------------------
+
+# How long a claim lasts before the task is offered again. A browser tab that is
+# closed mid-generation would otherwise hold a scene for as long as the render is
+# prepared to wait, which is the whole render.
+CLAIM_SECONDS = 300.0
+
+_TASK_COLS = ("id, job_id, scene, prompt, aspect, out_path, status, taken_by, "
+              "taken_at, error, created_at, updated_at")
+
+
+def add_image_task(*, job_id: str, scene: int, prompt: str, aspect: str,
+                   out_path: str) -> dict[str, Any]:
+    task_id = new_id("img")
+    now = _now()
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO imagetasks (id, job_id, scene, prompt, aspect, out_path,"
+            " status, taken_by, taken_at, error, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (task_id, job_id, int(scene), prompt, aspect, out_path,
+             "waiting", "", "", "", now, now))
+    return get_image_task(task_id) or {}
+
+
+def get_image_task(task_id: str) -> dict[str, Any] | None:
+    with _conn() as conn:
+        row = conn.execute(
+            f"SELECT {_TASK_COLS} FROM imagetasks WHERE id = ?", (task_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_image_tasks(*, job_id: str = "", pending_only: bool = True,
+                     limit: int = 100) -> list[dict[str, Any]]:
+    where, args = [], []
+    if job_id:
+        where.append("job_id = ?")
+        args.append(job_id)
+    if pending_only:
+        where.append("status IN ('waiting', 'taken')")
+    clause = f" WHERE {' AND '.join(where)}" if where else ""
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT {_TASK_COLS} FROM imagetasks{clause}"
+            " ORDER BY created_at ASC LIMIT ?", (*args, int(limit))).fetchall()
+    return [dict(r) for r in rows]
+
+
+def claim_image_task(worker: str) -> dict[str, Any] | None:
+    """Hand out the oldest unclaimed task, or one whose claim has gone stale.
+
+    Read-then-write with the status checked again in the `WHERE`, rather than one
+    clever statement: two workers racing both issue the same UPDATE, exactly one
+    of them changes a row, and the loser looks for another task. That is portable
+    to both databases, which `UPDATE ... LIMIT` is not.
+    """
+    stale = (datetime.now(timezone.utc) - timedelta(seconds=CLAIM_SECONDS)
+             ).isoformat(timespec="milliseconds")
+    for _ in range(8):
+        with _conn() as conn:
+            row = conn.execute(
+                f"SELECT {_TASK_COLS} FROM imagetasks"
+                " WHERE status = 'waiting' OR (status = 'taken' AND taken_at < ?)"
+                " ORDER BY created_at ASC LIMIT 1", (stale,)).fetchone()
+            if row is None:
+                return None
+            changed = conn.execute(
+                "UPDATE imagetasks SET status='taken', taken_by=?, taken_at=?, updated_at=?"
+                " WHERE id=? AND status=?",
+                (worker, _now(), _now(), row["id"], row["status"])).rowcount
+        if changed:
+            return get_image_task(row["id"])
+    return None
+
+
+def finish_image_task(task_id: str, *, error: str = "") -> bool:
+    with _conn() as conn:
+        return conn.execute(
+            "UPDATE imagetasks SET status=?, error=?, updated_at=? WHERE id=?",
+            ("failed" if error else "done", error[:300], _now(), task_id)).rowcount > 0
+
+
+def release_image_task(task_id: str) -> bool:
+    """Put a claimed task back in the queue, unfinished."""
+    with _conn() as conn:
+        return conn.execute(
+            "UPDATE imagetasks SET status='waiting', taken_by='', taken_at='',"
+            " updated_at=? WHERE id=? AND status='taken'",
+            (_now(), task_id)).rowcount > 0
+
+
+def drop_image_tasks(job_id: str) -> int:
+    """Forget what a job was waiting for — it is no longer waiting."""
+    with _conn() as conn:
+        return conn.execute(
+            "DELETE FROM imagetasks WHERE job_id = ? AND status IN ('waiting','taken')",
+            (job_id,)).rowcount
 
 
 # --- plans -------------------------------------------------------------------
