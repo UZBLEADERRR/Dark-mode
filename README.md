@@ -314,6 +314,11 @@ kirasiz, va buni ham telefondan qilasiz: agent brauzerning ekranini
 telefoningizga uzatadi, siz bosib-yozib kirasiz. Undan keyin telefonda hech
 narsa qilmaysiz. Batafsil: [agent/README.md](agent/README.md).
 
+Railway'da qo'ysangiz bitta tuzoq bor: repo ildizidagi `railway.json` **Sarideo
+uchun**, va Railway uni dashboard sozlamalaridan ustun qo'yadi — ya'ni agent
+servisi ham o'shani o'qib, noto'g'ri Dockerfile'ni quradi. Agent servisining
+**Config-as-code** yo'liga `agent/railway.json` deb yozing.
+
 Uchala yo'l ham **bitta navbatni** ishlaydi — qaysi biri ishlayotgani ilovaga
 farqi yo'q, xohlasangiz ikkitasini birga qo'yasiz.
 

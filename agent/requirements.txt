@@ -1,2 +1,6 @@
-playwright>=1.44
+# Pinned to the version baked into the base image in Dockerfile. Playwright ships
+# its browsers separately and each release expects a particular build of them; a
+# newer pip install inside that image would go looking for a Chromium that is not
+# there. Bump both together or neither.
+playwright==1.49.0
 aiohttp>=3.9
