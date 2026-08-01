@@ -146,6 +146,11 @@ o'tkazadi, lekin bilib qo'ygan yaxshi).
 Tokenni jiddiy tanlang — `1111` emas. O'sha havolani bilgan odam sizning
 Google seansingiz turgan brauzerni boshqara oladi.
 
+Google `400 — malformed` bersa, sabab odatda brauzerning o'zini
+`HeadlessChrome` deb tanishtirishi bo'ladi — ba'zi Google sahifalari shunga
+sahifa o'rniga xato qaytaradi. Agent endi oddiy Chrome sifatida tanishtiradi
+(kerak bo'lsa `SARIDEO_USER_AGENT` bilan o'zgartirasiz).
+
 Yuqorida **manzil satri** bor. Flow ochilmasa (Google `400` yoki boshqa xato
 bersa), o'sha yerga to'g'ri manzilni yozib **«Ochish»** bosasiz — brauzer o'sha
 yerga o'tadi. Qayerga tushgani satrda ko'rinadi, ya'ni redirect ham bilinadi.
@@ -179,6 +184,7 @@ birga render'ni o'ldiradi.
 | `SARIDEO_LOGIN_TOKEN` | Kirish sahifasining paroli (bermasangiz o'zi o'ylab topadi va log'ga yozadi) |
 | `PORT` | Kirish sahifasi qaysi portda — hosting o'zi beradi, qo'lda yozish shart emas |
 | `SARIDEO_FLOW_URL` | Flow manzili. Google uni o'zgartirsa, kodga tegmasdan shu yerdan to'g'irlaysiz |
+| `SARIDEO_USER_AGENT` | Brauzer o'zini qanday tanishtiradi. Standarti — oddiy Chrome |
 
 Bir nechta mashina bir vaqtda ishlashi mumkin — har biri o'z promptini oladi,
 navbat ularni chalkashtirmaydi.
