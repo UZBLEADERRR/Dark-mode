@@ -99,9 +99,13 @@ async function giveUp(taskId, reason, retry) {
 const FLOW_URL = "https://labs.google/fx/tools/flow";
 
 async function flowTab() {
-  const tabs = await chrome.tabs.query({ url: "https://labs.google/*" });
-  const open = tabs.find((t) => (t.url || "").includes("/fx/"));
-  if (open) return open;
+  // Any Google Labs tab will do. Insisting on "/fx/" in the path meant that the
+  // day Google moves Flow, the extension stops finding a tab that is sitting
+  // right there in front of you.
+  const tabs = await chrome.tabs.query({
+    url: ["https://labs.google/*", "https://flow.google/*"],
+  });
+  if (tabs.length) return tabs[0];
   // Not focused: this is meant to work while you use the browser for something
   // else. An extension that steals the foreground every ninety seconds is one
   // you turn off by lunchtime.
