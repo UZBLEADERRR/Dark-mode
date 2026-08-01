@@ -51,7 +51,10 @@ HERE = Path(__file__).resolve().parent
 FLOW_DOM = next((p for p in (HERE.parent / "extension" / "flow-dom.js",
                              Path("/extension/flow-dom.js"))
                  if p.exists()), HERE.parent / "extension" / "flow-dom.js")
-FLOW_URL = "https://labs.google/fx/tools/flow"
+# Google's address to change, not ours. Overridable without touching the code,
+# because the day it moves is the day the agent is unusable otherwise — and the
+# remote view has an address bar for exactly the same reason.
+FLOW_URL = os.environ.get("SARIDEO_FLOW_URL") or "https://labs.google/fx/tools/flow"
 
 # Where the signed-in browser profile is kept. A directory, not a cookie jar:
 # Google's session is more than cookies, and a profile is what survives.
@@ -102,6 +105,13 @@ PAGE = """<!doctype html><html lang="uz"><head><meta charset="utf-8">
 </style></head><body>
 <header>
   <button id="back">‹</button>
+  <!-- An address bar, because without one the only reachable page is whatever
+       the agent was started with. Flow's address is Google's to change, and a
+       browser you cannot navigate is a browser you cannot rescue. -->
+  <input id="url" placeholder="manzil — masalan labs.google/fx/tools/flow"
+         style="flex:2;min-width:160px" autocapitalize="off" autocorrect="off"
+         spellcheck="false">
+  <button id="open">Ochish</button>
   <input id="keys" placeholder="matn yozib Enter bosing" style="flex:1;min-width:120px">
   <button id="enter">Enter</button>
   <button class="go" id="done">Kirdim — saqla</button>
@@ -113,6 +123,7 @@ const token = new URLSearchParams(location.search).get("t") || "";
 const send = (path, body) => fetch(path + "?t=" + encodeURIComponent(token),
   {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body||{})});
 const shot = document.getElementById("shot");
+const urlBar = document.getElementById("url");
 let busy = false;
 async function refresh(){
   if (busy) return;
@@ -121,6 +132,8 @@ async function refresh(){
   finally { busy = false; }
 }
 setInterval(refresh, 1000); refresh();
+// Start the address bar on whatever the browser is already showing.
+send("/goto", {}).then((r) => r.json()).then((b) => { if (b.url) urlBar.value = b.url; });
 shot.addEventListener("click", (e) => {
   const r = shot.getBoundingClientRect();
   send("/tap", { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
@@ -131,6 +144,16 @@ document.getElementById("keys").addEventListener("keydown", (e) => {
 });
 document.getElementById("enter").addEventListener("click", () => send("/key", {key:"Enter"}));
 document.getElementById("back").addEventListener("click", () => send("/back", {}));
+const open = async () => {
+  const out = await send("/goto", { url: urlBar.value });
+  const body = await out.json();
+  // Show where it actually landed. A redirect is the interesting part when a
+  // page will not load, and it is invisible otherwise.
+  if (body.url) urlBar.value = body.url;
+  if (body.error) document.getElementById("msg").textContent = body.error;
+};
+document.getElementById("open").addEventListener("click", open);
+urlBar.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
 document.getElementById("done").addEventListener("click", async () => {
   await send("/done", {});
   document.getElementById("msg").textContent = "Saqlandi. Bu oynani yopsangiz bo‘ladi.";
@@ -188,6 +211,22 @@ async def serve_login(page, host: str, port: int, token: str) -> None:
         await page.go_back()
         return web.json_response({"ok": True})
 
+    async def goto(request):
+        if not allowed(request):
+            return web.Response(status=403)
+        wanted = str((await request.json()).get("url", "")).strip()
+        if not wanted:
+            return web.json_response({"url": page.url})
+        if "://" not in wanted:
+            wanted = f"https://{wanted}"
+        try:
+            await page.goto(wanted, wait_until="domcontentloaded", timeout=45000)
+        except Exception as exc:  # noqa: BLE001 - reported, never fatal
+            # Reported rather than raised: the whole point of this view is to be
+            # usable when a page will not load.
+            return web.json_response({"url": page.url, "error": str(exc)[:200]})
+        return web.json_response({"url": page.url})
+
     async def done(request):
         if not allowed(request):
             return web.Response(status=403)
@@ -218,7 +257,7 @@ async def serve_login(page, host: str, port: int, token: str) -> None:
     app.add_routes([
         web.get("/", index), web.get("/shot", shot),
         web.post("/tap", tap), web.post("/type", type_text), web.post("/key", key),
-        web.post("/back", back), web.post("/done", done),
+        web.post("/back", back), web.post("/goto", goto), web.post("/done", done),
         web.get("/{rest:.*}", elsewhere),
     ])
     runner = web.AppRunner(app)
@@ -248,6 +287,8 @@ async def login(args) -> None:
             # wanted: you can see the error, go back, try again. Dying with a
             # traceback instead leaves nothing to look at.
             print(f"Sahifa ochilmadi ({exc}). Oyna baribir ochiladi.", flush=True)
+        else:
+            print(f"Ochildi: {page.url}", flush=True)
         if args.headless:
             await serve_login(page, args.host, args.port, args.token or secrets.token_urlsafe(9))
         else:
