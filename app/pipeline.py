@@ -171,6 +171,154 @@ def replace_scene_image(job_id: str, index: int, data: bytes) -> dict | None:
     return scene
 
 
+# ── a pile of pictures made somewhere else ────────────────────────────────────
+
+# The longest side of the copy the model is shown. It has to recognise the
+# picture, not admire it, and a hundred full-size stills would cost more to look
+# at than the images cost to make.
+THUMB_EDGE = 512
+
+# Nobody arranges more than this in one go, and the cap is what stops a stray
+# select-all in a downloads folder from becoming an hour of model calls.
+MAX_UPLOAD_IMAGES = 200
+
+
+def inbox_for(job_id: str) -> Path:
+    """Where a pile of uploaded pictures waits between the request and the work."""
+    path = workdir_for(job_id) / "inbox"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _thumbnail(path: Path) -> tuple[bytes, str] | None:
+    """A small JPEG of a file the user handed us, or None if it is not a picture."""
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((THUMB_EDGE, THUMB_EDGE))
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=75)
+            return buffer.getvalue(), "image/jpeg"
+    except Exception:  # noqa: BLE001 - an unreadable file is skipped, not fatal
+        return None
+
+
+def _clear_flow_task(job_id: str, index: int) -> None:
+    """A scene that has just been given a picture is no longer waiting for one.
+
+    Without this the render would still sit in the Flow queue waiting for a
+    browser to draw a scene that is already finished.
+    """
+    for task in store.list_image_tasks(job_id=job_id, pending_only=True):
+        if int(task.get("scene", -1)) == index:
+            store.finish_image_task(task["id"])
+
+
+async def arrange_uploaded_images(
+    job_id: str, paths: list[Path], *, mode: str = "auto", scope: str = "empty",
+) -> None:
+    """Place a folder of hand-made pictures into the scenes waiting for them.
+
+    The counterpart to making the images yourself: the prompts go out in scene
+    order and the pictures come back in a heap, so something has to put the heap
+    back in order. `auto` lets the model look at each picture and say where it
+    belongs; `order` trusts the file order, which is right whenever the pile
+    really was worked through one prompt at a time.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return
+
+    try:
+        scenes = _load_scenes(job)
+        if not scenes:
+            raise PipelineError("Bu loyihada sahnalar yo'q.")
+
+        pictures: list[dict[str, Any]] = []
+        unreadable: list[str] = []
+        for path in paths:
+            thumb = _thumbnail(path)
+            if thumb is None:
+                unreadable.append(path.name)
+                continue
+            pictures.append({"name": path.name, "path": path,
+                             "thumb": thumb[0], "mime": thumb[1]})
+        if not pictures:
+            raise PipelineError("Yuklangan fayllarning hech biri rasm emas.")
+
+        # "Empty" is the normal case — the pictures are the ones the scenes were
+        # still waiting for. When nothing is waiting the user is replacing what is
+        # already there, and refusing to do anything would be the wrong answer.
+        waiting = [s for s in scenes if s.get("needs_image") or not s.get("image_path")]
+        targets = scenes if scope == "all" or not waiting else waiting
+
+        _progress(job_id, "arrange", 40,
+                  f"{len(pictures)} ta rasm {len(targets)} ta sahnaga taqsimlanmoqda")
+
+        if mode == "order":
+            placements = skills.place_in_order(pictures, targets)
+        else:
+            def note(done: int, total: int) -> None:
+                _progress(job_id, "arrange", 40 + int(40 * done / max(total, 1)),
+                          f"Rasmlar o'qilmoqda {done}/{total}")
+
+            placements = await skills.arrange_images(
+                pictures=pictures, scenes=targets, on_progress=note)
+
+        _progress(job_id, "arrange", 85, "Rasmlar sahnalarga qo'yilmoqda")
+        by_index = {s["index"]: s for s in scenes}
+        placed: list[dict[str, Any]] = []
+        for entry in placements:
+            scene = by_index.get(entry["scene"])
+            picture = pictures[entry["picture"]] if 0 <= entry["picture"] < len(pictures) else None
+            if scene is None or picture is None:
+                continue
+            target = workdir_for(job_id) / "images" / f"scene_{scene['sid']}.png"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            from PIL import Image
+
+            with Image.open(picture["path"]) as img:
+                img.convert("RGB").save(target, format="PNG")
+            scene["image_path"] = str(target)
+            scene["needs_image"] = False
+            scene["image_version"] = int(scene.get("image_version", 0)) + 1
+            _clear_flow_task(job_id, scene["index"])
+            placed.append({"scene": scene["index"], "file": picture["name"],
+                           "confidence": entry.get("confidence", 0),
+                           "why": entry.get("why", "")})
+
+        used = {p["file"] for p in placed}
+        spare = [p["name"] for p in pictures if p["name"] not in used]
+        empty = [s["index"] + 1 for s in targets
+                 if s.get("needs_image") or not s.get("image_path")]
+
+        report = f"{len(placed)} ta rasm joylashtirildi"
+        if spare:
+            report += f", {len(spare)} tasi ortdi"
+        if empty:
+            report += f", {len(empty)} ta sahna hali rasmsiz"
+        if unreadable:
+            report += f", {len(unreadable)} ta fayl o'qilmadi"
+
+        store.update_job(job_id, result={"scenes": scenes,
+                                         "arranged": {"placed": placed, "spare": spare,
+                                                      "unreadable": unreadable}})
+        _progress(job_id, "review", 72, report, status="review")
+    except Exception as exc:  # noqa: BLE001 - reported on the job, not the console
+        traceback.print_exc()
+        _progress(job_id, "review", 72,
+                  f"Rasmlarni joylashtirib bo'lmadi: {_short(exc)}", status="review")
+    finally:
+        # The originals are only needed while they are being arranged. Keeping
+        # them would double the size of every project that used this route.
+        for path in paths:
+            path.unlink(missing_ok=True)
+
+
 async def replace_scene_voice(job_id: str, index: int, data: bytes, suffix: str,
                               language: str = "") -> dict | None:
     """Use a recording of your own for one scene, in place of the generated one.

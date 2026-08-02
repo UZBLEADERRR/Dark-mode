@@ -2432,6 +2432,53 @@ $('#add-scene').addEventListener('click', async () => {
   }
 });
 
+// ── a folder of pictures at once ──────────────────────────────────
+// The other half of making the images yourself. The prompts leave in scene
+// order; the files come back named after whatever drew them, in whatever order
+// the browser downloaded them. Rather than making the user rename a hundred
+// files, the studio looks at them and works out where each one goes.
+
+$('#bulk-file').addEventListener('change', async (e) => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  if (!ED.job || !files.length) return;
+
+  const bare = ED.scenes.filter((s) => s.needs_image || !s.image_url).length;
+  const answer = await ask({
+    title: `${files.length} ta rasm`,
+    ok: 'Joylashtirish',
+    html: `<label class="f"><span>Qanday taqsimlansin</span>
+        <select name="mode">
+          <option value="auto">AI o‘zi qarab joylashtirsin</option>
+          <option value="order">Fayl tartibida — 1-rasm 1-sahnaga</option>
+        </select></label>
+      <label class="f"><span>Qaysi sahnalarga</span>
+        <select name="scope">
+          <option value="empty">Faqat rasmi yo‘qlariga${bare ? ` (${bare} ta)` : ''}</option>
+          <option value="all">Hammasiga — borlarini ham almashtir</option>
+        </select></label>
+      <small class="note">AI usuli har bir rasmga qarab, qaysi sahnaning
+        promptiga to‘g‘ri kelishini o‘zi topadi — fayl nomlari muhim emas.
+        Fayl tartibi esa promptlarni ketma-ket bajarib chiqqan bo‘lsangiz
+        to‘g‘ri keladi va model chaqirmaydi.</small>`,
+  });
+  if (!answer) return;
+
+  const body = new FormData();
+  files.forEach((file) => body.append('images', file));
+  body.append('mode', answer.mode || 'auto');
+  body.append('scope', answer.scope || 'empty');
+  try {
+    await flush();
+    await api(`/api/jobs/${ED.job.id}/images`, { method: 'POST', body });
+    state.drawn = null;
+    watch(ED.job.id);
+    toast(`${files.length} ta rasm qabul qilindi — joylashtirilmoqda`);
+  } catch (err) {
+    editorError(err.message);
+  }
+});
+
 // ── scene preview ─────────────────────────────────────────────────
 // Playing the scene's own voice-over and driving the canvas from its clock is
 // the only way to check that a layer lands on the word it is meant to land on.

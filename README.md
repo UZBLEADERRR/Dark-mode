@@ -201,6 +201,7 @@ YOUTUBE_CLIENT_SECRET=...
 | `strategist` | Kanallaringizni o'qiydi, g'oya beradi va videoni o'zi boshlaydi |
 | `shorts` | Uzun videoning ichidan alohida ishlaydigan Shorts bo'laklarini topadi |
 | `rewriter` | Matnni siz aytgan izohga qarab qayta yozadi — hech narsa yaratilishidan oldin |
+| `arranger` | Boshqa joyda yasalgan rasmlarga qarab, qaysi biri qaysi sahnaniki ekanini topadi |
 
 Reja va joylashtirish skill emas — `planner` moduli: u vaqtni kuzatib turadi va
 har bir rejani bir holatdan ikkinchisiga o'tkazadi.
@@ -362,6 +363,44 @@ Bilib qo'yish kerak bo'lgan narsalar:
   kengaytmada «Flow sahifasini tekshirish» tugmasi bor.
 - Sahifani avtomatlashtirish Google'ning shartlariga zid bo'lishi mumkin — bu
   o'z akkauntingiz, lekin xavfni bilib turing.
+
+## Rasmlarni to'pi bilan yuklash — AI o'zi joylashtiradi
+
+Promptlarni o'zingiz Flow'da bajarib chiqsangiz, rasmlar **bir papka** bo'lib
+qaytadi: nomlari Flow qo'ygan nomlar, tartibi esa qaysi biri avval yuklab
+olingani. Ularni qo'lda qayta nomlab, bittalab sahnaga qo'yish — API to'lamaslik
+uchun to'lanadigan yagona narx edi. Endi to'lamaysiz.
+
+**Tahrirlash → kadrlar qatoridagi 🖼 tugmasi** → hamma rasmni birdan tanlang.
+Ikkita savol beradi:
+
+| Savol | Tanlov | Qachon |
+|---|---|---|
+| Qanday taqsimlansin | **AI o'zi qarab** | Rasmlar aralashib ketgan, nomlari hech narsa demaydi |
+| | **Fayl tartibida** | Promptlarni birinchidan oxirigacha ketma-ket bajargansiz |
+| Qaysi sahnalarga | **Faqat rasmi yo'qlariga** | Odatdagi holat — yetmayotganini to'ldiradi |
+| | **Hammasiga** | Borini ham almashtirmoqchisiz |
+
+AI usulida har bir rasmning **kichraytirilgan nusxasi** modelga ko'rsatiladi
+(originali emas — model rasmni tanishi kifoya) va u har biriga «bu qaysi
+sahnaning promptiga to'g'ri keladi» deb javob beradi, ishonch darajasi bilan.
+Ikki sahna bir-biriga o'xshab qolsa, ishonchi yuqorisi o'z sahnasini oladi,
+qolgani esa **fayl tartibi** bilan bo'sh sahnalarga tushadi. Model umuman javob
+bermasa — hammasi fayl tartibida joylashadi, ya'ni bitta ham sahna rasmsiz
+qolmaydi.
+
+Bilib qo'yish kerak:
+
+- Rasmlar **12 tadan** guruhlanib yuboriladi, bir vaqtda 3 ta so'rov — 100 ta
+  rasm bitta ulkan so'rov bo'lib qolmaydi va yarim yo'lda uzilmaydi.
+- Bir martada **200 tagacha**. Papkani butunlay tanlab yuborib qo'yishdan
+  saqlaydi.
+- Sahna Flow navbatida kutayotgan bo'lsa, rasm tushgach **navbatdan chiqariladi**
+   — render endi u sahnani kutmaydi.
+- O'qib bo'lmaydigan fayl bo'lsa, nomi jurnalga yoziladi, qolganlari joylashadi.
+- Yuklangan asl fayllar joylashtirilgandan keyin **o'chiriladi** — loyiha ikki
+  barobar joy egallamaydi.
+- «Fayl tartibida» usuli model chaqirmaydi, ya'ni kalitsiz ham ishlaydi.
 
 ## Skriptni kim yozadi
 
@@ -1004,6 +1043,7 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs/{id}/scenes` | Yangi sahna qo'shish (prompt + ovoz + rasm) |
 | `DELETE /api/jobs/{id}/scenes/{i}` | Sahnani o'chirish |
 | `POST /api/jobs/{id}/scenes/order` | Tartibni o'zgartirish |
+| `POST /api/jobs/{id}/images` | Rasmlarni to'pi bilan yuklash — `mode: auto\|order`, `scope: empty\|all` |
 | `POST /api/jobs/{id}/scenes/{i}/regenerate` | Sahnani qayta yaratish; ovoz, ovoz oralig'i yoki **til** |
 | `POST /api/jobs/{id}/script/revise` | Matnni izohga qarab qayta yozdirish (hali hech narsa yaratilmagan) |
 | `POST /api/jobs/{id}/script/approve` | Matnni tasdiqlash — ovoz va rasmlar shundan keyin boshlanadi |
