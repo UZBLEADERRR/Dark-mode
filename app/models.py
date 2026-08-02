@@ -80,6 +80,10 @@ class ModelSettings(BaseModel):
 
     models: dict[str, str] = Field(default_factory=dict)
     voices: dict[str, str] = Field(default_factory=dict)
+    # Which provider writes the script: anthropic, openai, gemini, or "auto" to
+    # take whichever has a key. None leaves the current choice alone, so a page
+    # that only edits model names does not have to know about this.
+    text_provider: str | None = Field(default=None, max_length=20)
 
 
 class BrandKit(BaseModel):
@@ -477,6 +481,12 @@ class FlowFail(BaseModel):
     # difference matters: a Flow tab that was closed mid-generation should be
     # tried again, a prompt the model refuses should not be tried forever.
     retry: bool = False
+
+
+class FlowPrompt(BaseModel):
+    """A rewritten prompt for a picture nobody has drawn yet."""
+
+    prompt: str = Field(min_length=2, max_length=4000)
 
 
 class FlowMode(BaseModel):

@@ -727,6 +727,21 @@ def release_image_task(task_id: str) -> bool:
             (_now(), task_id)).rowcount > 0
 
 
+def rewrite_image_task(task_id: str, prompt: str) -> bool:
+    """Change what a waiting picture is a picture of.
+
+    A claim is dropped at the same time, deliberately: a worker holding the old
+    wording would go and draw it, and the edit would have changed nothing except
+    what the screen said. Handing it back means the next worker picks up the new
+    prompt — which is what editing it was for.
+    """
+    with _conn() as conn:
+        return conn.execute(
+            "UPDATE imagetasks SET prompt=?, status='waiting', taken_by='',"
+            " taken_at='', updated_at=? WHERE id=? AND status IN ('waiting','taken')",
+            (prompt, _now(), task_id)).rowcount > 0
+
+
 def drop_image_tasks(job_id: str) -> int:
     """Forget what a job was waiting for — it is no longer waiting."""
     with _conn() as conn:

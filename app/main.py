@@ -21,6 +21,7 @@ from .models import (
     ApiKeyIn,
     FlowFail,
     FlowMode,
+    FlowPrompt,
     ApiKeyPatch,
     BrandKit,
     ChatTurn,
@@ -112,6 +113,7 @@ async def lifespan(app: FastAPI):
         # library must survive a restart, or it is a setting you re-apply every
         # deploy and eventually stop trusting.
         config.set_image_provider(store.get_setting(IMAGE_PROVIDER_KEY) or "")
+        config.set_llm_provider(store.get_setting(LLM_PROVIDER_KEY) or "")
     except Exception as exc:  # noqa: BLE001 - reported, never fatal
         print(f"[sarideo] Baza bilan ishlanmadi: {pgstore.explain(exc)}", flush=True)
     # Provisioning the remote bucket is a network call. Never put one between
@@ -1077,6 +1079,7 @@ async def remove_asset(asset_id: str) -> dict[str, bool]:
 
 MODELS_KEY = "models"
 IMAGE_PROVIDER_KEY = "image_provider"
+LLM_PROVIDER_KEY = "llm_provider"
 VOICES_KEY = "voices"
 
 
@@ -1092,6 +1095,17 @@ def _models_out() -> dict[str, Any]:
             "image": f"{config.IMAGE_PROVIDER}_image",
             "tts": f"{config.TTS_PROVIDER}_tts",
         },
+        # Which model writes the script is a choice, not a consequence of which
+        # key happens to exist — so it is offered as one, with the keyless
+        # options marked rather than hidden.
+        "text_providers": [
+            {"id": name, "ready": config.has_key(name)}
+            for name in config.LLM_PROVIDERS
+        ],
+        "text_provider": config.llm_provider(),
+        # "auto" is a real answer, and different from whichever provider it
+        # currently resolves to — so the page can show it as chosen.
+        "text_choice": config.LLM_PROVIDER,
     }
 
 
@@ -1106,6 +1120,11 @@ async def put_models(body: ModelSettings) -> dict[str, Any]:
     voices = config.set_voice_overrides(body.voices)
     store.set_setting(MODELS_KEY, overrides)
     store.set_setting(VOICES_KEY, voices)
+    if body.text_provider is not None:
+        # Stored like the models beside it, so choosing GPT survives a restart
+        # rather than being a thing you set again after every deploy.
+        config.set_llm_provider(body.text_provider)
+        store.set_setting(LLM_PROVIDER_KEY, config.LLM_PROVIDER)
     return _models_out()
 
 
@@ -2103,6 +2122,26 @@ async def flow_deliver(task_id: str, image: UploadFile = File(...)) -> dict[str,
                             detail=f"Rasmni o'qib bo'lmadi: {exc}") from exc
 
     store.finish_image_task(task_id)
+    return {"ok": True, "task": _task_out(store.get_image_task(task_id) or {})}
+
+
+@app.patch("/api/flow/tasks/{task_id}")
+async def flow_rewrite(task_id: str, body: FlowPrompt) -> dict[str, Any]:
+    """Change the prompt before anything is drawn from it.
+
+    The prompts are written by a model, and a model writing a hundred of them
+    gets some of them wrong. When the pictures are being made by hand — or by a
+    browser you are watching — the moment to fix that is while the prompt is
+    still sitting in the queue, not after the picture arrives.
+    """
+    task = store.get_image_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Bunday so'rov yo'q.")
+    if task["status"] == "done":
+        raise HTTPException(status_code=409,
+                            detail="Bu so'rov bajarilgan — tahrirlashning ma'nosi yo'q.")
+    if not store.rewrite_image_task(task_id, body.prompt.strip()):
+        raise HTTPException(status_code=409, detail="Tahrirlab bo'lmadi.")
     return {"ok": True, "task": _task_out(store.get_image_task(task_id) or {})}
 
 

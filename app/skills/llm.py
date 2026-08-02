@@ -251,6 +251,86 @@ async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int,
 
 # ── shared ────────────────────────────────────────────────────────────────────
 
+async def _openai(system: str, user: str, schema: dict | None, max_tokens: int,
+                  images: list[tuple[bytes, str]] | None = None) -> str:
+    """The script, written by GPT.
+
+    Chat Completions rather than the Responses API: it is the endpoint every
+    OpenAI-compatible gateway also speaks, so pointing `OPENAI_BASE` at a proxy
+    or a local server keeps working. Pictures go in the same message as the
+    instruction, which is how this endpoint takes them.
+    """
+    secret = config.key("openai")
+    if not secret:
+        raise LLMError("OpenAI kaliti yo'q — kutubxonadan qo'shing yoki "
+                       "OPENAI_API_KEY ni sozlang.")
+
+    content: list[dict[str, Any]] = [
+        {"type": "image_url",
+         "image_url": {"url": f"data:{mime};base64,{base64.b64encode(data).decode()}"}}
+        for data, mime in (images or [])
+    ]
+    content.append({"type": "text", "text": user})
+
+    body: dict[str, Any] = {
+        "model": config.model("openai_text"),
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": content}],
+        # Named for the newer models; the older ones want `max_tokens`, and the
+        # retry below is what sorts that out rather than a version table here.
+        "max_completion_tokens": max_tokens,
+    }
+    if schema:
+        # Structured Outputs, which is a guarantee rather than a request — worth
+        # having, because the failure it prevents is a whole video lost to a
+        # stray sentence before the JSON.
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "answer", "strict": False, "schema": schema},
+        }
+
+    async def send(payload: dict[str, Any]) -> httpx.Response:
+        return await client.post(
+            f"{config.OPENAI_BASE}/chat/completions",
+            headers={"Authorization": f"Bearer {secret}",
+                     "Content-Type": "application/json"},
+            json=payload,
+        )
+
+    timeout = httpx.Timeout(300.0, connect=30.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await send(body)
+
+        # Two things an older or third-party model refuses, both about the shape
+        # of the request rather than the request itself, so both are worth one
+        # retry with that part removed.
+        if resp.status_code == 400 and "max_completion_tokens" in resp.text:
+            body["max_tokens"] = body.pop("max_completion_tokens")
+            resp = await send(body)
+        if resp.status_code == 400 and schema and "response_format" in resp.text:
+            body.pop("response_format", None)
+            body["messages"][0]["content"] = system + _json_instruction(schema)
+            resp = await send(body)
+
+        if resp.status_code >= 400:
+            held = keys.penalise("openai", secret, status=resp.status_code,
+                                 body=resp.text[:400])
+            raise Refused(f"OpenAI error {resp.status_code}: {resp.text[:400]}",
+                          secret, held)
+        keys.bless("openai", secret)
+        payload = resp.json()
+
+    choices = payload.get("choices") or []
+    if not choices:
+        raise LLMError("OpenAI hech narsa qaytarmadi.")
+    message = choices[0].get("message") or {}
+    text = message.get("content") or ""
+    if not text.strip() and choices[0].get("finish_reason") == "length":
+        raise LLMError("OpenAI chegaraga yetdi va hech narsa yozmadi. "
+                       "Videoni qisqartiring yoki sahnalarni kamaytiring.")
+    return text
+
+
 def _json_instruction(schema: dict | None) -> str:
     return (
         "\n\nRespond with a single JSON value matching this JSON Schema exactly. "
@@ -378,6 +458,8 @@ async def call_json(
             if provider == "anthropic":
                 text = await asyncio.to_thread(
                     _claude_sync, system, user, schema, max_tokens, images)
+            elif provider == "openai":
+                text = await _openai(system, user, schema, max_tokens, images)
             else:
                 text = await _gemini(system, user, schema, max_tokens, images)
             return _extract_json(text)

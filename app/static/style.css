@@ -1377,6 +1377,10 @@ input[type="range"]::-moz-range-thumb {
    being made, but not competing with it for attention. */
 .stage-stop { display: flex; justify-content: flex-end; margin: -.2rem 0 .5rem; }
 
+.model-pick { padding-bottom: .7rem; margin-bottom: .5rem;
+  border-bottom: 1px solid var(--line); }
+.model-pick small { color: var(--muted); font-size: .72rem; }
+
 .flow-switch { padding-bottom: .6rem; border-bottom: 1px solid var(--line); margin-bottom: .2rem; }
 .flow-switch .note { margin: .35rem 0 0; }
 
@@ -1388,8 +1392,16 @@ input[type="range"]::-moz-range-thumb {
 .flow-meta { font-size: .72rem; color: var(--muted); }
 /* The prompt is the thing you are about to paste somewhere else, so it is shown
    in full rather than clipped — a truncated prompt makes a different picture. */
-.flow-prompt { margin: .35rem 0 .5rem; font-size: .78rem; color: var(--fg);
-  overflow-wrap: anywhere; white-space: pre-wrap; }
+/* A field, not a paragraph: these are edited far more often than they are just
+   read, and a box that looks like text is a box nobody tries to type in. */
+textarea.flow-prompt {
+  display: block; width: 100%; box-sizing: border-box;
+  margin: .35rem 0 .5rem; padding: .5rem .6rem;
+  font: inherit; font-size: .78rem; line-height: 1.45; color: var(--fg);
+  background: var(--bg-2, #1c1f24); border: 1px solid var(--line);
+  border-radius: 8px; resize: none; overflow: hidden;
+}
+textarea.flow-prompt:focus { outline: none; border-color: var(--accent); }
 .flow-acts { display: flex; flex-wrap: wrap; gap: .4rem; }
 /* Deliberately taller than the chips elsewhere. This is the one panel meant to
    be tapped over and over on a phone — copy, leave, come back, upload, next —
@@ -1402,6 +1414,9 @@ input[type="range"]::-moz-range-thumb {
   cursor: pointer; white-space: nowrap;
 }
 .flow-acts .chip:hover { color: var(--text); border-color: var(--line-2); }
+/* `display` from the rule above beats the browser's own `[hidden]{display:none}`,
+   so the save button showed up on every row whether or not anything had changed. */
+.flow-acts .chip[hidden] { display: none; }
 .flow-acts .chip.danger:hover { color: #ff8f7d; border-color: rgba(255, 92, 71, .4); }
 .flow-acts .chip.file { position: relative; overflow: hidden; }
 .flow-acts .chip.file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }

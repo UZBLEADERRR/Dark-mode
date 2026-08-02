@@ -211,7 +211,7 @@ Hammasi adapter — `.env` orqali almashtirasiz, kod o'zgarmaydi.
 
 | Tur | Variantlar |
 |---|---|
-| Skript | `gemini` (default), `anthropic` (Claude) |
+| Skript | `anthropic` (Claude), `openai` (ChatGPT), `gemini` |
 | Rasm | `gemini`, `fal` (Flux Kontext), `openai` (gpt-image-1), `flow` (o'z brauzeringiz) |
 | Ovoz | `gemini`, `elevenlabs`, `openai`, yoki **o'z audiongizni yuklash** |
 | Til | en, uz, ru, tr, es, ar, hi, de, fr, **ko** |
@@ -306,6 +306,13 @@ provayderi» ro'yxatidan tanlaysiz.
 prompt turadi: nusxalaysiz, xohlagan joyda rasm yasaysiz, o'sha yerga
 yuklaysiz. Telefondan ham bo'ladi. Bir sahna kerak bo'lmasa — «Bekor qilish».
 
+**Promptni o'sha yerda tahrirlash mumkin.** Har bir prompt oddiy matn emas,
+**yozish maydoni**: o'zgartirasiz, **«Saqlash»** bosasiz. Promptlarni model
+yozadi, va yuztadan bir nechtasi albatta noto'g'ri chiqadi — tuzatish uchun
+to'g'ri payt esa rasm yasalgunga qadar. Agar promptni allaqachon kimdir olib
+ketgan bo'lsa, tahrirlaganingizda u navbatga **qaytariladi**, ya'ni rasm eski
+emas, yangi matn bo'yicha chiziladi.
+
 **Telefon uchun — agent.** Kengaytma faqat kompyuterda ishlaydi (Android'dagi
 Chrome kengaytmalarni qo'llamaydi). Shuning uchun `agent/` da alohida dastur
 bor: u doim yoqiq turadigan mashinada — uydagi kompyuter, VPS, yoki Sarideo
@@ -355,6 +362,28 @@ Bilib qo'yish kerak bo'lgan narsalar:
   kengaytmada «Flow sahifasini tekshirish» tugmasi bor.
 - Sahifani avtomatlashtirish Google'ning shartlariga zid bo'lishi mumkin — bu
   o'z akkauntingiz, lekin xavfni bilib turing.
+
+## Skriptni kim yozadi
+
+**Kutubxona → Modellar** da eng tepada **«Skriptni kim yozadi»** ro'yxati bor:
+
+| Tanlov | Kim yozadi |
+|---|---|
+| **avtomatik** | Kaliti bori — Claude, keyin ChatGPT, keyin Gemini. Tagida hozir qaysi biri ekani yoziladi |
+| **Claude (Anthropic)** | `anthropic_text` modeli |
+| **ChatGPT (OpenAI)** | `openai_text` modeli — standarti `gpt-5` |
+| **Gemini (Google)** | `gemini_text`, xato bo'lsa `gemini_text_fallback` |
+
+Tanlov **saqlanadi** — qayta ishga tushsa ham, deploy qilsangiz ham o'sha holatda
+qoladi. Kaliti yo'q provayder ro'yxatda ko'rinadi, lekin tanlab bo'lmaydi.
+
+Modelning o'zini o'sha panelda, provayder qatoridan tanlaysiz (`ChatGPT — skript`).
+Ro'yxatda yo'q modelni **«Boshqa»** orqali qo'lda yozasiz.
+
+ChatGPT uchun ikkita zaxira yo'l qo'yilgan, ikkalasi ham so'rovning shakliga
+tegishli: eski model `max_completion_tokens` ni qabul qilmasa `max_tokens` bilan,
+gateway `json_schema` ni bilmasa — JSON'ni promptda so'rab qayta uriniladi.
+`OPENAI_BASE` ni o'zgartirib, OpenAI bilan mos boshqa serverga ulash mumkin.
 
 ## Modellar
 
@@ -959,6 +988,8 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `MUSIC_VOLUME` | `0.10` | Fon musiqasi (ovoz ostida avtomatik pasayadi) |
 | `MAX_CONCURRENT_JOBS` | `1` | Bir vaqtda nechta render — RAM yetsa oshiring |
 | `IMAGE_PROVIDER` | `gemini` | `gemini` / `fal` / `openai` / `flow` (brauzeringiz) |
+| `LLM_PROVIDER` | `auto` | Skriptni kim yozadi: `anthropic` / `openai` / `gemini` |
+| `OPENAI_TEXT_MODEL` | `gpt-5` | ChatGPT tanlanganda qaysi model |
 | `FLOW_PATIENCE` | `1200` | `flow` rejimida bitta rasmni necha soniya kutish |
 
 ## API
@@ -989,6 +1020,7 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/flow/tasks/{id}/image` | Tayyor rasmni qaytarish |
 | `POST /api/flow/tasks/{id}/fail` | Chiqmadi (`retry: true` — navbatga qaytarsin) |
 | `POST /api/flow/mode` | Flow'ni yoqish/o'chirish (`{"on": true}`) — saqlanadi |
+| `PATCH /api/flow/tasks/{id}` | Promptni tahrirlash (rasm yasalmasdan oldin) |
 | `GET/PUT /api/brand` | Brend to'plami |
 | `GET/PUT /api/models` | Har bosqich qaysi modelni chaqiradi |
 | `GET /api/models/available?provider=` | Provayderdagi mavjud modellar |
