@@ -92,6 +92,7 @@ const STAGE_LABELS = {
   gemini_tts_fallback: 'Gemini — zaxira ovoz',
   anthropic_text: 'Claude — skript',
   fal_image: 'fal — rasm (referens bilan)', fal_text2img: 'fal — rasm (referenssiz)',
+  openai_text: 'ChatGPT — skript',
   openai_image: 'OpenAI — rasm', openai_tts: 'OpenAI — ovoz',
   openai_transcribe: 'OpenAI — transkripsiya', elevenlabs_tts: 'ElevenLabs — ovoz',
 };
@@ -779,7 +780,25 @@ function drawModels() {
   const rows = Object.entries(m.stages)
     .filter(([key, meta]) => live.has(meta.provider) || inUse.has(key));
 
+  // Which provider writes the script, above the model rows — it decides which
+  // of them is the one that matters, so it reads first.
+  const chosen = m.text_choice || 'auto';
+  const picker = `
+    <label class="f model-pick"><span>Skriptni kim yozadi</span>
+      <select id="text-provider">
+        <option value="auto"${chosen === 'auto' ? ' selected' : ''}>avtomatik — kaliti bori</option>
+        ${(m.text_providers || []).map((p) => `
+          <option value="${esc(p.id)}"${p.ready ? '' : ' disabled'}${
+            chosen === p.id ? ' selected' : ''}>${esc(TEXT_PROVIDER_LABELS[p.id] || p.id)}${
+            p.ready ? '' : ' — kalit yo‘q'}</option>`).join('')}
+      </select>
+      <small>${chosen === 'auto'
+        ? `Hozir: <b>${esc(TEXT_PROVIDER_LABELS[m.text_provider] || m.text_provider)}</b>`
+        : 'Kalit bo‘lmasa video boshlanmaydi.'}</small>
+    </label>`;
+
   $('#models-box').innerHTML = `
+    ${picker}
     ${rows.map(([key, meta]) => modelRow(key, meta, m, inUse.has(key))).join('')}
 
     <div class="model-acts">
@@ -813,7 +832,11 @@ function drawModels() {
       state.models = await api('/api/models', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ models: readModelRows(), voices: state.models.voices || {} }),
+        body: JSON.stringify({
+          models: readModelRows(),
+          voices: state.models.voices || {},
+          text_provider: $('#text-provider')?.value || null,
+        }),
       });
       $('#models-saver').textContent = 'saqlandi';
       $('#models-saver').className = 'saver ok';
@@ -825,6 +848,14 @@ function drawModels() {
     } finally { btn.disabled = false; }
   });
 }
+
+// The provider names are what the API calls them; these are what a person calls
+// them. `openai` in a menu is not obviously "the one that made ChatGPT".
+const TEXT_PROVIDER_LABELS = {
+  anthropic: 'Claude (Anthropic)',
+  openai: 'ChatGPT (OpenAI)',
+  gemini: 'Gemini (Google)',
+};
 
 const OTHER_MODEL = '__other';
 
@@ -4823,6 +4854,17 @@ async function loadKeys() {
 // be seen to be waiting rather than stuck.
 let FLOW = { tasks: [], waiting: 0 };
 
+/** A textarea tall enough for what is in it. A prompt you cannot see all of is
+ *  a prompt you cannot check. */
+function grow(el) {
+  el.style.height = 'auto';
+  // A closed <details> has no layout, so `scrollHeight` reads 0 — and a height
+  // measured then would pin the field shut for good, the moment the section is
+  // finally opened. Left alone, it keeps its `rows` until it can be measured.
+  if (!el.scrollHeight) return;
+  el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+}
+
 let flowPoll = null;
 
 async function loadFlow() {
@@ -4881,9 +4923,13 @@ function drawFlow() {
         <b>${esc(t.title || t.job_id)} · ${t.scene + 1}-sahna</b>
         <span class="flow-meta">${esc(t.aspect)}${
           t.status === 'taken' ? ` · ${esc(t.taken_by)} olib ketdi` : ' · navbatda'}</span>
-        <p class="flow-prompt">${esc(t.prompt)}</p>
+        <!-- Editable in place. These prompts are written by a model, and the
+             moment to fix a bad one is while it is still a prompt. -->
+        <textarea class="flow-prompt" data-flow="text" rows="3"
+          aria-label="${t.scene + 1}-sahna prompti">${esc(t.prompt)}</textarea>
       </div>
       <div class="flow-acts">
+        <button class="chip" data-flow="save" hidden>Saqlash</button>
         <button class="chip" data-flow="copy">Promptni nusxalash</button>
         <label class="chip file"><input type="file" accept="image/*" data-flow="give" />
           <span>Rasmni yuklash</span></label>
@@ -4892,10 +4938,31 @@ function drawFlow() {
     </div>`).join('')
     : '<p class="key-none">Hech narsa kutilmayapti.</p>';
 
+  // Measured again when the section is opened, which is the first moment the
+  // fields have a size at all.
+  const section = $('#sec-flow');
+  if (section && !section.dataset.grows) {
+    section.dataset.grows = '1';
+    section.addEventListener('toggle', () => {
+      if (section.open) $$('#flow-box textarea[data-flow="text"]').forEach(grow);
+    });
+  }
+
   $$('#flow-box [data-flow]').forEach((el) => {
-    const id = el.closest('.flow-row').dataset.task;
+    const row = el.closest('.flow-row');
+    const id = row.dataset.task;
     if (el.dataset.flow === 'give') {
       el.addEventListener('change', () => flowGive(id, el.files[0]));
+    } else if (el.dataset.flow === 'text') {
+      // The save button appears only once something has changed, so a row you
+      // are only reading stays a row you are only reading.
+      const was = el.value;
+      const save = $('[data-flow="save"]', row);
+      el.addEventListener('input', () => {
+        save.hidden = el.value.trim() === was.trim() || el.value.trim().length < 2;
+        grow(el);
+      });
+      grow(el);
     } else {
       el.addEventListener('click', () => flowAct(id, el.dataset.flow));
     }
@@ -4905,9 +4972,26 @@ function drawFlow() {
 async function flowAct(id, act) {
   const task = (FLOW.tasks || []).find((t) => t.id === id);
   if (!task) return;
-  if (act === 'copy') {
+  const row = $(`.flow-row[data-task="${id}"]`);
+  if (act === 'save') {
+    const text = $('[data-flow="text"]', row).value.trim();
     try {
-      await navigator.clipboard.writeText(task.prompt);
+      await api(`/api/flow/tasks/${id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: text }),
+      });
+      toast('Prompt yangilandi');
+    } catch (e) {
+      toast(e.message);
+    }
+    await loadFlow();
+    return;
+  }
+  if (act === 'copy') {
+    // Whatever is in the box now, not what arrived — you may have just edited it.
+    const live = $('[data-flow="text"]', row)?.value || task.prompt;
+    try {
+      await navigator.clipboard.writeText(live);
       toast('Prompt nusxalandi');
     } catch {
       // Clipboard access is refused on an insecure origin, which a self-hosted

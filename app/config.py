@@ -70,6 +70,9 @@ def youtube_ready() -> bool:
 # Gemini key configured the whole app (script, prompts, subtitles, images,
 # voice) runs on that single key.
 LLM_PROVIDER = _env("LLM_PROVIDER", "auto").lower()
+# What the environment asked for, kept apart from what is in force — switching
+# from the app has to be reversible without knowing what it was before.
+LLM_PROVIDER_ENV = LLM_PROVIDER
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
 LLM_MODEL = _env("LLM_MODEL", "claude-opus-5")
 LLM_EFFORT = _env("LLM_EFFORT", "high")
@@ -95,6 +98,7 @@ FAL_TEXT2IMG_MODEL = _env("FAL_TEXT2IMG_MODEL", "fal-ai/flux/dev")
 OPENAI_API_KEY = _env("OPENAI_API_KEY")
 OPENAI_BASE = _env("OPENAI_BASE", "https://api.openai.com/v1")
 OPENAI_IMAGE_MODEL = _env("OPENAI_IMAGE_MODEL", "gpt-image-1")
+OPENAI_TEXT_MODEL = _env("OPENAI_TEXT_MODEL", "gpt-5")
 
 # --- text to speech ----------------------------------------------------------
 TTS_PROVIDER = _env("TTS_PROVIDER", "elevenlabs").lower()  # elevenlabs | openai | gemini
@@ -251,6 +255,7 @@ MODEL_STAGES: dict[str, dict] = {
     "anthropic_text":    {"provider": "anthropic", "role": "text"},
     "fal_image":         {"provider": "fal", "role": "image"},
     "fal_text2img":      {"provider": "fal", "role": "image"},
+    "openai_text":       {"provider": "openai", "role": "text"},
     "openai_image":      {"provider": "openai", "role": "image"},
     "openai_tts":        {"provider": "openai", "role": "tts"},
     "openai_transcribe": {"provider": "openai", "role": "transcribe"},
@@ -266,6 +271,7 @@ _MODEL_DEFAULTS: dict[str, str] = {
     "anthropic_text": LLM_MODEL,
     "fal_image": FAL_IMAGE_MODEL,
     "fal_text2img": FAL_TEXT2IMG_MODEL,
+    "openai_text": OPENAI_TEXT_MODEL,
     "openai_image": OPENAI_IMAGE_MODEL,
     "openai_tts": OPENAI_TTS_MODEL,
     "openai_transcribe": OPENAI_TRANSCRIBE_MODEL,
@@ -476,17 +482,40 @@ def has_key(provider: str) -> bool:
     return bool(env_key(provider))
 
 
+# Which providers can write a script, in the order `auto` prefers them when more
+# than one has a key. Order is a judgement about prose, not about price.
+LLM_PROVIDERS = ("anthropic", "openai", "gemini")
+
+
 def llm_provider() -> str:
     """Which model writes the script. Falls back to whichever key exists."""
     if LLM_PROVIDER in {"anthropic", "claude"}:
         return "anthropic"
+    if LLM_PROVIDER in {"openai", "gpt", "chatgpt"}:
+        return "openai"
     if LLM_PROVIDER == "gemini":
         return "gemini"
-    return "anthropic" if has_key("anthropic") else "gemini"
+    # `auto`: the first one that can actually be called. Gemini is last because
+    # it is the one every deployment already has a key for, so naming it first
+    # would mean a stored OpenAI key never got used.
+    return next((name for name in LLM_PROVIDERS if has_key(name)), "gemini")
 
 
 def llm_ready() -> bool:
-    return has_key("anthropic") if llm_provider() == "anthropic" else has_key("gemini")
+    return has_key(llm_provider())
+
+
+def set_llm_provider(name: str | None) -> str:
+    """Change which model writes the script, for every video from now on.
+
+    Same shape as `set_image_provider`: the module attribute is reassigned
+    because every reader already asks for it at the moment it needs it. An empty
+    name means "back to whatever the environment said".
+    """
+    global LLM_PROVIDER
+    wanted = (name or "").strip().lower()
+    LLM_PROVIDER = wanted if wanted in (*LLM_PROVIDERS, "auto") else LLM_PROVIDER_ENV
+    return llm_provider()
 
 
 def image_provider_ready(provider: str | None = None) -> bool:
