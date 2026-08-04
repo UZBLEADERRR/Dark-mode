@@ -1400,7 +1400,15 @@ label.frame-add svg {
 
 /* Off to the right, under the progress line: reachable the whole time a video is
    being made, but not competing with it for attention. */
-.stage-stop { display: flex; justify-content: flex-end; margin: -.2rem 0 .5rem; }
+/* Stop on the right, and what is drawing this on the left — reversed so the
+   button stays where it has always been when the note is not there. */
+.stage-stop {
+  display: flex; flex-direction: row-reverse; flex-wrap: wrap;
+  align-items: center; justify-content: space-between; gap: 8px;
+  margin: -.2rem 0 .5rem;
+}
+.stage-drawnby { font-size: .74rem; color: var(--muted); min-width: 0; }
+.stage-drawnby b { color: var(--text); font-weight: 600; }
 
 .model-pick { padding-bottom: .7rem; margin-bottom: .5rem;
   border-bottom: 1px solid var(--line); }
