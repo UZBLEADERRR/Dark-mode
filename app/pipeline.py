@@ -111,13 +111,36 @@ def _slug(text: str, limit: int = 60) -> str:
 
 
 async def _gather_limited(tasks: list[Any], limit: int) -> list[Any]:
+    """Run these coroutines, `limit` of them at a time.
+
+    The callers build the whole list up front — a hundred scenes is a hundred
+    coroutine objects — and most of them sit waiting their turn on the semaphore.
+    Anything that ends this early (Stop, or the first failure when one is raised)
+    leaves those objects never awaited, and Python complains about each one on the
+    next collection:
+
+        RuntimeWarning: coroutine '_render_images.<locals>.one' was never awaited
+
+    Which is noise on top of the thing the user actually did, and buries whatever
+    real message is in the log. Closing the ones that never started says the same
+    thing to the interpreter without the shouting.
+    """
     semaphore = asyncio.Semaphore(max(1, limit))
+    started: set[Any] = set()
 
     async def guarded(coro):
         async with semaphore:
+            started.add(coro)
             return await coro
 
-    return await asyncio.gather(*(guarded(t) for t in tasks))
+    try:
+        return await asyncio.gather(*(guarded(t) for t in tasks))
+    finally:
+        for coro in tasks:
+            # Only the ones still on the doorstep. A coroutine that started and
+            # was cancelled has already been dealt with by the cancellation.
+            if coro not in started:
+                coro.close()
 
 
 def workdir_for(job_id: str) -> Path:
