@@ -301,6 +301,109 @@ async def _flow(
         "yoki «Flow navbati» bo'limidan rasmni o'zingiz yuklang.")
 
 
+# --- Flow Agent ---------------------------------------------------------------
+#
+# The same Google Flow subscription as `flow`, reached a different way. `flow`
+# parks a prompt in a queue and waits for somebody to open a browser; this asks a
+# backend for a picture and is handed one, so a video started from a phone at
+# midnight builds itself without anybody being awake.
+#
+# Flow Agent (`kodelyx/flow-agent`) is a separate project and none of it lives
+# here. What this speaks is its published HTTP API: upload a reference, ask for
+# an image, take the bytes.
+
+_FLOW_AGENT_SIZES = {
+    "16:9": "1792x1024",
+    "9:16": "1024x1792",
+    "1:1": "1024x1024",
+    "4:5": "1024x1280",
+}
+
+# Uploading a hero costs a round trip and returns an id that stays valid, so the
+# same face is uploaded once per process rather than once per scene. Keyed by the
+# file's bytes, not its path: a hero redrawn between scenes is a different
+# reference even though it is the same file name.
+_flow_agent_refs: dict[str, str] = {}
+
+
+def _flow_agent_headers() -> dict[str, str]:
+    # The key is optional at the far end — a backend started without SERVER_API_KEY
+    # accepts anything — so an empty one means "no header", not "empty header".
+    if not config.FLOW_AGENT_KEY:
+        return {}
+    return {"Authorization": f"Bearer {config.FLOW_AGENT_KEY}"}
+
+
+async def _flow_agent_upload(client: httpx.AsyncClient, path: Path) -> str:
+    """Put one hero photo in front of Flow, and remember what it was called."""
+    import hashlib
+
+    raw = path.read_bytes()
+    fingerprint = hashlib.sha256(raw).hexdigest()
+    known = _flow_agent_refs.get(fingerprint)
+    if known:
+        return known
+
+    resp = await client.post(
+        f"{config.FLOW_AGENT_URL}/v1/upload",
+        headers=_flow_agent_headers(),
+        json={"image_base64": f"data:{_mime_for(path)};base64,"
+                              f"{base64.b64encode(raw).decode()}"},
+    )
+    if resp.status_code >= 400:
+        raise ImageError(
+            f"Flow Agent hero yuklashni rad etdi ({resp.status_code}): {resp.text[:200]}")
+    media_id = (resp.json() or {}).get("media_id") or ""
+    if not media_id:
+        raise ImageError("Flow Agent hero uchun media_id qaytarmadi.")
+    _flow_agent_refs[fingerprint] = media_id
+    return media_id
+
+
+async def _flow_agent(
+    client: httpx.AsyncClient, prompt: str, references: list[Path], aspect: str,
+) -> bytes:
+    refs: list[str] = []
+    for path in references[:10]:  # its own ceiling on how many faces one frame may carry
+        refs.append(await _flow_agent_upload(client, path))
+
+    body: dict[str, object] = {
+        "prompt": prompt,
+        "model": config.FLOW_AGENT_MODEL,
+        "n": 1,
+        "size": _FLOW_AGENT_SIZES.get(aspect, "1024x1024"),
+        # Bytes, not a link: the link is served by a backend that may be on
+        # somebody's home machine, and this render is not.
+        "response_format": "b64_json",
+    }
+    if refs:
+        body["ref_media_ids"] = refs
+
+    resp = await client.post(f"{config.FLOW_AGENT_URL}/v1/images/generations",
+                             headers=_flow_agent_headers(), json=body)
+    if resp.status_code >= 400:
+        detail = resp.text[:300]
+        if resp.status_code in {502, 503}:
+            # Its own way of saying "no browser is connected", which is the one
+            # failure the user can actually do something about.
+            detail += " — Flow Agent kengaytmasi ulanganmi? Brauzer ochiqmi?"
+        raise ImageError(f"Flow Agent error {resp.status_code}: {detail}")
+
+    data = (resp.json() or {}).get("data") or []
+    for item in data:
+        if item.get("b64_json"):
+            return base64.b64decode(item["b64_json"])
+        # It falls back to a URL when it could not keep the file itself.
+        if item.get("url"):
+            link = str(item["url"])
+            if link.startswith("/"):
+                link = f"{config.FLOW_AGENT_URL}{link}"
+            got = await client.get(link, headers=_flow_agent_headers())
+            if got.status_code < 400 and got.content:
+                return got.content
+    raise ImageError("Flow Agent rasm qaytarmadi.")
+
+
 async def generate_image(
     *,
     prompt: str,
@@ -344,12 +447,17 @@ async def generate_image(
             return out_path, f"Flow'dan rasm kelmadi, o'rniga vaqtinchalik rasm: {exc}"
 
     full_prompt = prompt
-    if negative_prompt and provider in {"gemini", "openai"}:
-        # These two have no negative-prompt field, so fold it into the instruction.
+    if negative_prompt and provider in {"gemini", "openai", "flowagent"}:
+        # These have no negative-prompt field, so fold it into the instruction.
         full_prompt = f"{prompt}\n\nDo not include: {negative_prompt}."
 
     last_error: Exception | None = None
-    timeout = httpx.Timeout(config.IMAGE_TIMEOUT, connect=30.0)
+    # Flow Agent is not an API in the same sense as the others: at the far end of
+    # it is a browser, and a browser draws at the speed a browser draws. Holding
+    # it to the timeout meant for an HTTP provider would time out every call.
+    patience = (config.FLOW_AGENT_TIMEOUT if provider == "flowagent"
+                else config.IMAGE_TIMEOUT)
+    timeout = httpx.Timeout(patience, connect=30.0)
 
     async def run() -> Path:
         nonlocal last_error
@@ -365,6 +473,9 @@ async def generate_image(
                         payload = await _fal(client, body, reference_paths, aspect, size)
                     elif provider == "openai":
                         payload = await _openai(client, full_prompt, reference_paths, aspect)
+                    elif provider == "flowagent":
+                        payload = await _flow_agent(client, full_prompt, reference_paths,
+                                                    aspect)
                     else:
                         raise ImageError(f"Unknown image provider '{provider}'.")
 

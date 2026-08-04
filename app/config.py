@@ -80,12 +80,24 @@ GEMINI_TEXT_MODEL = _env("GEMINI_TEXT_MODEL", "gemini-3.1-pro-preview")
 GEMINI_TEXT_FALLBACK = _env("GEMINI_TEXT_FALLBACK", "gemini-2.5-flash")
 
 # --- image generation --------------------------------------------------------
-IMAGE_PROVIDER = _env("IMAGE_PROVIDER", "gemini").lower()  # gemini | fal | openai | flow
+# gemini | fal | openai | flow | flowagent
+IMAGE_PROVIDER = _env("IMAGE_PROVIDER", "gemini").lower()
 # What the environment asked for, kept apart from what is in force. Switching to
 # `flow` from the app has to be reversible without knowing what it was before —
 # and "before" is this, not whatever was last chosen.
 IMAGE_PROVIDER_ENV = IMAGE_PROVIDER
-IMAGE_PROVIDERS = ("gemini", "fal", "openai", "flow")
+IMAGE_PROVIDERS = ("gemini", "fal", "openai", "flow", "flowagent")
+
+# Flow Agent — the same Google Flow subscription, reached through its own backend
+# instead of through a browser this app is driving. `flow` parks a prompt and
+# waits for somebody's browser to answer it; `flowagent` asks for a picture and
+# is given one, which is the difference between a queue and a provider.
+FLOW_AGENT_URL = _env("FLOW_AGENT_URL", "http://localhost:8001").rstrip("/")
+FLOW_AGENT_KEY = _env("FLOW_AGENT_KEY")
+FLOW_AGENT_MODEL = _env("FLOW_AGENT_MODEL", "gem_pix_2")
+# Its bridge waits on a browser at the other end of a WebSocket, so a call can
+# sit for a while before anything starts happening.
+FLOW_AGENT_TIMEOUT = _int("FLOW_AGENT_TIMEOUT", 300)
 
 GEMINI_API_KEY = _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY")
 GEMINI_IMAGE_MODEL = _env("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
@@ -526,6 +538,11 @@ def image_provider_ready(provider: str | None = None) -> bool:
     # listening for the prompts is answered by the queue, not by a key.
     if provider == "flow":
         return True
+    # Flow Agent is the same story with an address instead of a queue: no key of
+    # ours is involved, and whether its browser is connected is a question for it,
+    # not for this function.
+    if provider == "flowagent":
+        return bool(FLOW_AGENT_URL)
     return has_key(provider) if provider in {"gemini", "fal", "openai"} else False
 
 

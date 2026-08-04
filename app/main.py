@@ -445,7 +445,7 @@ async def health() -> dict[str, Any]:
         # that belongs to some other provider's key would only mislead.
         "tts_rate_limit": config.tts_rate_limit(config.TTS_PROVIDER),
         "image_providers": {n: config.image_provider_ready(n)
-                            for n in ("gemini", "fal", "openai", "flow")},
+                            for n in ("gemini", "fal", "openai", "flow", "flowagent")},
         # How many scene prompts are sitting in the queue right now. Zero is the
         # normal answer; a number that is not going down is a browser that is not
         # open, and that is worth being able to see from the health panel.
