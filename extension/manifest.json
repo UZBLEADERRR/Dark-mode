@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Sarideo \u2014 Flow bridge",
-  "version": "1.0.0",
-  "description": "Sarideo sahnalari uchun rasmlarni Google Flow'da yasab, ilovaga qaytaradi.",
+  "name": "Sarideo \u2014 Flow",
+  "version": "1.1.0",
+  "description": "Flow'da yasalgan rasmlarni Sarideo loyihasiga yuboradi, va Sarideo navbatidagi promptlarni Flow'da bajaradi.",
   "permissions": [
     "storage",
     "tabs",
@@ -22,7 +22,7 @@
   "options_page": "options.html",
   "action": {
     "default_popup": "options.html",
-    "default_title": "Sarideo \u2014 Flow bridge"
+    "default_title": "Sarideo \u2014 Flow"
   },
   "content_scripts": [
     {

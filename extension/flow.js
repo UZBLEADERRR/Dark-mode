@@ -19,6 +19,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       .catch((exc) => respond({ error: exc.message }));
     return true;
   }
+  if (msg?.kind === "sarideo:count") {
+    respond({ count: window.sarideoFlow.count() });
+    return false;
+  }
+  if (msg?.kind === "sarideo:harvest") {
+    // A slice at a time: the answer carries the picture bytes, and the whole
+    // page's worth would not fit in one reply.
+    window.sarideoFlow.harvest(msg.from || 0, msg.count || 4)
+      .then((pictures) => respond({ pictures }))
+      .catch((exc) => respond({ error: exc.message }));
+    return true;
+  }
   if (msg?.kind === "sarideo:probe") {
     // What this page looks like to the extension, in the terms it cares about.
     // Reported rather than guessed at, so a broken selector is a fact instead of

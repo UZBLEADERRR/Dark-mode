@@ -33,6 +33,10 @@ const SELECTORS = {
 
 // A picture, not a spinner or an avatar.
 const MIN_SIDE = 256;
+// How many pictures one sweep of the page will take. Sarideo refuses more than
+// two hundred in one go, and a Flow project big enough to hit that is one you
+// want to send in two halves anyway.
+const HARVEST_LIMIT = 200;
 // How long to wait for Flow to finish one image before giving up on it. Flow is
 // slow by nature and this is not a reason to fail a scene, so the caller treats
 // a timeout as retryable.
@@ -142,6 +146,69 @@ async function toDataUrl(src) {
   });
 }
 
+// ── taking the pictures that are already there ───────────────────────────────
+//
+// The other way round from `make`. Nothing is typed and nothing is generated:
+// you have been working in Flow yourself, the page is full of finished pictures,
+// and all that is wanted is for them to end up in Sarideo instead of in your
+// downloads folder.
+
+/** The biggest source this <img> offers, not whichever one the layout picked.
+ *
+ *  Flow serves a `srcset` and the browser chooses by how much room the thumbnail
+ *  has on screen — which is a few hundred pixels in a grid. Sending that would
+ *  put a thumbnail into a 1080p video.
+ */
+function bestSource(img) {
+  const set = img.getAttribute("srcset") || "";
+  let best = { url: img.currentSrc || img.src, width: img.naturalWidth || 0 };
+  for (const part of set.split(",")) {
+    const [url, size] = part.trim().split(/\s+/);
+    const width = Number((size || "").replace(/[^\d]/g, "")) || 0;
+    if (url && width > best.width) best = { url: new URL(url, location.href).href, width };
+  }
+  return best.url;
+}
+
+/** Every finished picture on the page, in the order the page shows them. */
+function harvestList(limit = HARVEST_LIMIT) {
+  const found = [];
+  const already = new Set();
+  for (const selector of SELECTORS.result) {
+    for (const img of document.querySelectorAll(selector)) {
+      if (found.length >= limit) break;
+      const url = img.src && bestSource(img);
+      if (!url || already.has(url) || !big(img)) continue;
+      already.add(url);
+      found.push({ url, width: img.naturalWidth || 0, height: img.naturalHeight || 0 });
+    }
+  }
+  return found;
+}
+
+/** Read a slice of that list into data URLs.
+ *
+ *  A slice, not the whole list, because these cross an extension message one
+ *  reply at a time: a hundred pictures is a hundred megabytes and no messaging
+ *  channel wants to carry that in a single answer.
+ *
+ *  A picture that will not read here is *not* an error. It is handed back as a
+ *  bare URL, and the extension fetches it itself — it is allowed to make
+ *  cross-origin requests that this page is not.
+ */
+async function harvest(from = 0, count = 4) {
+  const slice = harvestList().slice(from, from + count);
+  const out = [];
+  for (const picture of slice) {
+    try {
+      out.push({ ...picture, dataUrl: await toDataUrl(picture.url) });
+    } catch (exc) {
+      out.push({ ...picture, error: exc.message });
+    }
+  }
+  return out;
+}
+
 async function make(prompt) {
   const field = pick(SELECTORS.prompt);
   if (!field) throw new Error("Flow sahifasida prompt maydoni topilmadi");
@@ -163,6 +230,10 @@ async function make(prompt) {
 // fragile part, or they drift and only one of them gets fixed.
 window.sarideoFlow = {
   make,
+  harvest,
+  // How many there are to take, without reading a single one of them — what the
+  // panel shows before you commit to sending anything.
+  count: () => harvestList().length,
   probe: () => ({
     url: location.href,
     prompt: pick(SELECTORS.prompt) ? `${pick(SELECTORS.prompt).tagName.toLowerCase()} topildi` : "topilmadi",

@@ -3,57 +3,202 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sarideo — Flow bridge</title>
+<title>Sarideo — Flow</title>
 <style>
-  :root { color-scheme: dark; }
-  body { width: 340px; margin: 0; padding: 14px 14px 18px;
-         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-         background: #14161a; color: #e8eaed; }
-  h1 { font-size: 15px; margin: 0 0 2px; }
-  p.sub { margin: 0 0 14px; font-size: 12px; color: #9aa0a6; }
-  label { display: block; margin-bottom: 10px; font-size: 12px; color: #9aa0a6; }
-  input { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 8px 10px;
-          border: 1px solid #2c3036; border-radius: 8px; background: #1c1f24;
-          color: #e8eaed; font: inherit; }
-  .row { display: flex; gap: 8px; margin: 12px 0 10px; }
-  button { flex: 1; padding: 9px 10px; border: 1px solid #2c3036; border-radius: 8px;
-           background: #22262c; color: #e8eaed; font: inherit; cursor: pointer; }
-  button.go { background: #ff3b30; border-color: #ff3b30; color: #fff; font-weight: 600; }
-  button.wide { flex: none; width: 100%; }
-  #status { font-size: 12px; padding: 8px 10px; border-radius: 8px;
-            background: #1c1f24; margin-bottom: 10px; }
-  #log { font-size: 11px; color: #9aa0a6; max-height: 150px; overflow: auto;
-         white-space: pre-wrap; border-top: 1px solid #2c3036; padding-top: 8px;
-         margin-top: 4px; }
+  /* Sarideo's own palette, so the panel reads as part of the app rather than as
+     a browser dialog that happens to be dark. */
+  :root {
+    color-scheme: dark;
+    --bg: #08090c;
+    --surface: #101219;
+    --raised: #171a23;
+    --line: rgba(255, 255, 255, .075);
+    --line-2: rgba(255, 255, 255, .14);
+    --text: #eef1f7;
+    --muted: #7c8497;
+    --accent: #ff5c47;
+    --accent-soft: rgba(255, 92, 71, .14);
+    --ok: #3ddc91;
+    --warn: #ffbd52;
+    --r: 14px;
+    --r-sm: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    width: 372px; margin: 0; padding: 16px 16px 18px;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .head { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .head h1 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: -.01em; }
+  .pill {
+    margin-left: auto; font-size: 11px; padding: 4px 9px; border-radius: 99px;
+    background: var(--raised); color: var(--muted); border: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .pill.on { color: var(--ok); border-color: rgba(61, 220, 145, .3); }
+  .pill.busy { color: var(--warn); border-color: rgba(255, 189, 82, .3); }
+
+  /* One row of tabs, because there are exactly two things this extension does
+     and the old panel made them look like one confusing thing. */
+  .tabs {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+    margin-bottom: 14px;
+  }
+  .tabs button {
+    padding: 9px 8px; border: 0; border-radius: var(--r-sm); cursor: pointer;
+    background: transparent; color: var(--muted); font: inherit; font-size: 13px;
+    font-weight: 600; transition: background .16s, color .16s;
+  }
+  .tabs button[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); }
+  .tabs button:hover:not([aria-pressed="true"]) { color: var(--text); }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 14px; margin-bottom: 12px;
+  }
+  .card + .card { margin-top: -2px; }
+
+  label.f { display: block; margin-bottom: 12px; }
+  label.f:last-child { margin-bottom: 0; }
+  label.f > span { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 5px; }
+  input, select {
+    width: 100%; padding: 10px 11px; font: inherit; font-size: 13.5px;
+    color: var(--text); background: var(--raised);
+    border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  }
+  input:focus, select:focus { outline: 0; border-color: var(--accent); }
+  select { appearance: none; cursor: pointer;
+           background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                             linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+           background-position: right 15px center, right 10px center;
+           background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+
+  /* Big, obviously pressable, and never a bare label that only looks like a
+     button — the last panel had buttons people were not sure they could press. */
+  button.act {
+    width: 100%; padding: 12px 14px; font: inherit; font-size: 14px; font-weight: 600;
+    color: var(--text); background: var(--raised); cursor: pointer;
+    border: 1px solid var(--line-2); border-radius: var(--r-sm);
+    transition: background .16s, border-color .16s, transform .1s;
+  }
+  button.act:hover:not(:disabled) { border-color: var(--line-2); background: #1d212b; }
+  button.act:active:not(:disabled) { transform: translateY(1px); }
+  button.act:disabled { opacity: .45; cursor: default; }
+  button.act.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.act.go:hover:not(:disabled) { background: #ff6d5a; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stack { display: grid; gap: 8px; }
+
+  .meta { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .note { font-size: 11.5px; color: var(--muted); margin: 10px 0 0; line-height: 1.5; }
+
+  .bar { height: 3px; border-radius: 99px; background: var(--raised); margin-top: 10px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+
+  details { margin-top: 4px; }
+  summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 6px 2px; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "▸ "; }
+  details[open] summary::before { content: "▾ "; }
+  details[open] summary { margin-bottom: 8px; }
+
+  #log {
+    font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted); max-height: 132px; overflow: auto; white-space: pre-wrap;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r-sm); padding: 9px 10px; margin-top: 4px;
+  }
+  .msg { font-size: 12px; margin: 10px 0 0; }
+  .msg.err { color: var(--accent); }
+  .msg.ok { color: var(--ok); }
+  .hidden { display: none !important; }
+  ol { font-size: 12.5px; line-height: 1.8; padding-left: 18px; margin: 8px 0 0; }
+  code { background: var(--raised); padding: 1px 5px; border-radius: 5px; font-size: 11.5px; }
 </style>
 </head>
 <body>
-  <h1>Sarideo — Flow bridge</h1>
-  <p class="sub">Sarideo navbatidagi promptlarni Google Flow'da yasab qaytaradi.
-    Google akkauntingizga shu brauzerdagi seansingiz orqali kiriladi — parol
-    ham, cookie ham hech qayerga yuborilmaydi.</p>
-
-  <label>Sarideo manzili
-    <input id="server" type="url" placeholder="https://sarideo.up.railway.app" />
-  </label>
-  <label>Ushbu brauzer nomi
-    <input id="worker" type="text" placeholder="chrome-uy" />
-  </label>
-
-  <div id="status">…</div>
-
-  <div class="row">
-    <button id="start" class="go">Boshlash</button>
-    <button id="stop">To‘xtatish</button>
-  </div>
-  <div class="row">
-    <button id="once" class="wide">Bittasini hozir bajarish</button>
-  </div>
-  <div class="row">
-    <button id="probe" class="wide">Flow sahifasini tekshirish</button>
+  <div class="head">
+    <i class="dot"></i>
+    <h1>Sarideo · Flow</h1>
+    <span class="pill" id="pill">…</span>
   </div>
 
-  <div id="log"></div>
+  <div class="tabs" id="tabs">
+    <button data-tab="send" aria-pressed="true">Rasm yuborish</button>
+    <button data-tab="queue" aria-pressed="false">Avtomatik navbat</button>
+  </div>
+
+  <!-- ── Sending what you made yourself ──────────────────────────────── -->
+  <section id="tab-send">
+    <div class="card">
+      <label class="f"><span>Qaysi loyihaga</span>
+        <select id="job"><option value="">— yuklanmoqda —</option></select>
+      </label>
+      <label class="f"><span>Rasmlar qayerdan</span>
+        <select id="source">
+          <option value="page">Flow varag‘idan — sahifadagi rasmlar</option>
+          <option value="agent">Flow Agent’dan — uning tarixidagi rasmlar</option>
+        </select>
+      </label>
+      <label class="f"><span>Qanday taqsimlansin</span>
+        <select id="mode">
+          <option value="auto">AI o‘zi qarab joylashtirsin</option>
+          <option value="order">Fayl tartibida — 1-rasm 1-sahnaga</option>
+        </select>
+      </label>
+      <label class="f"><span>Qaysi sahnalarga</span>
+        <select id="scope">
+          <option value="empty">Faqat rasmi yo‘qlariga</option>
+          <option value="all">Hammasiga — borlarini ham almashtir</option>
+        </select>
+      </label>
+      <p class="meta" id="send-meta">Flow varag‘i tekshirilmoqda…</p>
+      <div class="bar hidden" id="send-bar"><i></i></div>
+    </div>
+
+    <button class="act go" id="send">Sarideoga yuborish</button>
+    <p class="msg hidden" id="send-msg"></p>
+    <p class="note" id="send-note"></p>
+  </section>
+
+  <!-- ── The queue, working by itself ────────────────────────────────── -->
+  <section id="tab-queue" class="hidden">
+    <div class="card">
+      <p class="meta" id="queue-meta">…</p>
+      <p class="note">Sarideo navbatidagi promptlarni o‘zi olib, Flow’da yasab,
+        ilovaga qaytaradi. Brauzer ochiq turishi kifoya.</p>
+    </div>
+    <div class="stack">
+      <div class="pair">
+        <button class="act go" id="start">Boshlash</button>
+        <button class="act" id="stop">To‘xtatish</button>
+      </div>
+      <button class="act" id="once">Bittasini hozir bajarish</button>
+      <button class="act" id="probe">Flow sahifasini tekshirish</button>
+    </div>
+  </section>
+
+  <details id="settings">
+    <summary>Sozlamalar va jurnal</summary>
+    <div class="card">
+      <label class="f"><span>Sarideo manzili</span>
+        <input id="server" type="url" placeholder="https://sarideo.up.railway.app" />
+      </label>
+      <label class="f"><span>Ushbu brauzer nomi</span>
+        <input id="worker" type="text" placeholder="chrome-uy" />
+      </label>
+      <label class="f"><span>Flow Agent manzili — ishlatsangiz</span>
+        <input id="agent" type="url" placeholder="http://localhost:8001" />
+      </label>
+    </div>
+    <div id="log"></div>
+  </details>
 
   <script src="options.js"></script>
 </body>
