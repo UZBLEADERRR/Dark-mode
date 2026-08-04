@@ -873,6 +873,25 @@ function drawModels() {
   });
 }
 
+/** Which provider is drawing this running job, and how to change your mind.
+ *
+ *  The editor is hidden while a job runs, and with it the control that would
+ *  change this — so somebody watching "Flow'dan rasm kutilyapti" scroll past has
+ *  no way to see which provider that is, and no way to find out that stopping is
+ *  the first step of changing it. Both belong here, where they are looking.
+ */
+function drawnByNote(job) {
+  const now = job.image_provider_now || '';
+  if (!now) return '';
+  const label = IMAGE_PROVIDER_LABELS[now] || now;
+  const app = state.models?.image_provider || '';
+  // Only worth explaining when this project has been left behind by the app's
+  // own choice — otherwise it is just a label, and the card is not a form.
+  const stale = app && app !== now;
+  return `<span class="stage-drawnby">Rasmlar: <b>${esc(label)}</b>${
+    stale ? ' — o‘zgartirish uchun avval To‘xtating' : ''}</span>`;
+}
+
 // The provider names are what the API calls them; these are what a person calls
 // them. `openai` in a menu is not obviously "the one that made ChatGPT".
 const TEXT_PROVIDER_LABELS = {
@@ -1760,6 +1779,7 @@ function drawStage(job) {
            Changing your mind about a video is not an error condition, and a
            forty-scene render is a long time to have no way out of. -->
       <button class="btn ghost sm" data-stop="${esc(job.id)}">To‘xtatish</button>
+      ${drawnByNote(job)}
     </div>` : ''}`);
 
   // Nothing has been drawn or recorded yet — the whole video is still just these
