@@ -626,9 +626,15 @@ input[type="range"]::-moz-range-thumb {
   align-items: center; justify-content: space-between;
   margin-bottom: 14px;
 }
+/* The title block holds the provider picker now, and a flex item will not shrink
+   below its content without this — which is how one <select> managed to widen
+   the whole editor past the window. */
+.editor-bar > div:first-child { min-width: 0; }
 .editor-bar h2 { font-size: 1.02rem; }
 .editor-bar p { font-size: .8rem; color: var(--muted); margin-top: 3px; }
-.editor-acts { display: flex; align-items: center; gap: 12px; }
+/* Wraps rather than pushing the render button off the edge: the provider picker
+   joined this row, and on a narrow window the two together do not fit. */
+.editor-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 
 .saver { font-size: .74rem; color: var(--faint); min-width: 74px; text-align: right; }
 .saver.ok { color: var(--ok); }
@@ -821,6 +827,18 @@ input[type="range"]::-moz-range-thumb {
 .frame-add:hover { color: var(--text); border-color: var(--text); }
 /* The bulk-image button is a <label> wrapping a file input, so it needs the
    centring a <button> gets for free. */
+/* Which provider draws this project, next to the render button — job-wide, so
+   it belongs with the job-wide action rather than in a scene panel. */
+.job-provider { display: flex; align-items: center; gap: 7px; min-width: 0; margin: -4px 0 12px; }
+.job-provider > span { font-size: .74rem; color: var(--muted); flex: 0 0 auto; }
+.job-provider select {
+  min-width: 0; max-width: 168px; padding: 6px 9px;
+  font: inherit; font-size: .78rem;
+  color: var(--text); background: var(--raised);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm);
+}
+.job-provider select:disabled { opacity: .5; }
+
 label.frame-add { display: flex; align-items: center; justify-content: center; cursor: pointer; }
 label.frame-add svg {
   width: 20px; height: 20px; fill: none;

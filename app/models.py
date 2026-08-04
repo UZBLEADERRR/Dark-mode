@@ -144,6 +144,11 @@ class JobPatch(BaseModel):
     # belongs to the video and not to any one line of it.
     voice_id: str | None = None
     tts_provider: str | None = None
+    # Which provider draws this project's scenes. A project remembers the one it
+    # was started with, so switching the app over leaves every half-finished
+    # video behind — this is how one of them is brought across. An empty string
+    # means "follow the app", which is a different answer from not saying.
+    image_provider: str | None = Field(default=None, max_length=20)
 
 
 class MusicSwap(BaseModel):

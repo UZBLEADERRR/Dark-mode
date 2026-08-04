@@ -1046,7 +1046,7 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `POST /api/jobs` | Yangi video (`auto_render: false` — qoralamada to'xtaydi) |
 | `POST /api/jobs/with-audio` | Tayyor ovoz bilan |
 | `GET /api/jobs/{id}` | Holat, progress, sahnalar, jurnal |
-| `PATCH /api/jobs/{id}` | Subtitr uslubi, musiqa, subtitrni yoqish/o'chirish |
+| `PATCH /api/jobs/{id}` | Subtitr uslubi, musiqa, subtitrni yoqish/o'chirish, `image_provider` (bo'sh = ilovadagi) |
 | `PATCH /api/jobs/{id}/scenes/{i}` | Sahnani, qatlamlarini va tovush effektini tahrirlash |
 | `POST /api/jobs/{id}/scenes` | Yangi sahna qo'shish (prompt + ovoz + rasm) |
 | `DELETE /api/jobs/{id}/scenes/{i}` | Sahnani o'chirish |

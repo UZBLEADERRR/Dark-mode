@@ -251,6 +251,12 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "caption_style": subs.resolve_style(
             request.get("caption_style") or request.get("subtitle_style", "bold")),
         "burn_subtitles": bool(request.get("burn_subtitles", True)),
+        # What this project was started with, and what it would actually use
+        # today. They differ whenever the app-wide choice moved on without it,
+        # which is the whole reason the editor offers to change it.
+        "image_provider": request.get("image_provider") or "",
+        "image_provider_now": (request.get("image_provider")
+                               or config.IMAGE_PROVIDER).lower(),
         "music_id": request.get("music_id") or "",
         "music_start": float(request.get("music_start") or 0.0),
         "error": job.get("error") or None,
@@ -1575,6 +1581,32 @@ async def edit_job(job_id: str, patch: JobPatch) -> dict[str, Any]:
         request["music_id"] = patch.music_id or None
     if patch.music_start is not None:
         request["music_start"] = float(patch.music_start)
+
+    dropped = 0
+    if patch.image_provider is not None:
+        wanted = patch.image_provider.strip().lower()
+        if wanted and wanted not in config.IMAGE_PROVIDERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{wanted}' — bunday rasm provayderi yo'q.")
+        if wanted and not config.image_provider_ready(wanted):
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{wanted}' sozlanmagan — kalit yoki manzil qo'shing.")
+        was = (request.get("image_provider") or config.IMAGE_PROVIDER).lower()
+        request["image_provider"] = wanted or None
+        now = wanted or config.IMAGE_PROVIDER
+        if was == "flow" and now != "flow":
+            # The prompts this project parked in the Flow queue will never be
+            # answered now — nothing is going to come and draw them, and the
+            # render would sit out the full waiting period on every one before
+            # giving up. Clearing them is what "changed my mind" means here.
+            dropped = store.drop_image_tasks(job_id)
+        if was != now:
+            store.update_job(
+                job_id, log=f"Rasm provayderi: {was} → {now}"
+                            + (f" ({dropped} ta navbatdagi prompt bekor qilindi)"
+                               if dropped else ""))
 
     revoice = _apply_voice(job_id, request, patch.tts_provider, patch.voice_id)
 
