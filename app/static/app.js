@@ -797,8 +797,31 @@ function drawModels() {
         : 'Kalit bo‘lmasa video boshlanmaydi.'}</small>
     </label>`;
 
+  // The same question for the pictures — and the one that has actually caught
+  // people out, because the Flow switch stores a choice that outranks the
+  // environment. When the two disagree, say so here rather than leaving it to
+  // be discovered in a render log.
+  const drawnBy = m.image_provider || '';
+  const overridden = m.image_env && drawnBy && drawnBy !== m.image_env;
+  const imagePicker = `
+    <label class="f model-pick"><span>Rasmlarni kim yasaydi</span>
+      <select id="image-provider">
+        ${(m.image_providers || []).map((p) => `
+          <option value="${esc(p.id)}"${p.ready ? '' : ' disabled'}${
+            drawnBy === p.id ? ' selected' : ''}>${
+            esc(IMAGE_PROVIDER_LABELS[p.id] || p.id)}${
+            p.ready ? '' : ' — sozlanmagan'}</option>`).join('')}
+      </select>
+      <small>${overridden
+        ? `Bu tanlov saqlangan va <code>IMAGE_PROVIDER=${esc(m.image_env)}</code>
+           dan kuchli. Sozlamadagisiga qaytarish uchun
+           «${esc(IMAGE_PROVIDER_LABELS[m.image_env] || m.image_env)}» ni tanlang.`
+        : 'Har bir sahnaning rasmi shu yerdan chiqadi.'}</small>
+    </label>`;
+
   $('#models-box').innerHTML = `
     ${picker}
+    ${imagePicker}
     ${rows.map(([key, meta]) => modelRow(key, meta, m, inUse.has(key))).join('')}
 
     <div class="model-acts">
@@ -836,6 +859,7 @@ function drawModels() {
           models: readModelRows(),
           voices: state.models.voices || {},
           text_provider: $('#text-provider')?.value || null,
+          image_provider: $('#image-provider')?.value ?? null,
         }),
       });
       $('#models-saver').textContent = 'saqlandi';
@@ -855,6 +879,17 @@ const TEXT_PROVIDER_LABELS = {
   anthropic: 'Claude (Anthropic)',
   openai: 'ChatGPT (OpenAI)',
   gemini: 'Gemini (Google)',
+};
+
+// Named by what they cost you and who does the work, because that is the
+// difference that matters: two of these bill an API, one waits for your browser,
+// one uses the Flow subscription without waiting for anybody.
+const IMAGE_PROVIDER_LABELS = {
+  gemini: 'Gemini (Google) — API',
+  fal: 'fal.ai — API',
+  openai: 'gpt-image-1 (OpenAI) — API',
+  flow: 'Flow navbati — brauzeringiz yasaydi',
+  flowagent: 'Flow Agent — o‘zi yasaydi',
 };
 
 const OTHER_MODEL = '__other';
