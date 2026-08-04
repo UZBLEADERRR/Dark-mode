@@ -10,6 +10,7 @@
     strategist -> reads your own channels and talks you from an idea to a video
     shorts     -> finds the Shorts already inside a long video
     rewriter   -> revises a script to a note, before anything is made from it
+    arranger   -> works out which scene each hand-made picture belongs to
 """
 
 from .director import (
@@ -17,6 +18,7 @@ from .director import (
     segment_existing_narration,
     segment_written_script,
 )
+from .arranger import arrange_images, place_in_order
 from .choreographer import stage_scenes
 from .rewriter import revise_script
 from .shorts import suggest_shorts
@@ -39,4 +41,6 @@ __all__ = [
     "read_profile",
     "suggest_shorts",
     "revise_script",
+    "arrange_images",
+    "place_in_order",
 ]

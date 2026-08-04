@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import mimetypes
+import re
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -1826,6 +1827,58 @@ async def upload_scene_image(
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Scene {index} does not exist.")
     return pipeline.public_scene(job_id, scene)
+
+
+@app.post("/api/jobs/{job_id}/images", status_code=202)
+async def upload_scene_images(
+    job_id: str,
+    images: list[UploadFile] = File(...),
+    mode: str = Form("auto"),
+    scope: str = Form("empty"),
+) -> dict[str, Any]:
+    """Hand over a folder of pictures and let the studio sort them into scenes.
+
+    The endpoint behind making the images yourself: the prompts leave in scene
+    order and the files come back as a heap named after whatever made them, so
+    the ordering has to be recovered rather than assumed. `auto` recovers it by
+    looking at the pictures; `order` trusts the order they were sent in.
+
+    Answers immediately, because looking at a hundred pictures is not something
+    to hold a browser open for — the job's progress carries the rest.
+    """
+    _editable_job(job_id)
+    if mode not in {"auto", "order"}:
+        raise HTTPException(status_code=400, detail="mode: 'auto' yoki 'order'.")
+    if len(images) > pipeline.MAX_UPLOAD_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bir martada {pipeline.MAX_UPLOAD_IMAGES} tagacha rasm yuklash mumkin "
+                   f"— siz {len(images)} ta yubordingiz.")
+    if mode == "auto" and not config.llm_ready():
+        raise HTTPException(
+            status_code=400,
+            detail="Rasmlarni o'zi taqsimlashi uchun matn modeli kaliti kerak. "
+                   "Kalit qo'shing yoki 'fayl tartibida' usulini tanlang.")
+
+    inbox = pipeline.inbox_for(job_id)
+    staged: list[Path] = []
+    for position, upload in enumerate(images):
+        data, _mime, ext = await _read_upload(upload, IMAGE_TYPES)
+        # Numbered on the way in, because file order is what `order` mode means
+        # and what `auto` falls back to — and a browser does not promise to keep
+        # the order once the files are on disk. The name given by whatever made
+        # the picture rides along: it is often the only clue the model gets about
+        # a still that could belong to either of two similar scenes.
+        given = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(upload.filename or "").stem)[:60]
+        path = inbox / f"{position:04d}-{given or 'image'}{ext}"
+        path.write_bytes(data)
+        staged.append(path)
+
+    store.update_job(job_id, status="running", step="arrange", progress=30,
+                     log=f"{len(staged)} ta rasm qabul qilindi")
+    _launch(lambda: pipeline.arrange_uploaded_images(
+        job_id, staged, mode=mode, scope=scope), job_id)
+    return {"id": job_id, "status": "running", "received": len(staged), "mode": mode}
 
 
 @app.post("/api/jobs/{job_id}/scenes/{index}/voice")

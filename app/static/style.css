@@ -819,6 +819,13 @@ input[type="range"]::-moz-range-thumb {
   transition: color .18s, border-color .18s;
 }
 .frame-add:hover { color: var(--text); border-color: var(--text); }
+/* The bulk-image button is a <label> wrapping a file input, so it needs the
+   centring a <button> gets for free. */
+label.frame-add { display: flex; align-items: center; justify-content: center; cursor: pointer; }
+label.frame-add svg {
+  width: 20px; height: 20px; fill: none;
+  stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
 .filmstrip::-webkit-scrollbar { height: 5px; }
 .filmstrip::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 9px; }
 .frame {
