@@ -20,6 +20,9 @@
 
 const DEFAULTS = {
   server: "http://localhost:8000",
+  // Flow Agent's own backend, if it is running. Its history is the other place
+  // finished pictures live — see `harvestFromAgent`.
+  agent: "http://localhost:8001",
   worker: "",
   running: false,
   // Between tasks. Flow is doing real work in there; hammering it helps nobody
@@ -162,6 +165,112 @@ function dataUrlToBlob(dataUrl) {
   return new Blob([bytes], { type });
 }
 
+// --- sending the pictures you made yourself ---------------------------------
+//
+// The queue above is Sarideo asking for a picture. This is the opposite: you did
+// the work in Flow yourself — pasted the prompts, pressed the button, watched
+// them come out — and the pictures are sitting on the page. They go straight to
+// a project, and Sarideo works out which scene each one belongs to.
+//
+// Which is why nothing here tries to match anything: the ordering is recovered
+// on the server, by a model that can see the pictures and read the prompts.
+
+/** How many pictures cross from the page in one message. */
+const SLICE = 4;
+
+async function harvestFrom(tab, onCount) {
+  await ready(tab.id);
+  const { count = 0 } = await chrome.tabs.sendMessage(tab.id, { kind: "sarideo:count" }) || {};
+  if (!count) throw new Error("Bu sahifada yuboradigan rasm topilmadi");
+
+  const blobs = [];
+  for (let from = 0; from < count; from += SLICE) {
+    const answer = await chrome.tabs.sendMessage(
+      tab.id, { kind: "sarideo:harvest", from, count: SLICE });
+    if (answer?.error) throw new Error(answer.error);
+    for (const picture of answer?.pictures || []) {
+      try {
+        // Read in the page when the page could read it, fetched here when it
+        // could not: an extension is allowed cross-origin requests that a
+        // content script on someone else's site is not.
+        blobs.push(picture.dataUrl
+          ? dataUrlToBlob(picture.dataUrl)
+          : await (await fetch(picture.url)).blob());
+      } catch (exc) {
+        await log(`Bitta rasm o'qilmadi: ${exc.message}`);
+      }
+    }
+    onCount?.(blobs.length, count);
+  }
+  if (!blobs.length) throw new Error("Rasmlarning hech biri o'qilmadi");
+  return blobs;
+}
+
+/** The pictures Flow Agent has made, newest last.
+ *
+ *  Flow Agent (`kodelyx/flow-agent`) is a separate, better way to drive Flow: it
+ *  calls Google's own API with your session instead of clicking around the page.
+ *  Nothing of it is copied or changed here — this reads the history its backend
+ *  already serves over HTTP, and that is the whole of the arrangement between us.
+ *
+ *  Handed back oldest-first, because "file order" downstream means the order the
+ *  prompts were worked through, and its history comes back newest-first.
+ */
+async function harvestFromAgent(onCount) {
+  const root = base(state.agent);
+  let history;
+  try {
+    const resp = await fetch(`${root}/v1/history`);
+    if (!resp.ok) throw new Error(`${resp.status}`);
+    history = await resp.json();
+  } catch (exc) {
+    throw new Error(
+      `Flow Agent'ga ulanib bo'lmadi (${root}) — ishga tushganmi? ${exc.message}`);
+  }
+
+  const wanted = (history.history || [])
+    .filter((item) => item.type !== "video" && item.url)
+    .slice(0, 200)
+    .reverse();
+  if (!wanted.length) throw new Error("Flow Agent tarixida rasm yo'q");
+
+  const blobs = [];
+  for (const item of wanted) {
+    try {
+      // A relative download path is relative to the backend that named it.
+      const url = new URL(item.url, `${root}/`).href;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`${resp.status}`);
+      blobs.push(await resp.blob());
+    } catch (exc) {
+      await log(`Flow Agent'dan bitta rasm olinmadi: ${exc.message}`);
+    }
+    onCount?.(blobs.length, wanted.length);
+  }
+  if (!blobs.length) throw new Error("Flow Agent'dagi rasmlarning hech biri olinmadi");
+  return blobs;
+}
+
+async function sendPictures({ jobId, mode, scope, source }) {
+  state = await settings();
+  const track = async (done, total) => {
+    await chrome.storage.local.set({ sending: { done, total } });
+  };
+  const blobs = source === "agent"
+    ? await harvestFromAgent(track)
+    : await harvestFrom(await flowTab(), track);
+
+  const body = new FormData();
+  blobs.forEach((blob, i) => body.append(
+    "images", blob, `flow-${String(i).padStart(4, "0")}.png`));
+  body.append("mode", mode || "auto");
+  body.append("scope", scope || "empty");
+  await ask("Rasmlarni yuborish", `${base(state.server)}/api/jobs/${jobId}/images`,
+            { method: "POST", body });
+  await log(`${blobs.length} ta rasm loyihaga yuborildi`);
+  return blobs.length;
+}
+
 // --- the loop ---------------------------------------------------------------
 
 /** Wake up later. An alarm, not a timer: a service worker is killed when idle,
@@ -245,6 +354,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   }
   if (msg?.kind === "sarideo:once") {
     once(true).then(() => respond({ ok: true }));
+    return true;
+  }
+  if (msg?.kind === "sarideo:send") {
+    // Answered with the failure rather than by throwing: the panel is the only
+    // place this can be reported, and an uncaught rejection in a service worker
+    // is reported nowhere at all.
+    sendPictures(msg)
+      .then((sent) => respond({ ok: true, sent }))
+      .catch((exc) => {
+        log(`Xato: ${exc.message}`);
+        respond({ ok: false, error: exc.message });
+      })
+      .finally(() => chrome.storage.local.set({ sending: null }));
     return true;
   }
   return false;

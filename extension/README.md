@@ -1,13 +1,44 @@
-# Sarideo — Flow bridge
+# Sarideo — Flow
 
-Sarideo sahnalari uchun rasmlarni **Google Flow** da yasab, ilovaga qaytaradigan
-Chrome kengaytmasi.
+Sarideo sahnalari uchun rasmlarni **Google Flow** dan olib keladigan Chrome
+kengaytmasi.
 
 Sabab oddiy: rasm API'lari qimmat, Google Flow obunasi esa allaqachon to'langan.
-Kengaytma sizning brauzeringizdagi Flow varag'ini boshqaradi — ya'ni rasm o'sha
-obuna hisobidan chiqadi, API hisobidan emas.
+Rasm o'sha obuna hisobidan chiqadi, API hisobidan emas.
 
-## Nima qiladi
+Kengaytmada **ikki bo'lim** bor:
+
+| Bo'lim | Kim ishlaydi | Qachon |
+|---|---|---|
+| **Rasm yuborish** | Rasmlarni **siz** yasaysiz, kengaytma ularni loyihaga yuboradi | Promptlarni o'zingiz Flow'da bajarganda — yoki **Flow Agent** ishlatganda |
+| **Avtomatik navbat** | Kengaytma **o'zi** navbatdan prompt olib, Flow varag'ida yasaydi | Hech narsa qilmasdan qo'yib qo'ymoqchi bo'lsangiz |
+
+## Rasm yuborish — bir tugma
+
+Flow'da o'zingiz ishlab, rasmlarni bittalab yuklab olish va qo'lda joylashtirish
+— eng ko'p vaqt oladigan qismi shu edi. Endi bitta tugma:
+
+1. Loyihani tanlaysiz (Sarideo'dagi tayyor loyihalar ro'yxati o'zi keladi).
+2. **Rasmlar qayerdan** ni tanlaysiz:
+   - **Flow varag'idan** — ochiq turgan Flow sahifasidagi hamma rasm olinadi.
+     Sahifa qanday ko'rsatsa, shu tartibda; har biri eng katta o'lchamda olinadi
+     (thumbnail emas).
+   - **Flow Agent'dan** — [`kodelyx/flow-agent`](https://github.com/kodelyx/flow-agent)
+     o'rnatilgan bo'lsa, uning tarixidagi rasmlar olinadi. Flow Agent'ning o'zi
+     **o'zgartirilmaydi** va kodidan hech narsa ko'chirilmagan: undan faqat
+     `GET /v1/history` o'qiladi va rasmlar yuklab olinadi. Videolar o'tkazib
+     yuboriladi, tartib esa **eskidan yangiga** — ya'ni promptlarni qanday
+     ketma-ket bajargan bo'lsangiz, shunday.
+3. **Qanday taqsimlansin** — AI o'zi qarab, yoki fayl tartibida.
+4. **Sarideoga yuborish**.
+
+Qolganini Sarideo qiladi: har bir rasmga qarab, qaysi sahnaning promptiga to'g'ri
+kelishini o'zi topadi ([asosiy README](../README.md#rasmlarni-topi-bilan-yuklash--ai-ozi-joylashtiradi)).
+
+Bir martada 200 tagacha rasm. Sahnadan ko'p bo'lsa ortganini aytadi, kam bo'lsa
+qaysi sahnalar rasmsiz qolganini aytadi.
+
+## Avtomatik navbat — nima qiladi
 
 ```
 Sarideo (serverda)                    brauzeringiz (uyda)
@@ -48,6 +79,7 @@ Endi video yaratganingizda sahnalarning rasmlari o'sha varaqda yasaladi.
 
 | Tugma | Nima qiladi |
 |---|---|
+| **Sarideoga yuborish** | Tanlangan manbadagi hamma rasmni loyihaga yuboradi |
 | **Boshlash** | Navbat bo'shaguncha ishlaydi, keyin har yarim daqiqada qarab turadi |
 | **To'xtatish** | Yangi prompt olmaydi (boshlangani tugaydi) |
 | **Bittasini hozir bajarish** | Bitta prompt — sinab ko'rish uchun |
