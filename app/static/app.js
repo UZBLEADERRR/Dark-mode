@@ -2256,6 +2256,7 @@ function syncEditor(job) {
     : job.status === 'review'
       ? 'Rasm ustidan sudrab joylashtiring. O‘zgarishlar o‘zi saqlanadi.'
       : 'Video tayyor. O‘zgartirsangiz qayta render qiling.';
+  drawJobProvider(job, rendering);
   $('#render-btn').disabled = rendering;
   $('#render-btn').textContent = rendering
     ? (job.status === 'queued' ? 'Navbatda…' : 'Render ketmoqda…')
@@ -2276,6 +2277,65 @@ function syncEditor(job) {
   state.drawn = stamp;
   buildStudio(job);
 }
+
+/** Which provider draws this project's scenes — and moving it to another one.
+ *
+ *  A project keeps the provider it was started with, so turning the app over to
+ *  something else strands every video already in progress: the setting changes,
+ *  the running job carries on asking the old one, and nothing on screen explains
+ *  the disagreement. This is where one project is brought across.
+ */
+function drawJobProvider(job, rendering) {
+  const wrap = $('#job-provider-wrap');
+  const select = $('#job-provider');
+  const providers = state.health?.image_providers || {};
+  const names = Object.keys(providers);
+  if (!names.length) { wrap.hidden = true; return; }
+
+  const app = state.models?.image_provider || '';
+  const chosen = job.image_provider || '';
+  const now = job.image_provider_now || app;
+  const label = (n) => IMAGE_PROVIDER_LABELS[n] || n;
+
+  // Rebuilt only when it would actually change: a select that is redrawn under
+  // an open dropdown closes it, and this redraws on every poll.
+  const signature = `${names.join()}|${chosen}|${app}`;
+  if (select.dataset.sig !== signature) {
+    select.dataset.sig = signature;
+    select.innerHTML = [
+      `<option value=""${chosen ? '' : ' selected'}>Ilovadagi — ${esc(label(app))}</option>`,
+      ...names.map((n) => `<option value="${esc(n)}"${providers[n] ? '' : ' disabled'}${
+        chosen === n ? ' selected' : ''}>${esc(label(n))}${
+        providers[n] ? '' : ' — sozlanmagan'}</option>`),
+    ].join('');
+  }
+  // While it runs, the server refuses the change anyway — saying so with a
+  // disabled control beats an error after the click.
+  select.disabled = !!rendering || ED.locked;
+  select.title = `Hozir: ${label(now)}`;
+  wrap.hidden = false;
+}
+
+$('#job-provider').addEventListener('change', async (e) => {
+  if (!ED.job) return;
+  const wanted = e.target.value;
+  e.target.disabled = true;
+  try {
+    await api(`/api/jobs/${ED.job.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_provider: wanted }),
+    });
+    state.drawn = null;
+    watch(ED.job.id);
+    toast(wanted ? 'Rasm provayderi almashtirildi'
+                 : 'Endi ilovadagi provayderdan foydalanadi');
+  } catch (err) {
+    editorError(err.message);
+  } finally {
+    e.target.disabled = false;
+  }
+});
 
 function buildStudio(job) {
   const sameJob = ED.job?.id === job.id;

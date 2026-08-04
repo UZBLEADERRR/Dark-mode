@@ -115,6 +115,13 @@ yozib turadi.
 Jurnalda **«Flow'dan rasm kutilyapti (navbatda N ta)»** degan qator ko'rsangiz —
 demak hali `flow` rejimida, `flowagent` da emas.
 
+**Boshlanib qolgan loyihalar alohida.** Har bir loyiha o'zi boshlangandagi
+provayderni eslab qoladi — ilovadagi tanlovni o'zgartirsangiz ham, yarim tayyor
+video eskisini so'rayveradi. Uni ko'chirish uchun: loyihani **Tahrirlash** da
+oching → sarlavha ostidagi **«Rasmlarni kim yasaydi»** dan yangisini tanlang.
+O'sha loyihaning Flow navbatida turgan promptlari ham bekor qilinadi — bo'lmasa
+render ularning har birini oxirigacha kutib chiqadi.
+
 Tamom. Endi Sarideoda video yaratsangiz, har bir sahnaning rasmini u o'zi Flow
 Agentdan so'raydi — navbat yo'q, tugma bosish yo'q.
 

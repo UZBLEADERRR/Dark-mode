@@ -191,6 +191,15 @@
         </div>
       </div>
 
+      <!-- A project remembers which provider it was started with, so changing the
+           app-wide setting leaves the half-finished ones behind. This is where one
+           of them is moved across. Its own row, not part of the bar above: that
+           bar sizes the whole editor, and a <select> in it widened the page. -->
+      <label class="job-provider" id="job-provider-wrap" hidden>
+        <span>Rasmlarni kim yasaydi</span>
+        <select id="job-provider"></select>
+      </label>
+
       <div class="studio">
         <div class="canvas-wrap">
           <div class="canvas" id="canvas">
