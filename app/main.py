@@ -1107,6 +1107,17 @@ def _models_out() -> dict[str, Any]:
         # "auto" is a real answer, and different from whichever provider it
         # currently resolves to — so the page can show it as chosen.
         "text_choice": config.LLM_PROVIDER,
+        # Same for the pictures, and here it matters more: a choice stored from
+        # the Flow switch outranks IMAGE_PROVIDER at startup, so somebody who
+        # sets the variable and redeploys can watch it be ignored with nothing
+        # on screen to say why. Both are reported, and the page says so when
+        # they disagree.
+        "image_providers": [
+            {"id": name, "ready": config.image_provider_ready(name)}
+            for name in config.IMAGE_PROVIDERS
+        ],
+        "image_provider": config.IMAGE_PROVIDER,
+        "image_env": config.IMAGE_PROVIDER_ENV,
     }
 
 
@@ -1126,6 +1137,13 @@ async def put_models(body: ModelSettings) -> dict[str, Any]:
         # rather than being a thing you set again after every deploy.
         config.set_llm_provider(body.text_provider)
         store.set_setting(LLM_PROVIDER_KEY, config.LLM_PROVIDER)
+    if body.image_provider is not None:
+        # An empty string is a real answer here — "stop overriding, use whatever
+        # the environment says" — and it is the only way back out of a choice
+        # made months ago from a switch the user has forgotten about.
+        config.set_image_provider(body.image_provider)
+        store.set_setting(IMAGE_PROVIDER_KEY,
+                          config.IMAGE_PROVIDER if body.image_provider else "")
     return _models_out()
 
 

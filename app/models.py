@@ -84,6 +84,10 @@ class ModelSettings(BaseModel):
     # take whichever has a key. None leaves the current choice alone, so a page
     # that only edits model names does not have to know about this.
     text_provider: str | None = Field(default=None, max_length=20)
+    # Which provider draws the scenes. Chosen here rather than only in the
+    # environment because the stored choice is what actually wins at startup —
+    # so the place it is stored has to be the place it can be seen and changed.
+    image_provider: str | None = Field(default=None, max_length=20)
 
 
 class BrandKit(BaseModel):

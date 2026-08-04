@@ -104,6 +104,17 @@ Sarideo servisining Variables'ida:
 | `FLOW_AGENT_URL` | `https://sizning.up.railway.app` |
 | `FLOW_AGENT_KEY` | yuqoridagi `SERVER_API_KEY` bilan bir xil |
 
+**Keyin — muhim:** Sarideo → **Kutubxona → Modellar → «Rasmlarni kim yasaydi»**
+da **«Flow Agent — o'zi yasaydi»** turganini tekshiring.
+
+Nega: **Flow navbati** tugmasini bir marta yoqqan bo'lsangiz, o'sha tanlov bazaga
+saqlangan va **`IMAGE_PROVIDER` dan kuchli** — ilova qayta ishga tushganda
+o'shani oladi. Ikkalasi bir xil bo'lmasa, o'sha ro'yxatning tagida shu haqda
+yozib turadi.
+
+Jurnalda **«Flow'dan rasm kutilyapti (navbatda N ta)»** degan qator ko'rsangiz —
+demak hali `flow` rejimida, `flowagent` da emas.
+
 Tamom. Endi Sarideoda video yaratsangiz, har bir sahnaning rasmini u o'zi Flow
 Agentdan so'raydi — navbat yo'q, tugma bosish yo'q.
 

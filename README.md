@@ -303,6 +303,12 @@ qayta ishga tushsa ham, deploy qilsangiz ham o'sha holatda qoladi. Bitta
 video uchun boshqacha qilmoqchi bo'lsangiz, yaratish formasidagi «Rasm
 provayderi» ro'yxatidan tanlaysiz.
 
+> **Saqlangan tanlov `IMAGE_PROVIDER` dan kuchli.** Bu tugmachani bir marta
+> yoqsangiz, keyin Railway'da `IMAGE_PROVIDER` ni o'zgartirib deploy qilsangiz
+> ham ilova bazadagini oladi. Qaysi biri **haqiqatan ishlayotgani** —
+> *Kutubxona → Modellar → «Rasmlarni kim yasaydi»* da ko'rinadi, va ikkisi bir
+> xil bo'lmasa o'sha yerda aytiladi. O'zgartirish ham o'sha yerdan.
+
 **Kengaytmasiz ham ishlaydi.** *Kutubxona → Flow navbati* da kutayotgan har bir
 prompt turadi: nusxalaysiz, xohlagan joyda rasm yasaysiz, o'sha yerga
 yuklaysiz. Telefondan ham bo'ladi. Bir sahna kerak bo'lmasa — «Bekor qilish».
@@ -1026,7 +1032,9 @@ Barcha o'zgaruvchilar `.env.example` da izohi bilan. Eng ko'p ishlatiladiganlari
 | `VIDEO_PRESET` | `medium` | `ultrafast`…`veryslow` — render tezligi |
 | `MUSIC_VOLUME` | `0.10` | Fon musiqasi (ovoz ostida avtomatik pasayadi) |
 | `MAX_CONCURRENT_JOBS` | `1` | Bir vaqtda nechta render — RAM yetsa oshiring |
-| `IMAGE_PROVIDER` | `gemini` | `gemini` / `fal` / `openai` / `flow` (brauzeringiz) |
+| `IMAGE_PROVIDER` | `gemini` | `gemini` / `fal` / `openai` / `flow` (brauzeringiz) / `flowagent` ([Flow Agent](flowagent/README.md)) — ilovadagi tanlov bundan kuchli |
+| `FLOW_AGENT_URL` | `http://localhost:8001` | `flowagent` uchun: backend manzili |
+| `FLOW_AGENT_KEY` | — | Flow Agent'ning `SERVER_API_KEY` i |
 | `LLM_PROVIDER` | `auto` | Skriptni kim yozadi: `anthropic` / `openai` / `gemini` |
 | `OPENAI_TEXT_MODEL` | `gpt-5` | ChatGPT tanlanganda qaysi model |
 | `FLOW_PATIENCE` | `1200` | `flow` rejimida bitta rasmni necha soniya kutish |
