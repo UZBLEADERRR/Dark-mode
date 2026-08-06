@@ -1,22 +1,19 @@
-# Flow Agent's backend, deployable next to Sarideo.
+# Flow Agent's backend, deployed from the copy in this repository.
 #
-# Nothing of Flow Agent lives in this repository. The source is fetched from its
-# own repository at build time and installed as it is published, so this stays a
-# deployment recipe rather than a fork — and `docker build --build-arg
-# FLOW_AGENT_REF=v2.0.3` pins it when a moving `main` is not what you want.
+# It used to be cloned from GitHub at build time. That made every deploy depend
+# on somebody else's repository still being there and on the builder having
+# network — so the code lives in `upstream/` now and this only installs it.
+# Nothing of it is modified; see upstream/VENDORED.md.
 FROM python:3.12-slim
 
-ARG FLOW_AGENT_REF=main
-ARG FLOW_AGENT_REPO=https://github.com/kodelyx/flow-agent.git
-
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv
-RUN git clone --depth 1 --branch "${FLOW_AGENT_REF}" "${FLOW_AGENT_REPO}" source
+COPY flowagent/upstream/flow-agent /srv/flow-agent
 
-WORKDIR /srv/source/flow-agent
+WORKDIR /srv/flow-agent
 RUN pip install --no-cache-dir . && pip install --no-cache-dir "uvicorn[standard]"
 
 # Generated files and the media-id map live here. On Railway, mount a volume at

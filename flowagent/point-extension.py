@@ -10,8 +10,9 @@ This edits a copy on your own machine. It does not fork Flow Agent, does not
 change what it does, and can be re-run after every upstream update. Anything it
 overwrites is backed up once, next to the original.
 
-    python flowagent/point-extension.py ~/flow-extension https://flow.up.railway.app
-    python flowagent/point-extension.py ~/flow-extension --restore
+    python flowagent/point-extension.py flowagent/upstream/flow-extension \
+        https://flow.up.railway.app
+    python flowagent/point-extension.py flowagent/upstream/flow-extension --restore
 
 The theme is a block of CSS variables appended to the panel. Flow Agent's panel
 is white; every other window in this workflow is not.
