@@ -30,6 +30,10 @@ COPY agent/sarideo_agent.py ./
 # instruction bought nothing anyway — a mount at this path works with or without
 # it, on Railway and on Docker alike.
 ENV SARIDEO_PROFILE=/profile
+# Inside the profile directory rather than beside it, so one mount keeps both the
+# sign-in and the record of what was drawn. A journal wiped on every redeploy is
+# a journal nobody trusts.
+ENV SARIDEO_JOURNAL=/profile/journal
 
 # `login` first, once, to sign in; then `run`. Overridden per deployment.
 CMD ["python", "sarideo_agent.py", "run"]
