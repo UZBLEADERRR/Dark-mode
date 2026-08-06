@@ -3,9 +3,9 @@
 Maqsad: telefondan Sarideoga «shu videoni qil» deysiz, u o'zi Flow'ga borib
 rasmlarni yasab qaytadi. Siz hech narsa qilmaysiz.
 
-Bu papkada Flow Agentning **kodi yo'q**. U [`kodelyx/flow-agent`](https://github.com/kodelyx/flow-agent)
-degan alohida loyiha va shunday qolaveradi — bu yerda faqat uni deploy qilish
-retsepti va kengaytmasini o'z serveringizga qaratadigan skript bor.
+Flow Agentning kodi `upstream/` papkasida — [`kodelyx/flow-agent`](https://github.com/kodelyx/flow-agent)
+loyihasidan **o'zgartirilmagan nusxa** ([upstream/VENDORED.md](upstream/VENDORED.md)).
+Qolgani — deploy retsepti va kengaytmasini o'z serveringizga qaratadigan skript.
 
 ## Avval bitta narsani bilib qo'ying
 
@@ -46,7 +46,8 @@ Railway'da yangi servis:
 - **Settings → Config-as-code** → `flowagent/railway.json`
 
 Shu bitta qator hammasini hal qiladi: qaysi Dockerfile, qanday ishga tushadi.
-Dockerfile Flow Agentni build paytida o'z reposidan klon qilib oladi.
+Flow Agentning kodi **shu repoda** — `flowagent/upstream/` da, o'zgartirilmagan
+holda. Build hech qayerdan hech nima yuklab olmaydi.
 
 **Variables:**
 
