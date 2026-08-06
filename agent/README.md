@@ -212,6 +212,46 @@ Tamom. Endi Sarideo'da video buyursangiz, rasmlar o'zi yasaladi.
 megabayt va ffmpeg'ga kerak bo'lgan xotirani yeydi; kichik konteynerda ikkovi
 birga render'ni o'ldiradi.
 
+## Nima qilganini ko'rish — jurnal sahifasi
+
+Agent ilgari hamma narsani faqat log'ga yozardi. Log'ni o'qish uchun Railway'ga
+kirib, servisni topib, log oynasini ochib, aylantirib chiqish kerak edi — «oxirgi
+soatda biror rasm yasadimi?» degan savolga javob shunday olinardi.
+
+Endi `run` ham, `bridge` ham **o'z sahifasini** ochadi. Ishga tushganda manzilni
+o'zi yozadi:
+
+```
+  Nima qilinayotgani:  https://…up.railway.app/?t=xxxxxxxx
+```
+
+Sahifada:
+
+- **Holat** — hozir nima qilyapti, qaysi sahna, necha soniya bo'ldi
+- **Sanoq** — nechtasi yuborildi, nechtasi xato, qancha vaqtdan beri ishlayapti
+- **Jurnal** — har bir rasm: sahna raqami, vaqti, qancha vaqt olgani, prompti va
+  **rasmning o'zi**. Xato bo'lsa — sababi. Bosib kattalashtirasiz.
+- **Brauzer oynasi** — `run` rejimida jonli ekran (`bridge` da brauzer yo'q,
+  shuning uchun bu bo'lim ham chiqmaydi)
+- **Mavzu** — qorong'i va yorug'; tanlaganingiz eslab qolinadi. Standarti qorong'i.
+
+### Hammasini yuklab olish
+
+| Tugma | Nima keladi |
+|---|---|
+| **Hamma rasm (.zip)** | Barcha rasmlar + `journal.json`. Fayl nomlari vaqt bo'yicha tartiblanadi va qaysi sahnaniki ekani yozilgan |
+| **Jurnal (.json)** | To'liq yozuv — dasturga berish uchun |
+| **Jadval (.csv)** | Excel yoki Google Sheets uchun |
+
+Jurnal **diskda** saqlanadi, ya'ni qayta deploy qilsangiz ham yo'qolmaydi — agent
+servisiga Volume ulangan bo'lsa. Oxirgi **200 ta** yozuv saqlanadi; eskisi
+o'chganda rasmi ham o'chadi, disk to'lib ketmaydi.
+
+**Parol.** Sahifada sizning promptlaringiz va rasmlaringiz turadi, shuning uchun u
+token bilan ochiladi — kirish sahifasi bilan bir xil (`SARIDEO_LOGIN_TOKEN`).
+Bermasangiz, agent bir marta o'zi yaratadi va **saqlab qo'yadi**, ya'ni telefonda
+saqlangan havola deploy'dan keyin ham ishlaydi.
+
 ## Sozlamalar
 
 | O'zgaruvchi | Nima |
@@ -219,6 +259,7 @@ birga render'ni o'ldiradi.
 | `SARIDEO_URL` | Sarideo manzili |
 | `SARIDEO_WORKER` | Bu mashinaning nomi (navbatda kim olganini ko'rsatadi) |
 | `SARIDEO_PROFILE` | Brauzer profili qayerda saqlanadi |
+| `SARIDEO_JOURNAL` | Jurnal va rasmlar qayerda saqlanadi (standarti — profil yonida) |
 | `SARIDEO_CHROME` | Boshqa Chromium ishlatmoqchi bo'lsangiz |
 | `SARIDEO_LOGIN_TOKEN` | Kirish sahifasining paroli (bermasangiz o'zi o'ylab topadi va log'ga yozadi) |
 | `PORT` | Kirish sahifasi qaysi portda — hosting o'zi beradi, qo'lda yozish shart emas |

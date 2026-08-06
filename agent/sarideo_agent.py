@@ -71,6 +71,40 @@ FLOW_URL = os.environ.get("SARIDEO_FLOW_URL") or "https://labs.google/fx/tools/f
 # Google's session is more than cookies, and a profile is what survives.
 PROFILE = Path(os.environ.get("SARIDEO_PROFILE", HERE / "profile"))
 
+# The journal the dashboard reads. Beside the profile by default, because both
+# are things a redeploy must not erase and a volume is mounted for exactly one of
+# them already.
+JOURNAL_DIR = Path(os.environ.get("SARIDEO_JOURNAL", PROFILE.parent / "journal"))
+
+
+def dashboard_token(given: str = "") -> str:
+    """The token that opens the dashboard, made once and kept.
+
+    Written next to the journal rather than regenerated each start: a link
+    saved on a phone should still work after a redeploy.
+    """
+    if given:
+        return given
+    stored = JOURNAL_DIR / "token"
+    try:
+        held = stored.read_text(encoding="utf-8").strip()
+        if held:
+            return held
+    except OSError:
+        pass
+    fresh = secrets.token_urlsafe(9)
+    try:
+        JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+        stored.write_text(fresh, encoding="utf-8")
+    except OSError:
+        pass
+    return fresh
+
+
+def _short(exc: Exception, limit: int = 90) -> str:
+    text = " ".join(str(exc).split()) or exc.__class__.__name__
+    return text[:limit] + "…" if len(text) > limit else text
+
 
 def dom_source() -> str:
     """The shared page-driving code, ready to evaluate.
@@ -463,31 +497,48 @@ async def bridge(args) -> None:
     """Sarideo's queue on one side, Flow Agent on the other. No browser here."""
     import aiohttp
 
+    import dashboard
+
     api = Sarideo(args.server, args.worker)
+    journal = dashboard.Journal(JOURNAL_DIR)
+    token = dashboard_token(args.token)
+    # No `shot`: this mode drives no browser, so there is nothing to show and the
+    # dashboard says so by leaving the panel out rather than showing a dead frame.
+    await dashboard.serve(journal, host=args.host, port=args.port, token=token)
+    print(f"\n  Nima qilinayotgani:  {dashboard.public_url(args.port, token)}\n",
+          flush=True)
+
     async with aiohttp.ClientSession() as session:
         note = await check_agent(session, args)
         print(note or f"Flow Agent tayyor: {args.flow_agent}", flush=True)
+        journal.say("kutyapti", note or "Flow Agent tayyor")
         while True:
             try:
                 task = await api.claim(session)
             except Exception as exc:  # noqa: BLE001 - the server may be asleep
                 print(f"Sarideo javob bermadi: {exc}", flush=True)
+                journal.say("xato", f"Sarideo javob bermadi: {_short(exc)}")
                 await asyncio.sleep(args.idle)
                 continue
             if task is None:
+                journal.say("kutyapti", "navbat bo'sh")
                 await asyncio.sleep(args.idle)
                 continue
 
             print(f"{task['scene'] + 1}-sahna: {task['prompt'][:60]}…", flush=True)
+            journal.begin(scene=task["scene"], prompt=task["prompt"],
+                          source="Flow Agent")
             try:
                 png = await draw_via_agent(session, args, task["prompt"], task["aspect"])
                 await api.deliver(session, task["id"], png)
+                journal.finish(ok=True, image=png)
                 print(f"{task['scene'] + 1}-sahna yuborildi", flush=True)
             except Exception as exc:  # noqa: BLE001
                 # Retryable for the same reason as everywhere else here: almost
                 # everything that goes wrong is the network or a tab, and neither
                 # is a reason to leave a scene without a picture.
                 print(f"Xato: {exc}", flush=True)
+                journal.finish(ok=False, error=str(exc))
                 await api.give_up(session, task["id"], str(exc), True)
             await asyncio.sleep(args.gap)
 
@@ -495,33 +546,51 @@ async def bridge(args) -> None:
 async def run(args) -> None:
     import aiohttp
 
+    import dashboard
+
     api = Sarideo(args.server, args.worker)
+    journal = dashboard.Journal(JOURNAL_DIR)
     async with playwright() as play:
         ctx = await browser(play, headless=not args.headed)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(args.url, wait_until="domcontentloaded")
+
+        token = dashboard_token(args.token)
+        await dashboard.serve(
+            journal, host=args.host, port=args.port, token=token,
+            # This mode has a browser, so the dashboard can show it.
+            shot=lambda: page.screenshot(type="jpeg", quality=55))
+        print(f"\n  Nima qilinayotgani:  {dashboard.public_url(args.port, token)}\n",
+              flush=True)
+
         async with aiohttp.ClientSession() as session:
             while True:
                 try:
                     task = await api.claim(session)
                 except Exception as exc:  # noqa: BLE001 - the server may be asleep
                     print(f"Sarideo javob bermadi: {exc}", flush=True)
+                    journal.say("xato", f"Sarideo javob bermadi: {_short(exc)}")
                     await asyncio.sleep(args.idle)
                     continue
                 if task is None:
+                    journal.say("kutyapti", "navbat bo'sh")
                     await asyncio.sleep(args.idle)
                     continue
 
                 print(f"{task['scene'] + 1}-sahna: {task['prompt'][:60]}…", flush=True)
+                journal.begin(scene=task["scene"], prompt=task["prompt"],
+                              source="Flow sahifasi")
                 try:
                     png = await draw(page, task["prompt"])
                     await api.deliver(session, task["id"], png)
+                    journal.finish(ok=True, image=png)
                     print(f"{task['scene'] + 1}-sahna yuborildi", flush=True)
                 except Exception as exc:  # noqa: BLE001
                     # Retryable, for the same reason as in the extension: almost
                     # everything that goes wrong here is the page or the network,
                     # and neither is a reason to leave a scene without a picture.
                     print(f"Xato: {exc}", flush=True)
+                    journal.finish(ok=False, error=str(exc))
                     await api.give_up(session, task["id"], str(exc), True)
                     await page.goto(args.url, wait_until="domcontentloaded")
                 await asyncio.sleep(args.gap)
@@ -561,7 +630,16 @@ def main() -> None:
     lg.add_argument("--token", default=os.environ.get("SARIDEO_LOGIN_TOKEN", ""))
     lg.set_defaults(func=login)
 
-    rn = subs.add_parser("run", parents=[parent], help="navbatni ishlash")
+    # Both working modes serve the dashboard, so they share its flags. The port
+    # is the platform's, because a page on a port nothing routes to is a page
+    # nobody can open — the same reason `login` takes it.
+    board = argparse.ArgumentParser(add_help=False)
+    board.add_argument("--host", default="0.0.0.0")
+    board.add_argument("--port", type=int, default=int(os.environ.get("PORT") or 8777))
+    board.add_argument("--token", default=os.environ.get("SARIDEO_LOGIN_TOKEN", ""),
+                       help="bo'sh bo'lsa bir marta yaratilib saqlanadi")
+
+    rn = subs.add_parser("run", parents=[parent, board], help="navbatni ishlash")
     rn.add_argument("--server", default=os.environ.get("SARIDEO_URL", "http://localhost:8000"))
     rn.add_argument("--worker", default=os.environ.get("SARIDEO_WORKER", "agent"))
     rn.add_argument("--gap", type=float, default=6.0)
@@ -570,8 +648,9 @@ def main() -> None:
 
     # No `parents=[parent]`: this one drives no browser at all, so a `--url` or
     # `--headed` on it would be a lie about what it does.
-    br = subs.add_parser("bridge", help="navbatni Flow Agent orqali ishlash "
-                                        "(brauzer kerak emas)")
+    br = subs.add_parser("bridge", parents=[board],
+                         help="navbatni Flow Agent orqali ishlash "
+                              "(brauzer kerak emas)")
     br.add_argument("--server", default=os.environ.get("SARIDEO_URL", "http://localhost:8000"))
     br.add_argument("--worker", default=os.environ.get("SARIDEO_WORKER", "bridge"))
     br.add_argument("--flow-agent",
