@@ -24,6 +24,18 @@ RUN pip install --no-cache-dir . && pip install --no-cache-dir "uvicorn[standard
 ENV FLOW_OUTPUT_DIR=/data/flow
 ENV PYTHONUNBUFFERED=1
 
+# Its own defaults are meant for one person at a keyboard. Sarideo asks for three
+# scenes at once, so the ceiling is raised and the spacing between calls dropped —
+# still paced, because the account behind this is a subscription and not an API
+# plan. Both are plain variables: raise or lower them from Railway.
+ENV MAX_CONCURRENT_REQUESTS=5
+ENV REQUEST_MIN_INTERVAL=2
+
+# DEFAULT_PROJECT is deliberately NOT set here. Upstream falls back to a project
+# id baked into its source — somebody else's — and pictures made against it are
+# not made in yours. Set it per deployment to your own; flowagent/README.md says
+# where to find it.
+
 # 0.0.0.0 rather than the upstream default of 127.0.0.1: a container that only
 # listens to itself is a container the platform reports as dead. `$PORT` is what
 # Railway assigns; 8001 is what it is called everywhere else.

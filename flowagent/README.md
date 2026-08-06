@@ -50,10 +50,39 @@ Dockerfile Flow Agentni build paytida o'z reposidan klon qilib oladi.
 
 **Variables:**
 
-| Nom | Qiymat |
-|---|---|
-| `SERVER_API_KEY` | O'zingiz o'ylab topgan uzun parol. **Albatta qo'ying** — bo'lmasa manzilni bilgan har kim sizning Flow obunangizdan rasm yasaydi. |
-| `FLOW_OUTPUT_DIR` | `/data/flow` |
+| Nom | Qiymat | Nega |
+|---|---|---|
+| `SERVER_API_KEY` | uzun parol | **Albatta qo'ying.** Bo'lmasa manzilni bilgan har kim sizning Flow obunangizdan rasm yasaydi — manzil esa ochiq internetda |
+| `DEFAULT_PROJECT` | **o'z Flow loyihangizning id'si** | Pastga qarang — bu eng ko'p e'tibordan chetda qoladigan sozlama |
+| `FLOW_OUTPUT_DIR` | `/data/flow` | Volume shu yerga ulanadi |
+| `IMAGE_MODEL` | `gem_pix_2` | `gem_pix_2` — Nano Banana Pro, `narwhal` — oddiy, `harbor_seal` — yengil va tez |
+| `MAX_CONCURRENT_REQUESTS` | `5` | Dockerfile'da shunday; kamaytirsangiz sekinlashadi |
+| `REQUEST_MIN_INTERVAL` | `2` | So'rovlar orasidagi eng kam tanaffus, soniyada |
+
+### `DEFAULT_PROJECT` — buni albatta qo'ying
+
+Flow Agent kodida **tayyor loyiha id'si yozilgan** va u sizniki emas — muallifniki:
+
+```python
+DEFAULT_PROJECT = os.environ.get("DEFAULT_PROJECT", "0143adf4-…")
+```
+
+Qo'ymasangiz, rasmlar o'sha begona loyiha nomidan so'raladi. Ishlashi ham
+mumkin, ishlamasligi ham — lekin sizning Flow'ingizda ular ko'rinmaydi va
+xato chiqsa sababini topib bo'lmaydi.
+
+**O'z id'ingizni qanday topasiz:**
+
+1. Chrome'da `labs.google/fx/tools/flow` ni oching
+2. Loyihangizni oching (yo'q bo'lsa — yangi yarating)
+3. Manzil satriga qarang:
+
+```
+labs.google/fx/tools/flow/project/a1b2c3d4-5678-90ab-cdef-1234567890ab
+                                  └────────── shu qism ──────────┘
+```
+
+4. O'sha uzun qismni `DEFAULT_PROJECT` ga qo'ying
 
 **Volume:** `/data` ga ulang. Bo'lmasa har deployda hero rasmlarining `media_id`
 lari yo'qoladi va herolar qaytadan yuklanadi.
