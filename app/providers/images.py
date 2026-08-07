@@ -334,11 +334,32 @@ def _flow_agent_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {config.FLOW_AGENT_KEY}"}
 
 
+# Google's uploader answers "Internal error encountered" to files it does not
+# like, and gives no other clue. Big ones and ones carrying an alpha channel are
+# the usual suspects, so the hero is sent as a plain RGB JPEG no larger than this
+# on its longest side — plenty for a face reference, and a shape the endpoint has
+# no reason to object to.
+_HERO_EDGE = 1024
+
+
+def _hero_upload_bytes(path: Path) -> tuple[bytes, str]:
+    try:
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            if max(img.size) > _HERO_EDGE:
+                img.thumbnail((_HERO_EDGE, _HERO_EDGE))
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=92)
+            return buffer.getvalue(), "image/jpeg"
+    except Exception:  # noqa: BLE001 - an unreadable hero goes up as it is
+        return path.read_bytes(), _mime_for(path)
+
+
 async def _flow_agent_upload(client: httpx.AsyncClient, path: Path) -> str:
     """Put one hero photo in front of Flow, and remember what it was called."""
     import hashlib
 
-    raw = path.read_bytes()
+    raw, mime = _hero_upload_bytes(path)
     fingerprint = hashlib.sha256(raw).hexdigest()
     known = _flow_agent_refs.get(fingerprint)
     if known:
@@ -347,7 +368,7 @@ async def _flow_agent_upload(client: httpx.AsyncClient, path: Path) -> str:
     resp = await client.post(
         f"{config.FLOW_AGENT_URL}/v1/upload",
         headers=_flow_agent_headers(),
-        json={"image_base64": f"data:{_mime_for(path)};base64,"
+        json={"image_base64": f"data:{mime};base64,"
                               f"{base64.b64encode(raw).decode()}"},
     )
     if resp.status_code >= 400:
@@ -362,10 +383,21 @@ async def _flow_agent_upload(client: httpx.AsyncClient, path: Path) -> str:
 
 async def _flow_agent(
     client: httpx.AsyncClient, prompt: str, references: list[Path], aspect: str,
+    notes: list[str] | None = None,
 ) -> bytes:
     refs: list[str] = []
     for path in references[:10]:  # its own ceiling on how many faces one frame may carry
-        refs.append(await _flow_agent_upload(client, path))
+        try:
+            refs.append(await _flow_agent_upload(client, path))
+        except Exception as exc:  # noqa: BLE001 - the scene is worth more than the face
+            # A hero that will not upload used to take the scene down with it,
+            # and the retry re-uploaded the same rejected file three times before
+            # settling for a grey placeholder. A picture drawn from the prompt
+            # alone is worse than one with the right face and far better than no
+            # picture at all — so it is drawn, and the loss is reported.
+            if notes is not None:
+                notes.append(f"«{path.stem}» hero yuklanmadi, u holda rasm heroisiz "
+                             f"chizildi: {exc}")
 
     body: dict[str, object] = {
         "prompt": prompt,
@@ -458,6 +490,11 @@ async def generate_image(
     patience = (config.FLOW_AGENT_TIMEOUT if provider == "flowagent"
                 else config.IMAGE_TIMEOUT)
     timeout = httpx.Timeout(patience, connect=30.0)
+    # Things that went wrong without stopping the picture — a hero that would not
+    # upload, say. Reported alongside a scene that did get drawn, because "it
+    # worked" and "it worked without the face you asked for" are not the same
+    # answer and only one of them needs looking at.
+    notes: list[str] = []
 
     async def run() -> Path:
         nonlocal last_error
@@ -475,7 +512,7 @@ async def generate_image(
                         payload = await _openai(client, full_prompt, reference_paths, aspect)
                     elif provider == "flowagent":
                         payload = await _flow_agent(client, full_prompt, reference_paths,
-                                                    aspect)
+                                                    aspect, notes)
                     else:
                         raise ImageError(f"Unknown image provider '{provider}'.")
 
@@ -500,7 +537,9 @@ async def generate_image(
         raise ImageError(str(last_error))
 
     try:
-        return await asyncio.wait_for(run(), timeout=config.IMAGE_DEADLINE), None
+        drawn = await asyncio.wait_for(run(), timeout=config.IMAGE_DEADLINE)
+        # A picture, and — if something was lost getting there — what.
+        return drawn, ("; ".join(dict.fromkeys(notes)) or None)
     except asyncio.CancelledError:
         raise
     except asyncio.TimeoutError:
