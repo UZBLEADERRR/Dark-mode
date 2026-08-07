@@ -254,6 +254,9 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         # What this project was started with, and what it would actually use
         # today. They differ whenever the app-wide choice moved on without it,
         # which is the whole reason the editor offers to change it.
+        # How many scenes are showing a stand-in. Nothing else can tell: the file
+        # exists, so "18/18" looks finished.
+        "placeholders": len(pipeline.placeholder_scenes(scenes)),
         "image_provider": request.get("image_provider") or "",
         "image_provider_now": (request.get("image_provider")
                                or config.IMAGE_PROVIDER).lower(),
@@ -1877,6 +1880,26 @@ async def upload_scene_image(
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Scene {index} does not exist.")
     return pipeline.public_scene(job_id, scene)
+
+
+@app.post("/api/jobs/{job_id}/images/redo", status_code=202)
+async def redo_placeholder_images(job_id: str) -> dict[str, Any]:
+    """Draw again every scene that ended up with a grey rectangle.
+
+    A placeholder is a file, so nothing downstream treats it as missing — the
+    render uses it and the counters call it done. Getting rid of them meant
+    regenerating scenes one at a time, eighteen times, which is not a thing
+    anybody does.
+    """
+    job, scenes = _editable_job(job_id)
+    wanted = pipeline.placeholder_scenes(scenes)
+    if not wanted:
+        raise HTTPException(status_code=400,
+                            detail="Bu loyihada qayta yasaydigan rasm yo'q.")
+    store.update_job(job_id, status="running", step="images", progress=55,
+                     log=f"{len(wanted)} ta rasm qayta yasalmoqda")
+    _launch(lambda: pipeline.redo_placeholders(job_id), job_id)
+    return {"id": job_id, "status": "running", "scenes": wanted}
 
 
 @app.post("/api/jobs/{job_id}/images", status_code=202)

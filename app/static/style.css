@@ -1407,6 +1407,16 @@ label.frame-add svg {
   align-items: center; justify-content: space-between; gap: 8px;
   margin: -.2rem 0 .5rem;
 }
+/* Offered where the grey rectangles are noticed, so it reads as the answer to
+   what you are looking at rather than as another setting. */
+.stage-redo {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  margin: 2px 0 10px;
+}
+.stage-redo .btn { border-color: var(--warn); color: var(--warn); }
+.stage-redo .btn:disabled { opacity: .55; }
+.stage-redo small { font-size: .72rem; color: var(--muted); }
+
 .stage-drawnby { font-size: .74rem; color: var(--muted); min-width: 0; }
 .stage-drawnby b { color: var(--text); font-weight: 600; }
 

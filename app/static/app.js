@@ -1782,6 +1782,17 @@ function drawStage(job) {
       ${drawnByNote(job)}
     </div>` : ''}`);
 
+  // Scenes that ended up with a grey rectangle. Offered here because this is
+  // where you find out — the counters say 18/18 and the thumbnails are grey, and
+  // the only way back used to be regenerating each scene by hand.
+  if (!busy && job.placeholders) {
+    p.push(`<div class="stage-redo">
+      <button class="btn" data-redo="${esc(job.id)}">
+        ${job.placeholders} ta rasm chiqmagan — qayta yasash</button>
+      <small>Flow varag'i ochiq va kengaytma ishlab turganiga ishonch hosil qiling.</small>
+    </div>`);
+  }
+
   // Nothing has been drawn or recorded yet — the whole video is still just these
   // words, which is exactly why this is the moment to read them.
   if (job.status === 'script') {
@@ -1889,6 +1900,18 @@ function drawStage(job) {
   $('#stage').innerHTML = p.join('');
   $$('#stage [data-go]').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
   $$('#stage [data-stop]').forEach((b) => b.addEventListener('click', () => stopJob(b.dataset.stop, b)));
+  $$('#stage [data-redo]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    b.textContent = 'Boshlandi…';
+    try {
+      await api(`/api/jobs/${b.dataset.redo}/images/redo`, { method: 'POST' });
+      state.drawn = null;
+      watch(b.dataset.redo);
+    } catch (e) {
+      b.disabled = false;
+      alert(e.message);
+    }
+  }));
   $$('#stage [data-resume]').forEach((b) => b.addEventListener('click', async () => {
     b.disabled = true;
     try {
