@@ -382,6 +382,15 @@ async def _flow_agent_upload(client: httpx.AsyncClient, path: Path) -> str:
     return media_id
 
 
+def _forgotten_media(resp: httpx.Response) -> bool:
+    """Whether this refusal means "I no longer have that upload".
+
+    Flow Agent's own words for it: `Media not found in history.json
+    (media_id='…'). Upload or generate it again, then retry.`
+    """
+    return resp.status_code == 404 and "not found in history" in (resp.text or "").lower()
+
+
 def _flow_agent_detail(resp: httpx.Response) -> str:
     """What went wrong, in one line rather than in a web page.
 
@@ -440,6 +449,19 @@ async def _flow_agent(
                              headers=_flow_agent_headers(), json=body)
     if resp.status_code >= 400:
         detail = _flow_agent_detail(resp)
+        if _forgotten_media(resp):
+            # Flow Agent keeps what it has uploaded in a file on its own disk.
+            # Redeploy it, or lose its volume, and that file starts empty — while
+            # this process is still holding the ids it was given before, and
+            # cheerfully naming them on every scene. Every one is then refused.
+            #
+            # Forget exactly the ones just refused, so the retry uploads the
+            # faces again. Other jobs' references are still good and stay.
+            for fingerprint, media_id in list(_flow_agent_refs.items()):
+                if media_id in refs:
+                    _flow_agent_refs.pop(fingerprint, None)
+            detail += (" — hero qaytadan yuklanadi (Flow Agent uni unutgan, "
+                       "ehtimol qayta ishga tushgan)")
         if resp.status_code in {502, 503}:
             # Its own way of saying "no browser is connected", which is the one
             # failure the user can actually do something about.
