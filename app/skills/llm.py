@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import random
 import re
 from typing import Any
 
@@ -183,6 +184,17 @@ async def _gemini_call(
     )
 
 
+# Google's side, not ours, and Google says to try again. Kept apart from 429:
+# that one may be a quota that will not clear this minute, so it goes straight to
+# the other model rather than sitting here counting.
+_BUSY = {500, 502, 503, 504}
+_ELSEWHERE = _BUSY | {429}
+# Two retries, so about six seconds of waiting before the other model is tried.
+# Longer than that and the spike is not a spike, and the fallback is the faster
+# answer anyway.
+_BUSY_TRIES = 2
+
+
 async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int,
                   images: list[tuple[bytes, str]] | None = None) -> str:
     secret = config.key("gemini")
@@ -199,6 +211,30 @@ async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int,
             client, config.model("gemini_text"), system, user, schema, max_tokens,
             images, secret
         )
+
+        # "This model is currently experiencing high demand … please try again
+        # later" is a 503, and it is Google telling you what to do. Waiting a
+        # couple of seconds and asking the same model again clears most of them;
+        # without this the whole video stopped on a wobble that lasts seconds.
+        for attempt in range(_BUSY_TRIES):
+            if resp.status_code not in _BUSY:
+                break
+            # Jittered, because a video asks for several of these at once and
+            # three requests retrying in lockstep is the same spike again.
+            await asyncio.sleep(2 * (attempt + 1) + random.uniform(0, 1.5))
+            resp = await _gemini_call(
+                client, config.model("gemini_text"), system, user, schema,
+                max_tokens, images, secret
+            )
+
+        # Still busy, or out of allowance for the minute: the fallback is a
+        # different model with its own capacity, so it is worth one try before
+        # giving up on the run.
+        if resp.status_code in _ELSEWHERE and config.model("gemini_text_fallback"):
+            resp = await _gemini_call(
+                client, config.model("gemini_text_fallback"), system, user, schema,
+                max_tokens, images, secret
+            )
 
         if resp.status_code in (400, 404) and config.model("gemini_text_fallback"):
             # Unknown model name, or a schema this model won't accept.
