@@ -25,6 +25,24 @@ class ImageError(RuntimeError):
     pass
 
 
+# Marks a warning that means "there is a file, but it is a stand-in".
+#
+# A marker rather than a phrase to match on: the English message happens to
+# contain the word "placeholder" and the Uzbek one does not, and a check built
+# on either would quietly stop working the day somebody improves the wording.
+# This character appears in no provider's message and is stripped before display.
+PLACEHOLDER = "⁣"
+
+
+def is_placeholder(warning: str | None) -> bool:
+    return PLACEHOLDER in (warning or "")
+
+
+def say(warning: str | None) -> str:
+    """The warning as a person should read it — marker removed."""
+    return (warning or "").replace(PLACEHOLDER, "")
+
+
 class Refused(ImageError):
     """The provider answered, and said no. Carries the key it said no to.
 
@@ -523,7 +541,8 @@ async def generate_image(
             # ninety-nine per cent finished is worth having.
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_bytes(_placeholder(size, prompt))
-            return out_path, f"Flow'dan rasm kelmadi, o'rniga vaqtinchalik rasm: {exc}"
+            return out_path, f"{PLACEHOLDER}Flow'dan rasm kelmadi, " \
+                             f"o'rniga vaqtinchalik rasm: {exc}"
 
     full_prompt = prompt
     if negative_prompt and provider in {"gemini", "openai", "flowagent"}:
@@ -598,4 +617,4 @@ async def generate_image(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(_placeholder(size, prompt))
-    return out_path, f"Image generation failed, used a placeholder: {reason}"
+    return out_path, f"{PLACEHOLDER}Image generation failed, used a placeholder: {reason}"

@@ -342,6 +342,78 @@ async def arrange_uploaded_images(
             path.unlink(missing_ok=True)
 
 
+def placeholder_scenes(scenes: list[dict]) -> list[int]:
+    """Which scenes are showing a stand-in rather than a picture.
+
+    Shots count for the scene that holds them: a scene is only as drawn as its
+    least drawn shot.
+    """
+    out = []
+    for scene in scenes:
+        holders = scene.get("shots") or [scene]
+        if any(h.get("placeholder") for h in holders):
+            out.append(scene["index"])
+    return out
+
+
+async def redo_placeholders(job_id: str) -> None:
+    """Draw again every scene that ended up with a stand-in.
+
+    The point of a placeholder is that a hundred-scene render is not lost to one
+    picture. The cost is that "18/18" can be eighteen grey rectangles, and the
+    only way back used to be regenerating each scene by hand. This is that, once.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        return
+    request = job["request"]
+    warnings: list[str] = list((job.get("result") or {}).get("warnings") or [])
+
+    try:
+        scenes = _load_scenes(job)
+        wanted = placeholder_scenes(scenes)
+        if not wanted:
+            _progress(job_id, "review", 72, "Qayta yasaydigan rasm yo'q", status="review")
+            return
+
+        # Cleared first, so a second failure is honestly reported as a second
+        # failure rather than inheriting the first one's word.
+        targets = [s for s in scenes if s["index"] in wanted]
+        for scene in targets:
+            for holder in (scene.get("shots") or [scene]):
+                holder["needs_image"] = True
+                holder["placeholder"] = False
+
+        workdir = workdir_for(job_id)
+        fmt = config.FORMATS.get(request.get("video_format", "16:9"), config.FORMATS["16:9"])
+        heroes = store.get_heroes(request.get("hero_ids") or [])
+        hero_paths = _materialize_heroes(workdir, [h["id"] for h in heroes])
+
+        _progress(job_id, "images", 55, f"{len(wanted)} ta rasm qayta yasalmoqda")
+        # Not `missing_only`: a placeholder is a file, so "missing" is false for
+        # every one of them and the whole redo would quietly draw nothing. The
+        # targets are already exactly the scenes that need it.
+        warnings += await _render_images(
+            scenes=scenes, targets=targets, workdir=workdir, hero_paths=hero_paths,
+            provider=(request.get("image_provider") or config.IMAGE_PROVIDER).lower(),
+            aspect=fmt["aspect"], size=(fmt["width"], fmt["height"]), job_id=job_id,
+        )
+        _save_scenes(job_id, scenes, warnings=warnings)
+        _kept_note(job_id, scenes, await keep_media(scenes, job_id))
+
+        left = placeholder_scenes(scenes)
+        done = len(wanted) - len(left)
+        store.update_job(job_id, error="")
+        _progress(job_id, "review", 72,
+                  f"{done} ta rasm chiqdi"
+                  + (f", {len(left)} tasi baribir chiqmadi" if left else ""),
+                  status="review")
+    except Exception as exc:  # noqa: BLE001 - reported on the job, not the console
+        traceback.print_exc()
+        _progress(job_id, "review", 72,
+                  f"Qayta yasab bo'lmadi: {_short(exc)}", status="review")
+
+
 async def replace_scene_voice(job_id: str, index: int, data: bytes, suffix: str,
                               language: str = "") -> dict | None:
     """Use a recording of your own for one scene, in place of the generated one.
@@ -792,6 +864,10 @@ def public_scene(job_id: str, scene: dict) -> dict:
         "audio_url": _file_url(scene.get("audio_path"), scene.get("voice_version", 0)),
         "words": scene.get("words") or [],
         "needs_image": bool(scene.get("needs_image")),
+        # There is a picture, and it is a grey rectangle. The editor says so
+        # rather than showing it as finished work.
+        "placeholder": bool(scene.get("placeholder")
+                            or any(s.get("placeholder") for s in scene.get("shots") or [])),
         "needs_voice": bool(scene.get("needs_voice")),
         # Always the real list, so an unsplit scene reports no shots rather than
         # a phantom one the editor would then offer to delete.
@@ -1246,6 +1322,11 @@ async def _render_images(
         holder["image_path"] = str(path)
         holder["needs_image"] = False
         holder["image_version"] = int(holder.get("image_version", 0)) + 1
+        # A stand-in is a file, so nothing downstream can tell it from a picture
+        # — the render uses it, the filmstrip shows it, and "images: 18/18" is
+        # true and useless. Remembered here so it can be offered for redrawing
+        # later, when whatever refused is working again.
+        holder["placeholder"] = images.is_placeholder(warning)
         if shot is not None:
             # The scene's own thumbnail follows its first shot, so the filmstrip
             # and the editor keep showing something recognisable.
@@ -1256,7 +1337,7 @@ async def _render_images(
         async with lock:
             done += 1
             if warning:
-                warnings.append(f"{label}: {warning}")
+                warnings.append(f"{label}: {images.say(warning)}")
             _checkpoint(job_id, scenes)
             _progress(job_id, "images", base_progress + int(span * done / total),
                       f"Scene image {done}/{total}")
