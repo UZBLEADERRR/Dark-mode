@@ -57,8 +57,30 @@ holda. Build hech qayerdan hech nima yuklab olmaydi.
 | `DEFAULT_PROJECT` | **o'z Flow loyihangizning id'si** | Pastga qarang — bu eng ko'p e'tibordan chetda qoladigan sozlama |
 | `FLOW_OUTPUT_DIR` | `/data/flow` | Volume shu yerga ulanadi |
 | `IMAGE_MODEL` | `gem_pix_2` | `gem_pix_2` — Nano Banana Pro, `narwhal` — oddiy, `harbor_seal` — yengil va tez |
-| `MAX_CONCURRENT_REQUESTS` | `5` | Dockerfile'da shunday; kamaytirsangiz sekinlashadi |
-| `REQUEST_MIN_INTERVAL` | `2` | So'rovlar orasidagi eng kam tanaffus, soniyada |
+| `MAX_CONCURRENT_REQUESTS` | `2` | Dockerfile'da shunday. **Oshirmang** — pastga qarang |
+| `REQUEST_MIN_INTERVAL` | `6` | So'rovlar orasidagi eng kam tanaffus, soniyada |
+
+### `reCAPTCHA evaluation failed (PUBLIC_ERROR_UNUSUAL_ACTIVITY)`
+
+Bu xatoni ko'rsangiz — bu **tezlik chegarasi emas**, Google trafikni «odam emas» deb
+baholagani. Kutib turish yordam bermaydi.
+
+Ikki sabab bo'lishi mumkin:
+
+**1. Juda tez.** Yuqoridagi ikki sozlamani oshirmang. Xato takrorlansa yana
+kamaytiring — `MAX_CONCURRENT_REQUESTS=1`, `REQUEST_MIN_INTERVAL=10`.
+
+**2. Muhimroq: so'rov qayerdan chiqyapti.** reCAPTCHA'ni brauzeringiz uydagi
+internetingizdan yechadi, so'rovni esa Railway o'z ma'lumot markazidan yuboradi.
+Google uchun bu ikki xil joy — va aynan shunga «unusual activity» deydi.
+
+Flow Agent **shu sababdan** `127.0.0.1:8001` uchun yozilgan: backend ham,
+brauzer ham bitta mashinada bo'lishi kerak.
+
+Ya'ni Railway'da turgan backend bu xatoni **doimiy** berishi mumkin, va uni
+sozlama bilan hal qilib bo'lmaydi. Bunday holda backendni uy kompyuteringizda
+ishga tushirish kerak — u holda Sarideo unga to'g'ridan-to'g'ri ulanolmaydi va
+`flow` navbati orqali ishlaydi ([asosiy README](../README.md#rasmni-apisiz--oz-brauzeringizda-flow)).
 
 ### `DEFAULT_PROJECT` — buni albatta qo'ying
 

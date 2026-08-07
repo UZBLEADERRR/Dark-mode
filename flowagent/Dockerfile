@@ -21,12 +21,19 @@ RUN pip install --no-cache-dir . && pip install --no-cache-dir "uvicorn[standard
 ENV FLOW_OUTPUT_DIR=/data/flow
 ENV PYTHONUNBUFFERED=1
 
-# Its own defaults are meant for one person at a keyboard. Sarideo asks for three
-# scenes at once, so the ceiling is raised and the spacing between calls dropped —
-# still paced, because the account behind this is a subscription and not an API
-# plan. Both are plain variables: raise or lower them from Railway.
-ENV MAX_CONCURRENT_REQUESTS=5
-ENV REQUEST_MIN_INTERVAL=2
+# Slower than upstream's defaults, not faster.
+#
+# Raising these was a mistake: what is behind this is one Google account, and
+# Google's own anti-abuse decides whether the traffic looks like a person. Push
+# it and every call comes back
+#
+#     reCAPTCHA evaluation failed (PUBLIC_ERROR_UNUSUAL_ACTIVITY)
+#
+# which is not a rate limit you wait out — it is a judgement about the pattern.
+# Two at a time, six seconds apart, is roughly what somebody working in the page
+# would produce. Slower still if it keeps happening.
+ENV MAX_CONCURRENT_REQUESTS=2
+ENV REQUEST_MIN_INTERVAL=6
 
 # DEFAULT_PROJECT is deliberately NOT set here. Upstream falls back to a project
 # id baked into its source — somebody else's — and pictures made against it are
