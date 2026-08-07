@@ -11,6 +11,7 @@ import asyncio
 import base64
 import io
 import random
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -381,6 +382,30 @@ async def _flow_agent_upload(client: httpx.AsyncClient, path: Path) -> str:
     return media_id
 
 
+def _flow_agent_detail(resp: httpx.Response) -> str:
+    """What went wrong, in one line rather than in a web page.
+
+    When Google refuses the call, Flow Agent hands its answer straight through —
+    and Google answers with an HTML error page. Four hundred characters of
+    `<!DOCTYPE html>… {margin:0;padding:0}` then fills the log and the card,
+    burying the one word that matters. The title of that page is the message.
+    """
+    body = resp.text or ""
+    if "<html" not in body[:400].lower():
+        return body[:300]
+
+    title = re.search(r"<title>(.*?)</title>", body, re.I | re.S)
+    said = " ".join((title.group(1) if title else "HTML sahifa").split())[:120]
+    hint = ""
+    if "404" in said:
+        # Google's own 404, reached with a valid key: the request went somewhere
+        # that does not exist for this account, and the project id is the part of
+        # the address that comes from configuration.
+        hint = (" — Google bunday manzilni topmadi. Flow Agent'da DEFAULT_PROJECT "
+                "o'z Flow loyihangizniki ekanini tekshiring.")
+    return f"Google javobi: {said}{hint}"
+
+
 async def _flow_agent(
     client: httpx.AsyncClient, prompt: str, references: list[Path], aspect: str,
     notes: list[str] | None = None,
@@ -414,7 +439,7 @@ async def _flow_agent(
     resp = await client.post(f"{config.FLOW_AGENT_URL}/v1/images/generations",
                              headers=_flow_agent_headers(), json=body)
     if resp.status_code >= 400:
-        detail = resp.text[:300]
+        detail = _flow_agent_detail(resp)
         if resp.status_code in {502, 503}:
             # Its own way of saying "no browser is connected", which is the one
             # failure the user can actually do something about.
