@@ -1219,8 +1219,15 @@ async def _render_images(
         if shot is not None and len(scene.get("shots") or []) > 1:
             label += f" shot {scene['shots'].index(shot) + 1}"
 
+        # Never a bare subscript on `image_prompt`. A scene can reach here
+        # without one — a draft that stopped after the script and before the
+        # prompts — and a KeyError takes down the whole run rather than the one
+        # scene. What the scene is *about* is always known, so it is drawn from
+        # that instead.
         path, warning = await images.generate_image(
-            prompt=holder.get("prompt") or holder.get("image_prompt") or scene["image_prompt"],
+            prompt=(holder.get("prompt") or holder.get("image_prompt")
+                    or scene.get("image_prompt") or scene.get("visual")
+                    or scene.get("narration", "")[:300] or "cinematic still"),
             negative_prompt=holder.get("negative_prompt") or scene.get("negative_prompt", ""),
             reference_paths=refs,
             aspect=aspect,
@@ -2095,6 +2102,24 @@ async def resume_job(job_id: str) -> None:
             )
             _save_scenes(job_id, scenes)
             _kept_note(job_id, scenes, await keep_media(scenes, job_id))
+
+        if left["images_left"] and any(
+                not (s.get("image_prompt") or "").strip() for s in scenes):
+            # The draft can stop between writing the script and describing the
+            # pictures — the script model runs out of allowance, say — and a
+            # scene with narration but no prompt has nothing to draw from.
+            # Resuming used to walk straight into it and fail on the missing
+            # key, every time, with the same three words in the log.
+            _progress(job_id, "prompts", 50,
+                      "Rasm promptlari yozilmagan — avval o'shalar yozilmoqda")
+            prompt_pack = await skills.build_image_prompts(
+                scenes=scenes,
+                art_style=request.get("art_style", "cinematic photorealistic"),
+                video_format=request.get("video_format", "16:9"), heroes=heroes,
+                title=(job.get("result") or {}).get("title") or request["topic"],
+            )
+            scenes = _ensure_sids(prompt_pack["scenes"])
+            _save_scenes(job_id, scenes)
 
         if left["images_left"]:
             _progress(job_id, "images", 55,
