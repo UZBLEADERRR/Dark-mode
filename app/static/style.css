@@ -1622,6 +1622,27 @@ textarea.flow-prompt:focus { outline: none; border-color: var(--accent); }
 .brand-box .btn.primary { justify-self: start; }
 .brand-box .saver { text-align: left; }
 
+/* ── the Flow Agent extension ─────────────────────────────────────── */
+.agent-box { display: grid; gap: 10px; justify-items: start; }
+.agent-where {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 8px 11px; border-radius: 10px;
+  background: var(--raised); border: 1px solid var(--line);
+  font-size: .78rem; color: var(--muted);
+}
+.agent-where b {
+  color: var(--text); overflow-wrap: anywhere; text-align: right; min-width: 0;
+}
+.agent-steps {
+  margin: 0; padding-left: 1.15rem;
+  display: grid; gap: 5px; font-size: .8rem; color: var(--muted);
+}
+.agent-steps b { color: var(--text); font-weight: 600; }
+.agent-steps code, .agent-box code {
+  font-size: .74rem; padding: 1px 5px; border-radius: 5px;
+  background: var(--raised); color: var(--text); overflow-wrap: anywhere;
+}
+
 /* ── space, and getting it back ───────────────────────────────────── */
 .space-rows { display: grid; gap: 1px; margin-bottom: 10px; }
 .space-rows > div {
