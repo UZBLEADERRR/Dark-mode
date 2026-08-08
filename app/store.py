@@ -358,6 +358,10 @@ _ADDED_COLUMNS = (
     ("profiles", "pillars", "TEXT NOT NULL DEFAULT ''"),
     ("profiles", "style", "TEXT NOT NULL DEFAULT ''"),
     ("plans", "batch", "TEXT NOT NULL DEFAULT 'auto'"),
+    # Which of your channels this one is for. A content plan is written per
+    # channel, not for "videos in general", and a list that does not say which
+    # is a list you have to read every row of to use.
+    ("plans", "channel", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -752,7 +756,7 @@ def drop_image_tasks(job_id: str) -> int:
 
 # --- plans -------------------------------------------------------------------
 
-_PLAN_COLS = ("id, title, request, publish_at, lead_minutes, privacy, approve, "
+_PLAN_COLS = ("id, title, channel, request, publish_at, lead_minutes, privacy, approve, "
               "batch, status, job_id, video_url, error, created_at, updated_at")
 
 
@@ -768,16 +772,18 @@ def _plan(row: Any) -> dict[str, Any]:
 
 def add_plan(*, title: str, request: dict[str, Any], publish_at: str,
              lead_minutes: int = 240, privacy: str = "public",
-             approve: bool = True, batch: str = "auto") -> dict[str, Any]:
+             approve: bool = True, batch: str = "auto", channel: str = "",
+             status: str = "planned") -> dict[str, Any]:
     plan_id = new_id("pln")
     now = _now()
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO plans (id, title, request, publish_at, lead_minutes, privacy,"
-            " approve, batch, status, job_id, video_url, error, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (plan_id, title, json.dumps(request), publish_at, int(lead_minutes),
-             privacy, 1 if approve else 0, batch, "planned", "", "", "", now, now),
+            "INSERT INTO plans (id, title, channel, request, publish_at, lead_minutes,"
+            " privacy, approve, batch, status, job_id, video_url, error,"
+            " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (plan_id, title, channel, json.dumps(request), publish_at,
+             int(lead_minutes), privacy, 1 if approve else 0, batch, status,
+             "", "", "", now, now),
         )
     return get_plan(plan_id) or {}
 
@@ -785,7 +791,12 @@ def add_plan(*, title: str, request: dict[str, Any], publish_at: str,
 def list_plans(limit: int = 60) -> list[dict[str, Any]]:
     with _conn() as conn:
         rows = conn.execute(
-            f"SELECT {_PLAN_COLS} FROM plans ORDER BY publish_at ASC LIMIT ?",
+            # Undated ideas sort last among themselves but are not pushed to the
+            # bottom of the list: an empty `publish_at` sorts before every real
+            # one, which puts the shelf above the schedule — where the thing you
+            # are browsing belongs, ahead of the thing that runs itself.
+            f"SELECT {_PLAN_COLS} FROM plans ORDER BY publish_at ASC, created_at DESC"
+            " LIMIT ?",
             (limit,)).fetchall()
     return [_plan(r) for r in rows]
 
@@ -799,8 +810,8 @@ def get_plan(plan_id: str) -> dict[str, Any] | None:
 
 def update_plan(plan_id: str, **fields: Any) -> bool:
     """Change a plan. Only the columns named are touched."""
-    allowed = ("title", "publish_at", "lead_minutes", "privacy", "approve",
-               "batch", "status", "job_id", "video_url", "error")
+    allowed = ("title", "channel", "publish_at", "lead_minutes", "privacy",
+               "approve", "batch", "status", "job_id", "video_url", "error")
     sets, values = [], []
     for key in allowed:
         if key in fields and fields[key] is not None:
