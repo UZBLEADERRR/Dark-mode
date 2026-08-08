@@ -2029,16 +2029,6 @@ function drawStage(job) {
       ${drawnByNote(job)}
     </div>` : ''}`);
 
-  // Making the pictures by hand: the prompts are ready and this is the screen
-  // you are on when they become ready, so this is where they belong. Filled in
-  // after the card is in the document — it is a second request, and the rest of
-  // the progress card must not wait on it.
-  const manual = (job.image_provider_now || '') === 'manual';
-  const bare = (job.scenes || []).some((s) => s.needs_image || !s.image_url);
-  if (!busy && job.scene_count && (manual || bare)) {
-    p.push('<div class="prompts" id="prompts"></div>');
-  }
-
   // Scenes that ended up with a grey rectangle. Offered here because this is
   // where you find out — the counters say 18/18 and the thumbnails are grey, and
   // the only way back used to be regenerating each scene by hand.
@@ -2150,12 +2140,40 @@ function drawStage(job) {
       </figure>`).join('')}</div>`);
   }
 
+  // The prompts sit here, in the place the journal used to have to itself: this
+  // is the bottom of the card, where you end up once you have read what state
+  // the project is in, and the prompts are what you do next about it. Filled in
+  // after the card is in the document — it is a second request, and the rest of
+  // the progress card must not wait on it.
+  const manual = (job.image_provider_now || '') === 'manual';
+  const bare = (job.scenes || []).some((s) => s.needs_image || !s.image_url || s.placeholder);
+  if (!busy && job.scene_count && (manual || bare)) {
+    p.push('<div class="prompts" id="prompts"></div>');
+  }
+
   if (job.logs?.length) {
+    // Not open by default any more unless something is moving. A finished
+    // project's journal is history, and it was sitting open above nothing.
     p.push(`<details class="fold"${busy ? ' open' : ''}><summary>Jurnal</summary>
-      <div class="fold-body"><div class="logs">${esc(job.logs.join('\n'))}</div></div></details>`);
+      <div class="fold-body">
+        <div class="logs">${esc(job.logs.join('\n'))}</div>
+        <!-- Warnings are sticky on purpose, so a bad picture keeps saying so.
+             The cost is that a project carried between providers keeps every
+             complaint the old one made, which is not news about the new one. -->
+        <button class="btn sm ghost" data-wipe="${esc(job.id)}">Jurnalni tozalash</button>
+      </div></details>`);
   }
 
   $('#stage').innerHTML = p.join('');
+  $$('#stage [data-wipe]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await api(`/api/jobs/${b.dataset.wipe}/logs`, { method: 'DELETE' });
+      const fresh = await api(`/api/jobs/${b.dataset.wipe}`);
+      drawStage(fresh);
+      toast('Jurnal va eski ogohlantirishlar o‘chirildi');
+    } catch (e) { b.disabled = false; toast(e.message); }
+  }));
   $$('#stage [data-go]').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
   $$('#stage [data-stop]').forEach((b) => b.addEventListener('click', () => stopJob(b.dataset.stop, b)));
   $$('#stage [data-redo]').forEach((b) => b.addEventListener('click', async () => {
@@ -2281,12 +2299,20 @@ function drawSheet(job) {
 // Shared by the sheet above and the filmstrip in the editor: the same pile of
 // files arriving by two doors is still one question — which picture goes where.
 
-async function bulkUpload(files, jobId, wanted = 0) {
-  if (!jobId || !files.length) return;
-  // The order the browser hands over `files` is the order the folder happened to
-  // be sorted in, which is not the order they were made in. Rather than ask
-  // people to rename a hundred files, the picker below lets them be tapped into
-  // order — and tapping is the one interaction a phone is good at.
+async function bulkUpload(rawFiles, jobId, wanted = 0) {
+  if (!jobId || !rawFiles.length) return;
+  // Sorted by name, numerically, before anything else looks at them. A browser
+  // does not promise any particular order for a multiple selection, and the
+  // prompt sheet asks for files saved as 001, 002, 003 — so "file order" has to
+  // mean what those numbers say, not what the file picker felt like. `10` after
+  // `9`, not between `1` and `2`.
+  const files = [...rawFiles].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+  // Beyond that the order is the one they were made in, which nothing on disk
+  // records. Rather than ask people to rename a hundred files, the picker below
+  // lets them be tapped into order — tapping being the one interaction a phone
+  // is good at — or taken wholesale when the names already say it.
   const picked = [];
   const urls = files.map((f) => URL.createObjectURL(f));
 
@@ -2300,6 +2326,14 @@ async function bulkUpload(files, jobId, wanted = 0) {
           <option value="auto">AI o‘zi qarab joylashtirsin</option>
         </select></label>
       <div class="pick-wrap" data-pickwrap>
+        <!-- Tapping is right for reordering a handful. For a folder that was
+             already saved in the right order — which is what the prompt sheet
+             asks you to do — tapping forty thumbnails is the tax for a decision
+             you already made. This takes the lot in file-name order. -->
+        <div class="pick-acts">
+          <button type="button" class="btn sm" data-pickall>Hammasini tanlash</button>
+          <button type="button" class="btn sm ghost" data-picknone>Tozalash</button>
+        </div>
         <p class="note" data-pickcount></p>
         <div class="pick-grid">${files.map((f, i) => `
           <button type="button" class="pick" data-pick="${i}">
@@ -2333,6 +2367,15 @@ async function bulkUpload(files, jobId, wanted = 0) {
         if (at >= 0) picked.splice(at, 1); else picked.push(i);
         paint();
       }));
+      $('#modal-body [data-pickall]').addEventListener('click', () => {
+        picked.length = 0;
+        files.forEach((_f, i) => picked.push(i));
+        paint();
+      });
+      $('#modal-body [data-picknone]').addEventListener('click', () => {
+        picked.length = 0;
+        paint();
+      });
       mode.addEventListener('change', () =>
         wrap.classList.toggle('hidden', mode.value !== 'pick'));
       paint();
