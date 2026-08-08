@@ -156,6 +156,34 @@ def _to_gemini_schema(schema: Any) -> Any:
     return out
 
 
+def _wobble(exc: Exception, model: str) -> str:
+    """A network failure as a sentence somebody can act on.
+
+    `str(httpx.ReadTimeout())` is the empty string, so every one of these used to
+    reach the job card as the bare word "ReadTimeout" — which says neither what
+    was being asked for, nor of whom, nor what to do about it.
+    """
+    if isinstance(exc, httpx.TimeoutException):
+        return (f"'{model}' 5 daqiqada javob bermadi. Model band bo'lishi mumkin "
+                f"— «Davom ettirish» ni bosing, tayyor bo'lganlari saqlanadi.")
+    said = " ".join(str(exc).split()) or exc.__class__.__name__
+    return f"'{model}' bilan aloqa uzildi: {said}"
+
+
+def _as_response(status: int, detail: str, request: dict) -> httpx.Response:
+    """A failure shaped like an answer, so one ladder handles both.
+
+    Plain text, not JSON: when every retry has been used the body is what ends
+    up on the job card, and a sentence belongs there rather than an envelope
+    around one. `keys.classify` reads 504 as nobody's fault, so a model that
+    went quiet never costs a working key its place in the rotation.
+    """
+    return httpx.Response(
+        status, text=detail,
+        request=httpx.Request("POST", "https://sarideo.local/llm", json=request),
+    )
+
+
 async def _gemini_call(
     client: httpx.AsyncClient, model: str, system: str, user: str,
     schema: dict | None, max_tokens: int,
@@ -172,16 +200,26 @@ async def _gemini_call(
     ]
     parts.append({"text": user})
 
-    return await client.post(
-        f"{config.GEMINI_BASE}/models/{model}:generateContent",
-        headers={"x-goog-api-key": secret or config.key("gemini"),
-                 "Content-Type": "application/json"},
-        json={
-            "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": parts}],
-            "generationConfig": generation,
-        },
-    )
+    request = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": generation,
+    }
+    try:
+        return await client.post(
+            f"{config.GEMINI_BASE}/models/{model}:generateContent",
+            headers={"x-goog-api-key": secret or config.key("gemini"),
+                     "Content-Type": "application/json"},
+            json=request,
+        )
+    except (httpx.TimeoutException, httpx.TransportError) as exc:
+        # A request that accepted the connection and then said nothing is the
+        # same problem as a 503, and the ladder above already knows how to
+        # answer that: wait, ask again, then ask the other model. Returned as a
+        # response rather than raised so it goes down that path instead of
+        # ending the whole video — which is what it did, under the name
+        # "ReadTimeout" and nothing else, because httpx leaves the message empty.
+        return _as_response(504, _wobble(exc, model), request)
 
 
 # Google's side, not ours, and Google says to try again. Kept apart from 429:
@@ -326,16 +364,27 @@ async def _openai(system: str, user: str, schema: dict | None, max_tokens: int,
         }
 
     async def send(payload: dict[str, Any]) -> httpx.Response:
-        return await client.post(
-            f"{config.OPENAI_BASE}/chat/completions",
-            headers={"Authorization": f"Bearer {secret}",
-                     "Content-Type": "application/json"},
-            json=payload,
-        )
+        try:
+            return await client.post(
+                f"{config.OPENAI_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {secret}",
+                         "Content-Type": "application/json"},
+                json=payload,
+            )
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            # Same as the Gemini side: a silence is reported as a sentence and
+            # retried once, rather than ending the run under a bare class name.
+            return _as_response(504, _wobble(exc, config.model("openai_text")), payload)
 
     timeout = httpx.Timeout(300.0, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await send(body)
+
+        # One more try when the model simply did not answer. Everything below
+        # this is about the shape of the request, which a retry cannot change.
+        if resp.status_code in _BUSY:
+            await asyncio.sleep(2 + random.uniform(0, 1.5))
+            resp = await send(body)
 
         # Two things an older or third-party model refuses, both about the shape
         # of the request rather than the request itself, so both are worth one

@@ -1638,6 +1638,8 @@ textarea.flow-prompt:focus { outline: none; border-color: var(--accent); }
   display: grid; gap: 5px; font-size: .8rem; color: var(--muted);
 }
 .agent-steps b { color: var(--text); font-weight: 600; }
+.agent-box .warnish { color: var(--warn); }
+.agent-box .warnish b { color: var(--warn); font-weight: 700; }
 .agent-steps code, .agent-box code {
   font-size: .74rem; padding: 1px 5px; border-radius: 5px;
   background: var(--raised); color: var(--text); overflow-wrap: anywhere;

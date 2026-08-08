@@ -106,6 +106,45 @@ input, textarea, select {{
 """
 
 
+KEY_MARK = "/* sarideo-key */"
+
+# Flow Agent's REST endpoints sit behind `SERVER_API_KEY`, and the extension
+# never sends an Authorization header — it only sends `X-Client-Id`, and its
+# panel has no field for a key. So a protected backend answers its credits and
+# models calls with 401 and the panel fills up with "Invalid or missing API
+# key", while image generation carries on working, because that goes over the
+# WebSocket, which is not behind the key.
+#
+# One wrapper around `fetch`, added at the top of each file that talks to the
+# server, rather than an edit at every call site: upstream can move its calls
+# around and this still holds. Scoped to our own host by name, so the Google
+# requests the extension makes with Google's own credentials are untouched.
+KEY_SHIM = """{mark}
+(() => {{
+  const HOST = {host};
+  const KEY = {key};
+  const real = globalThis.fetch;
+  if (!real || globalThis.__sarideoKeyed) return;
+  globalThis.__sarideoKeyed = true;
+  globalThis.fetch = function (input, init) {{
+    let url = "";
+    try {{ url = typeof input === "string" ? input : (input && input.url) || ""; }} catch (e) {{}}
+    if (url.indexOf(HOST) !== -1) {{
+      const next = Object.assign({{}}, init || {{}});
+      const headers = new Headers(
+        (init && init.headers)
+        || (typeof input !== "string" && input && input.headers)
+        || {{}});
+      if (!headers.has("Authorization")) headers.set("Authorization", "Bearer " + KEY);
+      next.headers = headers;
+      return real.call(this, input, next);
+    }}
+    return real.call(this, input, init);
+  }};
+}})();
+"""
+
+
 class NotReady(Exception):
     """The extension cannot be built into something that would work."""
 
@@ -144,6 +183,10 @@ def status() -> dict:
         "scheme": scheme,
         # True means "this only works with the browser on this same machine".
         "local": not reachable(host),
+        # Whether the backend is protected, and therefore whether the file being
+        # handed out carries the key that opens it. Said, never shown: the key
+        # itself is the one thing this panel must not put on screen.
+        "keyed": bool(config.FLOW_AGENT_KEY),
     }
 
 
@@ -168,11 +211,27 @@ def _manifest(text: str, scheme: str, host: str) -> str:
     return json.dumps(data, indent=2) + "\n"
 
 
-def build(url: str | None = None, *, theme: bool = True) -> bytes:
-    """The extension as a zip, pointed at this app's Flow Agent."""
+# The two files that talk to the backend over HTTP. Everything else in the
+# extension either talks to Google or talks to these.
+KEYED = ("background.js", "popup.js")
+
+
+def build(url: str | None = None, *, theme: bool = True,
+          key: str | None = None) -> bytes:
+    """The extension as a zip, pointed at this app's Flow Agent.
+
+    When a `SERVER_API_KEY` is configured for that backend, the same key is
+    carried into the extension — otherwise its own panel cannot read credits or
+    models from a backend it is perfectly able to draw pictures through. The
+    file therefore contains the key, which is why it is served from this app and
+    not from anywhere a stranger can reach.
+    """
     scheme, host = address(url)
     if not FOLDER.is_dir():
         raise NotReady(f"Kengaytma papkasi yo'q: {FOLDER}")
+    secret = key if key is not None else (config.FLOW_AGENT_KEY or "")
+    shim = KEY_SHIM.format(mark=KEY_MARK, host=json.dumps(host),
+                           key=json.dumps(secret)) if secret else ""
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -185,6 +244,8 @@ def build(url: str | None = None, *, theme: bool = True) -> bytes:
                 data = _config_js(data.decode("utf-8"), host).encode("utf-8")
             elif inside == "manifest.json":
                 data = _manifest(data.decode("utf-8"), scheme, host).encode("utf-8")
+            elif inside in KEYED and shim:
+                data = (shim + data.decode("utf-8")).encode("utf-8")
             elif inside == "popup.html" and theme:
                 markup = data.decode("utf-8")
                 if MARK not in markup and "</head>" in markup:
