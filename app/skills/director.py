@@ -29,6 +29,16 @@ def describe_cast(heroes: list[dict]) -> str:
             line += f" | {h['description']}"
         line += " | HAS ITS OWN VOICE — may speak" if h.get("voice_id") else " | no voice — narrator only"
         lines.append(line)
+    # Said once, here, so it reaches every brief that describes a cast. Without
+    # it the Director writes "a young shepherd boy" into `visual` and leaves
+    # `hero_ids` empty — a second protagonist, unphotographed, drawn differently
+    # in every scene, standing exactly where the character the user chose was
+    # supposed to be.
+    lines.append(
+        "\nThese are the people of this video. When the story needs a character, "
+        "it is one of the ones above, called by that exact name in `visual`, with "
+        "its id in `hero_ids`. Do not invent a different lead and do not rename "
+        "these. Anyone else on screen is unnamed background, never a second lead.")
     return "\n".join(lines)
 
 
