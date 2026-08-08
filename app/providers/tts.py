@@ -17,6 +17,7 @@ from typing import Callable
 import httpx
 
 from .. import config, keys
+from . import edge
 from . import ratelimit
 
 
@@ -232,6 +233,25 @@ async def _openai(
 
 # --- Gemini ------------------------------------------------------------------
 
+async def _edge(
+    text: str, out_path: Path, voice_id: str | None
+) -> tuple[Path, list[dict]]:
+    """The free narrator. No client and no key — it speaks its own protocol.
+
+    No word timings come back, which is the one thing given up by not paying:
+    the subtitles are timed from the audio afterwards, the same as for any
+    provider that does not report them.
+    """
+    mp3 = out_path.with_suffix(".mp3")
+    try:
+        await edge.speak(text, mp3, voice_id)
+    except edge.EdgeError as exc:
+        raise TTSError(str(exc)) from exc
+    if mp3 != out_path:
+        mp3.replace(out_path)
+    return out_path, []
+
+
 async def _gemini(
     client: httpx.AsyncClient, text: str, out_path: Path, voice_id: str | None
 ) -> tuple[Path, list[dict]]:
@@ -327,6 +347,8 @@ async def synthesize(
                         return await _openai(client, text, out_path, voice_id)
                     if provider == "gemini":
                         return await _gemini(client, text, out_path, voice_id)
+                    if provider == "edge":
+                        return await _edge(text, out_path, voice_id)
                     raise TTSError(f"Unknown TTS provider '{provider}'.")
                 except (asyncio.CancelledError, RateLimited):
                     raise

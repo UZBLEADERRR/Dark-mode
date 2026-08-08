@@ -6,3 +6,6 @@ pydantic==2.10.4
 anthropic>=0.69.0
 Pillow==11.1.0
 psycopg[binary,pool]==3.2.3
+# The free narrator. No account and no key — it is the engine behind
+# Edge's read-aloud button, offered as one choice among several.
+edge-tts==7.2.8

@@ -509,7 +509,8 @@ async function loadHealth() {
   // name says least about what it does.
   fill('#image_provider', h.image_providers, h.defaults.image_provider,
        IMAGE_PROVIDER_LABELS);
-  fill('#tts_provider', h.tts_providers, h.defaults.tts_provider);
+  fill('#tts_provider', h.tts_providers, h.defaults.tts_provider,
+       TTS_PROVIDER_LABELS);
   await loadVoices();
 
   $('#speed-seg').innerHTML = (h.speeds || []).map((sp) =>
@@ -675,7 +676,12 @@ async function giveVoice(heroId) {
         const select = $('#hv-voice');
         select.innerHTML = '<option value="">yuklanmoqda…</option>';
         try {
-          const data = await api(`/api/voices?provider=${encodeURIComponent(provider)}`);
+          // The chosen language comes along: the free provider has a man and a woman
+    // per language, and putting the video's own language at the top of a list of
+    // twenty is the difference between a choice and a search.
+    const lang = $('#language')?.value || '';
+    const data = await api(`/api/voices?provider=${encodeURIComponent(provider)}`
+      + (lang ? `&language=${encodeURIComponent(lang)}` : ''));
           select.innerHTML = '<option value="">— ovoz bermang (diktor o‘qiydi) —</option>' +
             (data.voices || []).map((v) => {
               const about = [v.hint, v.tone].filter(Boolean).join(' · ');
@@ -916,6 +922,13 @@ const TEXT_PROVIDER_LABELS = {
 // Named by what they cost you and who does the work, because that is the
 // difference that matters: two of these bill an API, one waits for your browser,
 // one uses the Flow subscription without waiting for anybody.
+const TTS_PROVIDER_LABELS = {
+  elevenlabs: 'ElevenLabs — eng tabiiy, pullik',
+  openai: 'OpenAI — pullik',
+  gemini: 'Gemini (Google) — pullik',
+  edge: 'Bepul ovoz — erkak/ayol, kalitsiz',
+};
+
 const IMAGE_PROVIDER_LABELS = {
   gemini: 'Gemini (Google) — API',
   fal: 'fal.ai — API',
@@ -1357,7 +1370,12 @@ async function loadVoices() {
   select.innerHTML = '<option value="">yuklanmoqda…</option>';
   select.disabled = true;
   try {
-    const data = await api(`/api/voices?provider=${encodeURIComponent(provider)}`);
+    // The chosen language comes along: the free provider has a man and a woman
+    // per language, and putting the video's own language at the top of a list of
+    // twenty is the difference between a choice and a search.
+    const lang = $('#language')?.value || '';
+    const data = await api(`/api/voices?provider=${encodeURIComponent(provider)}`
+      + (lang ? `&language=${encodeURIComponent(lang)}` : ''));
     state.voices = data.voices || [];
     select.innerHTML = `<option value="">standart — ${esc(data.default || '?')}</option>` +
       state.voices.map((v) => {

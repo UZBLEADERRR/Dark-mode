@@ -127,7 +127,11 @@ OPENAI_IMAGE_MODEL = _env("OPENAI_IMAGE_MODEL", "gpt-image-1")
 OPENAI_TEXT_MODEL = _env("OPENAI_TEXT_MODEL", "gpt-5")
 
 # --- text to speech ----------------------------------------------------------
-TTS_PROVIDER = _env("TTS_PROVIDER", "elevenlabs").lower()  # elevenlabs | openai | gemini
+TTS_PROVIDER = _env("TTS_PROVIDER", "elevenlabs").lower()
+# `edge` is Microsoft Edge's read-aloud service: no account, no key, a man and a
+# woman in most languages. Listed last because it is not a published API and
+# should be a choice somebody makes, not a default they inherit.
+TTS_PROVIDERS = ("elevenlabs", "openai", "gemini", "edge")
 
 ELEVENLABS_API_KEY = _env("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = _env("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
@@ -141,6 +145,11 @@ GEMINI_TTS_MODEL = _env("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
 # script stage the voice had nowhere to fall back to.
 GEMINI_TTS_FALLBACK = _env("GEMINI_TTS_FALLBACK", "gemini-2.5-flash-preview-tts")
 GEMINI_TTS_VOICE = _env("GEMINI_TTS_VOICE", "Kore")
+
+# The free narrator's default. Uzbek, because that is what this app is written
+# in and what most of its videos are narrated in; every other language is one
+# choice away in the picker.
+EDGE_TTS_VOICE = _env("EDGE_TTS_VOICE", "uz-UZ-MadinaNeural")
 
 # --- subtitle alignment ------------------------------------------------------
 # elevenlabs -> character timestamps come free with the TTS call
@@ -344,6 +353,7 @@ _VOICE_DEFAULTS: dict[str, str] = {
     "gemini": GEMINI_TTS_VOICE,
     "openai": OPENAI_TTS_VOICE,
     "elevenlabs": ELEVENLABS_VOICE_ID,
+    "edge": EDGE_TTS_VOICE,
 }
 
 VOICE_OVERRIDES: dict[str, str] = {}
@@ -568,6 +578,11 @@ def image_provider_ready(provider: str | None = None) -> bool:
 def tts_provider_ready(provider: str | None = None) -> bool:
     provider = (provider or TTS_PROVIDER).lower()
     if provider == "upload":
+        return True
+    # Edge's read-aloud service wants no account and no key. Whether it will
+    # answer today is a question for the request, not for a key check — the same
+    # arrangement `flow` has on the picture side.
+    if provider == "edge":
         return True
     return has_key(provider) if provider in {"elevenlabs", "openai", "gemini"} else False
 
