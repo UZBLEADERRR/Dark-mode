@@ -11,7 +11,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
@@ -1168,6 +1170,9 @@ async def remove_asset(asset_id: str) -> dict[str, bool]:
 
 MODELS_KEY = "models"
 IMAGE_PROVIDER_KEY = "image_provider"
+# Which Flow project the agent is pointed at. Kept here as well as in the agent's
+# own environment so the field shows the right thing after either restarts.
+FLOW_PROJECT_KEY = "flow_project"
 LLM_PROVIDER_KEY = "llm_provider"
 VOICES_KEY = "voices"
 
@@ -2437,6 +2442,78 @@ async def flow_tasks(job_id: str = "", pending: bool = True) -> dict[str, Any]:
 async def flow_agent_status() -> dict[str, Any]:
     """Whether the ready-made extension can be handed out, and where it points."""
     return {**flowext.status(), "url": config.FLOW_AGENT_URL}
+
+
+def _said(resp: "httpx.Response") -> str:
+    """The reason a service gave, as a sentence rather than as JSON."""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            return str(body.get("detail") or body.get("error") or "")[:300]
+    except Exception:  # noqa: BLE001 - a plain-text answer is still an answer
+        pass
+    return resp.text[:300]
+
+
+class FlowProject(BaseModel):
+    """Which Google Flow project the pictures should be filed into."""
+
+    project_id: str = Field(min_length=8, max_length=80)
+    # Bring the browser to it as well. Google decides which project a picture
+    # belongs to partly from what the tab is showing, so a backend pointed at one
+    # project while the tab shows another files pictures nobody asked for.
+    open_tab: bool = True
+
+
+@app.get("/api/flow-agent/project")
+async def flow_project() -> dict[str, Any]:
+    """Which Flow project the agent is drawing into, as it reports it."""
+    if not config.FLOW_AGENT_URL:
+        return {"ready": False, "why": "Flow Agent manzili sozlanmagan."}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            got = await client.get(f"{config.FLOW_AGENT_URL}/sarideo/project")
+        if got.status_code == 404:
+            return {"ready": False, "why": "Flow Agent eski — uni qayta deploy qiling."}
+        got.raise_for_status()
+        return {"ready": True, **got.json()}
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        return {"ready": False, "why": f"Flow Agent javob bermadi: {exc}"}
+
+
+@app.post("/api/flow-agent/project")
+async def set_flow_project(body: FlowProject) -> dict[str, Any]:
+    """Point the agent at another Flow project, and open it in the browser.
+
+    A project fills up. Changing it used to mean editing an environment variable
+    on the hosting platform and waiting for a redeploy, which is a poor answer to
+    "this one is full" and an impossible one from a phone. The agent takes it at
+    runtime instead, and tells whichever browser is helping to open it.
+    """
+    if not config.FLOW_AGENT_URL:
+        raise HTTPException(status_code=400, detail="Flow Agent manzili sozlanmagan.")
+    headers = ({"Authorization": f"Bearer {config.FLOW_AGENT_KEY}"}
+               if config.FLOW_AGENT_KEY else {})
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            sent = await client.post(
+                f"{config.FLOW_AGENT_URL}/sarideo/project",
+                json={"project_id": body.project_id.strip(), "open_tab": body.open_tab},
+                headers=headers)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502,
+                            detail=f"Flow Agent javob bermadi: {exc}") from exc
+    if sent.status_code == 404:
+        raise HTTPException(
+            status_code=400,
+            detail="Flow Agent bu funksiyani bilmaydi — uni qayta deploy qiling.")
+    if sent.status_code >= 400:
+        raise HTTPException(status_code=sent.status_code,
+                            detail=_said(sent) or "Flow Agent rad etdi.")
+    # Kept here too, so the field shows the right thing after a restart and
+    # anybody reading the settings can see which project is in use.
+    store.set_setting(FLOW_PROJECT_KEY, {"project_id": body.project_id.strip()})
+    return sent.json()
 
 
 @app.get("/api/flow-agent/extension.zip")

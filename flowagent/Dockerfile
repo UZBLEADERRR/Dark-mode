@@ -12,6 +12,10 @@ RUN apt-get update \
 
 WORKDIR /srv
 COPY flowagent/upstream/flow-agent /srv/flow-agent
+# Two endpoints Flow Agent does not have, in a module that imports its app
+# rather than editing it — see the file's own docstring. Copied beside the
+# vendored tree, never into it, so an upstream update overwrites nothing.
+COPY flowagent/sarideo_extras.py /srv/flow-agent/sarideo_extras.py
 
 WORKDIR /srv/flow-agent
 RUN pip install --no-cache-dir . && pip install --no-cache-dir "uvicorn[standard]"
@@ -39,8 +43,11 @@ ENV REQUEST_MIN_INTERVAL=6
 # id baked into its source — somebody else's — and pictures made against it are
 # not made in yours. Set it per deployment to your own; flowagent/README.md says
 # where to find it.
+#
+# It can also be set at runtime, from Sarideo, without a redeploy: that is what
+# `sarideo_extras` adds, and it is the answer to a project that has hit a limit.
 
 # 0.0.0.0 rather than the upstream default of 127.0.0.1: a container that only
 # listens to itself is a container the platform reports as dead. `$PORT` is what
 # Railway assigns; 8001 is what it is called everywhere else.
-CMD ["sh", "-c", "mkdir -p \"$FLOW_OUTPUT_DIR\" && exec uvicorn flow_server.api:app --host 0.0.0.0 --port ${PORT:-8001} --no-access-log"]
+CMD ["sh", "-c", "mkdir -p \"$FLOW_OUTPUT_DIR\" && exec uvicorn sarideo_extras:app --host 0.0.0.0 --port ${PORT:-8001} --no-access-log"]

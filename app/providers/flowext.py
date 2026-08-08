@@ -215,6 +215,30 @@ def _manifest(text: str, scheme: str, host: str) -> str:
 # extension either talks to Google or talks to these.
 KEYED = ("background.js", "popup.js")
 
+# Where the extension's WebSocket handler decides what a message from the
+# backend means. A branch is added just before this one.
+WS_ANCHOR = "} else if (msg.type === 'callback_config') {"
+
+# Switching Flow projects has to move the browser too: Google files a picture
+# partly by what the tab is showing, so a backend pointed at one project while
+# the tab shows another puts pictures somewhere nobody asked for. Upstream can
+# open Flow, but only the bare tool and only when the panel's button is pressed
+# — there is no way to say "open this project", and no way to say it remotely.
+OPEN_PROJECT = """} else if (msg.type === 'open_project') {
+        /* sarideo-open */
+        const wanted = 'https://labs.google/fx/tools/flow/project/' + msg.project_id;
+        chrome.tabs.query({
+          url: ['https://labs.google/fx/tools/flow*',
+                'https://labs.google/fx/*/tools/flow*'],
+        }).then((tabs) => {
+          console.log('[Flow Agent] open_project ->', wanted, 'tabs:', tabs.length);
+          if (tabs.length) return chrome.tabs.update(tabs[0].id, { url: wanted, active: true });
+          return chrome.tabs.create({ url: wanted });
+        }).catch((e) => console.error('[Flow Agent] open_project:', e));
+      %s""" % WS_ANCHOR
+
+OPEN_MARK = "/* sarideo-open */"
+
 
 def build(url: str | None = None, *, theme: bool = True,
           key: str | None = None) -> bytes:
@@ -244,6 +268,11 @@ def build(url: str | None = None, *, theme: bool = True,
                 data = _config_js(data.decode("utf-8"), host).encode("utf-8")
             elif inside == "manifest.json":
                 data = _manifest(data.decode("utf-8"), scheme, host).encode("utf-8")
+            elif inside == "background.js":
+                text = data.decode("utf-8")
+                if OPEN_MARK not in text and WS_ANCHOR in text:
+                    text = text.replace(WS_ANCHOR, OPEN_PROJECT, 1)
+                data = (shim + text).encode("utf-8")
             elif inside in KEYED and shim:
                 data = (shim + data.decode("utf-8")).encode("utf-8")
             elif inside == "popup.html" and theme:
