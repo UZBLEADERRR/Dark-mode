@@ -1902,6 +1902,35 @@ async def redo_placeholder_images(job_id: str) -> dict[str, Any]:
     return {"id": job_id, "status": "running", "scenes": wanted}
 
 
+@app.get("/api/jobs/{job_id}/prompts")
+async def scene_prompts(job_id: str) -> dict[str, Any]:
+    """The picture prompts as a flat numbered list, ready to be copied one by one.
+
+    What "men o'zim yasayman" needs to be usable: the prompts are already
+    written, but reading a hundred of them out of the scene panel one tap at a
+    time is not work anybody finishes.
+    """
+    job = store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    return pipeline.prompt_sheet(job)
+
+
+@app.get("/api/jobs/{job_id}/prompts.txt")
+async def scene_prompts_text(job_id: str) -> Response:
+    """The same sheet as a file — a phone with no clipboard manager still has files."""
+    job = store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    sheet = pipeline.prompt_sheet(job)
+    return Response(
+        content=pipeline.prompt_sheet_text(sheet).encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{job_id}-promptlar.txt"'},
+    )
+
+
 @app.post("/api/jobs/{job_id}/images", status_code=202)
 async def upload_scene_images(
     job_id: str,

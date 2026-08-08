@@ -342,6 +342,82 @@ async def arrange_uploaded_images(
             path.unlink(missing_ok=True)
 
 
+def prompt_sheet(job: dict) -> dict:
+    """Every picture this project still wants, written out to be copied by hand.
+
+    The other half of making the images yourself. The prompts already exist —
+    they are what the drawing providers are handed — but they live one per scene
+    inside a panel three taps away, which is no use to somebody working through
+    a hundred of them in another tab. This is the same prompts as a flat,
+    numbered list: paste one, draw it, next.
+
+    Numbered from one in the order the pictures are wanted, so the pile that
+    comes back is in the order the upload expects. A scene split into shots
+    contributes one entry per shot, because that is one picture each.
+    """
+    scenes = _load_scenes(job)
+    result = job.get("result") or {}
+    request = job["request"]
+    heroes = store.get_heroes(request.get("hero_ids") or [])
+    by_hero = {h["id"]: h for h in heroes}
+    fmt = config.FORMATS.get(request.get("video_format", "16:9"), config.FORMATS["16:9"])
+
+    items: list[dict] = []
+    for scene in scenes:
+        holders: list[dict | None] = list(scene.get("shots") or []) or [None]
+        for shot in holders:
+            holder = shot if shot is not None else scene
+            prompt = (holder.get("prompt") or holder.get("image_prompt")
+                      or scene.get("image_prompt") or scene.get("visual") or "").strip()
+            label = f"Sahna {scene['index'] + 1}"
+            if shot is not None and len(scene.get("shots") or []) > 1:
+                label += f" · kadr {scene['shots'].index(shot) + 1}"
+            items.append({
+                "n": len(items) + 1,
+                "scene": scene["index"],
+                "shot": scene["shots"].index(shot) if shot is not None else -1,
+                "label": label,
+                "prompt": prompt,
+                "narration": scene.get("narration", ""),
+                # Which faces this shot is supposed to contain. They have to be
+                # attached by hand wherever the drawing happens, so each one
+                # arrives with somewhere to download it from.
+                "heroes": [{"id": h, "name": by_hero[h].get("name") or h,
+                            "url": f"/api/heroes/{h}/image"}
+                           for h in scene.get("hero_ids", []) if h in by_hero],
+                "done": bool(holder.get("image_path") and not holder.get("needs_image")
+                             and not holder.get("placeholder")),
+                # What to call the file, so a folder of downloads sorts into the
+                # order the ordered upload wants without being renamed.
+                "filename": f"{len(items) + 1:03d}.png",
+            })
+
+    return {
+        "id": job["id"],
+        "title": result.get("title") or request.get("topic") or "Video",
+        "aspect": fmt["aspect"],
+        "style_bible": result.get("style_bible") or "",
+        "art_style": request.get("art_style") or "",
+        "items": items,
+        "left": sum(1 for i in items if not i["done"]),
+    }
+
+
+def prompt_sheet_text(sheet: dict) -> str:
+    """The same sheet as one block of text, for pasting or keeping in a file."""
+    lines = [sheet["title"], f"Nisbat: {sheet['aspect']}"]
+    if sheet.get("art_style"):
+        lines.append(f"Uslub: {sheet['art_style']}")
+    if sheet.get("style_bible"):
+        lines += ["", sheet["style_bible"].strip()]
+    for item in sheet["items"]:
+        lines += ["", f"--- {item['n']}. {item['label']} → {item['filename']} ---"]
+        if item["heroes"]:
+            lines.append("Qahramonlar: " + ", ".join(h["name"] for h in item["heroes"]))
+        lines.append(item["prompt"] or "(prompt yozilmagan)")
+    return "\n".join(lines) + "\n"
+
+
 def placeholder_scenes(scenes: list[dict]) -> list[int]:
     """Which scenes are showing a stand-in rather than a picture.
 
@@ -1287,6 +1363,19 @@ async def _render_images(
     work = _picture_work(targets, only_stale=only_stale, missing_only=missing_only)
     total = max(len(work), 1)
 
+    # Nobody is drawing these — the prompts are going out to a person, who will
+    # make the pictures somewhere else and upload them. Everything upstream of
+    # this call still has to happen (the prompts have to be written before they
+    # can be handed over), so the mode is honoured here rather than by skipping
+    # the call: every route into images — a first draft, a resume, a redraw —
+    # then behaves the same without knowing about it.
+    if provider == "manual":
+        for scene, shot in work:
+            (shot if shot is not None else scene)["needs_image"] = True
+        _progress(job_id, "images", base_progress + span,
+                  f"{len(work)} ta rasm sizdan kutilmoqda")
+        return warnings
+
     async def one(scene: dict, shot: dict | None) -> None:
         nonlocal done
         refs = [hero_paths[h] for h in scene.get("hero_ids", []) if h in hero_paths]
@@ -1712,7 +1801,15 @@ async def _build_from_script(job_id: str, scenes: list[dict], script: dict,
                  warnings=warnings)
     _kept_note(job_id, scenes, await keep_media(scenes, job_id))
 
-    if request.get("auto_render", True):
+    if image_provider == "manual":
+        # There is nothing to render: the pictures are the user's to make. Stop
+        # here whatever `auto_render` says — starting a render that can only fail
+        # on the missing images would bury the one thing they need to read next,
+        # which is the list of prompts.
+        _progress(job_id, "review", 72,
+                  "Promptlar tayyor — rasmlarni o'zingiz yasab yuklaysiz",
+                  status="review")
+    elif request.get("auto_render", True):
         await run_render(job_id)
     else:
         _progress(job_id, "review", 72,

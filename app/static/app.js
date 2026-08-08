@@ -28,6 +28,8 @@ const state = {
   activeId: null,
   poll: null,
   drawn: null,      // stamp of the editor currently on screen
+  sheet: null,      // the prompt sheet on screen, and the job state it was
+  sheetKey: null,   // fetched for — it is refetched only when that moves
   reveal: false,
   mark: null,       // last `updated_at` we saw, and when we saw it —
   markAt: 0,        // measured here so a server clock offset cannot skew it
@@ -909,6 +911,7 @@ const IMAGE_PROVIDER_LABELS = {
   openai: 'gpt-image-1 (OpenAI) — API',
   flow: 'Flow navbati — brauzeringiz yasaydi',
   flowagent: 'Flow Agent — o‘zi yasaydi',
+  manual: 'Men o‘zim yasayman — promptlarni beradi',
 };
 
 const OTHER_MODEL = '__other';
@@ -1782,6 +1785,16 @@ function drawStage(job) {
       ${drawnByNote(job)}
     </div>` : ''}`);
 
+  // Making the pictures by hand: the prompts are ready and this is the screen
+  // you are on when they become ready, so this is where they belong. Filled in
+  // after the card is in the document — it is a second request, and the rest of
+  // the progress card must not wait on it.
+  const manual = (job.image_provider_now || '') === 'manual';
+  const bare = (job.scenes || []).some((s) => s.needs_image || !s.image_url);
+  if (!busy && job.scene_count && (manual || bare)) {
+    p.push('<div class="sheet" id="sheet"></div>');
+  }
+
   // Scenes that ended up with a grey rectangle. Offered here because this is
   // where you find out — the counters say 18/18 and the thumbnails are grey, and
   // the only way back used to be regenerating each scene by hand.
@@ -1929,6 +1942,8 @@ function drawStage(job) {
     audio.play().catch(() => toast('Brauzer ovozni to‘sdi'));
   }));
 
+  if ($('#sheet')) loadSheet(job);
+
   // The log grows downwards, so without this the newest line is the one you
   // cannot see — which is the whole reason for watching it.
   const logs = $('#stage .logs');
@@ -1940,6 +1955,168 @@ function drawStage(job) {
     // to an element the browser has not laid out yet lands in the wrong place.
     requestAnimationFrame(() =>
       $('#stage').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }
+}
+
+// ── the prompt sheet ──────────────────────────────────────────────
+// Making the pictures somewhere else is a loop: copy a prompt, draw it, save the
+// file, next. The app used to hold up its end of that loop badly — the prompt
+// for scene 14 lived behind two taps in a panel, and there was no way to see how
+// far through the pile you were. This is the pile, flat and numbered, with the
+// upload at the bottom of it.
+
+async function loadSheet(job) {
+  const host = $('#sheet');
+  if (!host) return;
+  // Refetched only when the pictures have actually moved. `tick` redraws this
+  // card every couple of seconds and the prompts do not change that often.
+  const key = `${job.id}:${job.scene_count}:${job.progress_detail?.images_left ?? ''}`;
+  if (state.sheetKey === key && state.sheet) return drawSheet(job);
+  host.innerHTML = '<p class="note">Promptlar o‘qilmoqda…</p>';
+  try {
+    state.sheet = await api(`/api/jobs/${job.id}/prompts`);
+    state.sheetKey = key;
+    drawSheet(job);
+  } catch {
+    host.innerHTML = '';
+  }
+}
+
+function drawSheet(job) {
+  const host = $('#sheet');
+  const sheet = state.sheet;
+  if (!host || !sheet || !sheet.items?.length) { if (host) host.innerHTML = ''; return; }
+  const left = sheet.items.filter((i) => !i.done).length;
+
+  host.innerHTML = `
+    <details class="fold sheet-fold"${left ? ' open' : ''}>
+      <summary>Rasm promptlari · ${sheet.items.length} ta${
+        left ? ` — ${left} tasi hali yasalmagan` : ' — hammasi joyida'}</summary>
+      <div class="fold-body">
+        <div class="sheet-acts">
+          <button class="btn sm" data-sheet="all">Hammasini nusxalash</button>
+          <a class="btn sm ghost" href="/api/jobs/${esc(job.id)}/prompts.txt"
+             download>Matn fayli</a>
+          <label class="btn sm primary sheet-up">Rasmlarni yuklash
+            <input type="file" accept="image/*" multiple hidden data-sheet-up /></label>
+        </div>
+        <p class="note">Har bir promptni nusxalab Flow'da yasang, faylni o‘sha
+          raqam bilan saqlang, so‘ng hammasini birdan yuklang.</p>
+        <ol class="sheet-list">
+          ${sheet.items.map((it) => `
+            <li${it.done ? ' class="done"' : ''}>
+              <span class="sheet-n">${it.n}</span>
+              <div class="sheet-body">
+                <b>${esc(it.label)} · ${esc(it.filename)}</b>
+                <p>${esc(it.prompt || 'prompt yozilmagan')}</p>
+                ${it.heroes.length ? `<div class="sheet-refs">${it.heroes.map((h) =>
+                  `<a href="${esc(h.url)}" download="${esc(h.name)}.png">${esc(h.name)}</a>`
+                ).join('')}</div>` : ''}
+              </div>
+              <button class="btn sm" data-sheet-copy="${it.n}">Nusxa</button>
+            </li>`).join('')}
+        </ol>
+      </div>
+    </details>`;
+
+  host.querySelector('[data-sheet="all"]').addEventListener('click', (e) =>
+    copyText(sheet.items.map((i) => `${i.n}. ${i.prompt}`).join('\n\n'), e.currentTarget));
+  host.querySelectorAll('[data-sheet-copy]').forEach((b) => b.addEventListener('click', () => {
+    const item = sheet.items.find((i) => i.n === Number(b.dataset.sheetCopy));
+    if (item) copyText(item.prompt, b);
+  }));
+  host.querySelector('[data-sheet-up]').addEventListener('change', async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    await bulkUpload(files, job.id, sheet.items.length);
+  });
+}
+
+// ── bulk picture upload ───────────────────────────────────────────
+// Shared by the sheet above and the filmstrip in the editor: the same pile of
+// files arriving by two doors is still one question — which picture goes where.
+
+async function bulkUpload(files, jobId, wanted = 0) {
+  if (!jobId || !files.length) return;
+  // The order the browser hands over `files` is the order the folder happened to
+  // be sorted in, which is not the order they were made in. Rather than ask
+  // people to rename a hundred files, the picker below lets them be tapped into
+  // order — and tapping is the one interaction a phone is good at.
+  const picked = [];
+  const urls = files.map((f) => URL.createObjectURL(f));
+
+  const answer = await ask({
+    title: `${files.length} ta rasm`,
+    ok: 'Joylashtirish',
+    html: `<label class="f"><span>Qanday taqsimlansin</span>
+        <select name="mode">
+          <option value="pick">Men tanlagan tartibda — bosib raqamlayman</option>
+          <option value="order">Fayl tartibida — 1-rasm 1-sahnaga</option>
+          <option value="auto">AI o‘zi qarab joylashtirsin</option>
+        </select></label>
+      <div class="pick-wrap" data-pickwrap>
+        <p class="note" data-pickcount></p>
+        <div class="pick-grid">${files.map((f, i) => `
+          <button type="button" class="pick" data-pick="${i}">
+            <img src="${urls[i]}" alt="" loading="lazy" />
+            <em></em>
+          </button>`).join('')}</div>
+      </div>
+      <label class="f"><span>Qaysi sahnalarga</span>
+        <select name="scope">
+          <option value="empty">Faqat rasmi yo‘qlariga</option>
+          <option value="all">Hammasiga — borlarini ham almashtir</option>
+        </select></label>`,
+    onOpen: () => {
+      const wrap = $('#modal-body [data-pickwrap]');
+      const count = $('#modal-body [data-pickcount]');
+      const mode = $('#modal-body [name="mode"]');
+      const paint = () => {
+        $$('#modal-body .pick').forEach((btn, i) => {
+          const at = picked.indexOf(i);
+          btn.classList.toggle('on', at >= 0);
+          btn.querySelector('em').textContent = at >= 0 ? at + 1 : '';
+        });
+        count.textContent = picked.length
+          ? `${picked.length} ta tanlandi${wanted ? ` — ${wanted} ta kerak` : ''}`
+          : `Bosgan tartibingiz saqlanadi — birinchi bosganingiz 1-sahnaga tushadi.${
+              wanted ? ` Jami ${wanted} ta rasm kerak.` : ''}`;
+      };
+      $$('#modal-body .pick').forEach((btn) => btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.pick);
+        const at = picked.indexOf(i);
+        if (at >= 0) picked.splice(at, 1); else picked.push(i);
+        paint();
+      }));
+      mode.addEventListener('change', () =>
+        wrap.classList.toggle('hidden', mode.value !== 'pick'));
+      paint();
+    },
+  });
+  urls.forEach(URL.revokeObjectURL);
+  if (!answer) return;
+
+  // Tapped order is file order once the files are sent in that order, so the
+  // server never has to learn a third arrangement mode.
+  let sending = files;
+  if (answer.mode === 'pick') {
+    if (!picked.length) { toast('Hech qaysi rasm tanlanmadi'); return; }
+    sending = picked.map((i) => files[i]);
+  }
+
+  const body = new FormData();
+  sending.forEach((file) => body.append('images', file));
+  body.append('mode', answer.mode === 'auto' ? 'auto' : 'order');
+  body.append('scope', answer.scope || 'empty');
+  try {
+    if (ED.job?.id === jobId) await flush();
+    await api(`/api/jobs/${jobId}/images`, { method: 'POST', body });
+    state.drawn = null;
+    state.sheetKey = null;
+    watch(jobId);
+    toast(`${sending.length} ta rasm qabul qilindi — joylashtirilmoqda`);
+  } catch (err) {
+    toast(err.message);
   }
 }
 
@@ -2579,42 +2756,9 @@ $('#add-scene').addEventListener('click', async () => {
 $('#bulk-file').addEventListener('change', async (e) => {
   const files = [...e.target.files];
   e.target.value = '';
-  if (!ED.job || !files.length) return;
-
-  const bare = ED.scenes.filter((s) => s.needs_image || !s.image_url).length;
-  const answer = await ask({
-    title: `${files.length} ta rasm`,
-    ok: 'Joylashtirish',
-    html: `<label class="f"><span>Qanday taqsimlansin</span>
-        <select name="mode">
-          <option value="auto">AI o‘zi qarab joylashtirsin</option>
-          <option value="order">Fayl tartibida — 1-rasm 1-sahnaga</option>
-        </select></label>
-      <label class="f"><span>Qaysi sahnalarga</span>
-        <select name="scope">
-          <option value="empty">Faqat rasmi yo‘qlariga${bare ? ` (${bare} ta)` : ''}</option>
-          <option value="all">Hammasiga — borlarini ham almashtir</option>
-        </select></label>
-      <small class="note">AI usuli har bir rasmga qarab, qaysi sahnaning
-        promptiga to‘g‘ri kelishini o‘zi topadi — fayl nomlari muhim emas.
-        Fayl tartibi esa promptlarni ketma-ket bajarib chiqqan bo‘lsangiz
-        to‘g‘ri keladi va model chaqirmaydi.</small>`,
-  });
-  if (!answer) return;
-
-  const body = new FormData();
-  files.forEach((file) => body.append('images', file));
-  body.append('mode', answer.mode || 'auto');
-  body.append('scope', answer.scope || 'empty');
-  try {
-    await flush();
-    await api(`/api/jobs/${ED.job.id}/images`, { method: 'POST', body });
-    state.drawn = null;
-    watch(ED.job.id);
-    toast(`${files.length} ta rasm qabul qilindi — joylashtirilmoqda`);
-  } catch (err) {
-    editorError(err.message);
-  }
+  if (!ED.job) return;
+  await bulkUpload(files, ED.job.id,
+    ED.scenes.filter((s) => s.needs_image || !s.image_url).length);
 });
 
 // ── scene preview ─────────────────────────────────────────────────
