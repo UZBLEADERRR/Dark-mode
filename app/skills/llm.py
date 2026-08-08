@@ -156,7 +156,7 @@ def _to_gemini_schema(schema: Any) -> Any:
     return out
 
 
-def _wobble(exc: Exception, model: str) -> str:
+def _wobble(exc: Exception, model: str, waited: float = 0.0) -> str:
     """A network failure as a sentence somebody can act on.
 
     `str(httpx.ReadTimeout())` is the empty string, so every one of these used to
@@ -164,10 +164,23 @@ def _wobble(exc: Exception, model: str) -> str:
     was being asked for, nor of whom, nor what to do about it.
     """
     if isinstance(exc, httpx.TimeoutException):
-        return (f"'{model}' 5 daqiqada javob bermadi. Model band bo'lishi mumkin "
-                f"— «Davom ettirish» ni bosing, tayyor bo'lganlari saqlanadi.")
+        return (f"'{model}' {waited:.0f} soniyada javob bermadi. Bu model uzoq "
+                f"o'ylaydi — Kutubxona → Modellar dan tezrog'ini tanlang, yoki "
+                f"«Davom ettirish» ni bosing; tayyor bo'lganlari saqlanadi.")
     said = " ".join(str(exc).split()) or exc.__class__.__name__
     return f"'{model}' bilan aloqa uzildi: {said}"
+
+
+# Marks a response this module made up rather than one a provider sent. A model
+# that answered "I am busy" is worth asking again in two seconds; a model that
+# said nothing at all for two minutes will say nothing again, and asking it
+# twice more is four more minutes of a bar not moving. Same status, different
+# thing, so the difference is written down.
+QUIET = "x-sarideo-quiet"
+
+
+def _went_quiet(resp: httpx.Response) -> bool:
+    return resp.headers.get(QUIET) == "1"
 
 
 def _as_response(status: int, detail: str, request: dict) -> httpx.Response:
@@ -179,7 +192,7 @@ def _as_response(status: int, detail: str, request: dict) -> httpx.Response:
     went quiet never costs a working key its place in the rotation.
     """
     return httpx.Response(
-        status, text=detail,
+        status, text=detail, headers={QUIET: "1"},
         request=httpx.Request("POST", "https://sarideo.local/llm", json=request),
     )
 
@@ -188,6 +201,7 @@ async def _gemini_call(
     client: httpx.AsyncClient, model: str, system: str, user: str,
     schema: dict | None, max_tokens: int,
     images: list[tuple[bytes, str]] | None = None, secret: str = "",
+    patience: float | None = None,
 ) -> httpx.Response:
     generation: dict[str, Any] = {"maxOutputTokens": max_tokens, "temperature": 0.9}
     if schema:
@@ -205,12 +219,14 @@ async def _gemini_call(
         "contents": [{"role": "user", "parts": parts}],
         "generationConfig": generation,
     }
+    wait = config.LLM_TIMEOUT if patience is None else patience
     try:
         return await client.post(
             f"{config.GEMINI_BASE}/models/{model}:generateContent",
             headers={"x-goog-api-key": secret or config.key("gemini"),
                      "Content-Type": "application/json"},
             json=request,
+            timeout=httpx.Timeout(wait, connect=30.0),
         )
     except (httpx.TimeoutException, httpx.TransportError) as exc:
         # A request that accepted the connection and then said nothing is the
@@ -219,7 +235,7 @@ async def _gemini_call(
         # response rather than raised so it goes down that path instead of
         # ending the whole video — which is what it did, under the name
         # "ReadTimeout" and nothing else, because httpx leaves the message empty.
-        return _as_response(504, _wobble(exc, model), request)
+        return _as_response(504, _wobble(exc, model, wait), request)
 
 
 # Google's side, not ours, and Google says to try again. Kept apart from 429:
@@ -240,14 +256,19 @@ async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int,
         raise LLMError("Gemini kaliti yo'q — kutubxonadan qo'shing yoki "
                        "GEMINI_API_KEY ni sozlang.")
 
-    timeout = httpx.Timeout(300.0, connect=30.0)
+    timeout = httpx.Timeout(config.LLM_TIMEOUT, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         # One key for the whole ladder below: the fallbacks are about the model
         # not accepting the request, so changing key mid-ladder would confuse
         # "this model won't do it" with "this key can't right now".
+        #
+        # The preferred model gets the shorter leash. It is a reasoning model
+        # and can think for minutes before writing a word; the fallback answers
+        # in seconds. Waiting the full patience here before even trying the fast
+        # one is five minutes of a progress bar not moving.
         resp = await _gemini_call(
             client, config.model("gemini_text"), system, user, schema, max_tokens,
-            images, secret
+            images, secret, patience=config.LLM_FIRST_WAIT
         )
 
         # "This model is currently experiencing high demand … please try again
@@ -257,12 +278,17 @@ async def _gemini(system: str, user: str, schema: dict | None, max_tokens: int,
         for attempt in range(_BUSY_TRIES):
             if resp.status_code not in _BUSY:
                 break
+            # Silence is not the same as "busy, try again". Asking a model that
+            # has already ignored us for two minutes to do it twice more is six
+            # minutes before the fast model is even tried.
+            if _went_quiet(resp):
+                break
             # Jittered, because a video asks for several of these at once and
             # three requests retrying in lockstep is the same spike again.
             await asyncio.sleep(2 * (attempt + 1) + random.uniform(0, 1.5))
             resp = await _gemini_call(
                 client, config.model("gemini_text"), system, user, schema,
-                max_tokens, images, secret
+                max_tokens, images, secret, patience=config.LLM_FIRST_WAIT
             )
 
         # Still busy, or out of allowance for the minute: the fallback is a
@@ -374,9 +400,10 @@ async def _openai(system: str, user: str, schema: dict | None, max_tokens: int,
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             # Same as the Gemini side: a silence is reported as a sentence and
             # retried once, rather than ending the run under a bare class name.
-            return _as_response(504, _wobble(exc, config.model("openai_text")), payload)
+            return _as_response(504, _wobble(exc, config.model("openai_text"),
+                                             config.LLM_TIMEOUT), payload)
 
-    timeout = httpx.Timeout(300.0, connect=30.0)
+    timeout = httpx.Timeout(config.LLM_TIMEOUT, connect=30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await send(body)
 
