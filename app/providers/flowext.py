@@ -40,13 +40,16 @@ MARK = "/* sarideo-theme */"
 # redesign inherits the colours rather than fighting them.
 THEME = f"""
 <style>{MARK}
+/* Opaque, not translucent. Their cards are stacked inside one another, so a
+   card at 85% opacity sits on top of another one and comes out grey — which is
+   how a "dark" panel ends up looking washed out rather than black. */
 :root {{
   color-scheme: dark;
-  --bg: #08090c !important;
-  --surface: #101219 !important;
-  --card: rgba(23, 26, 35, .85) !important;
-  --card-hover: rgba(29, 33, 43, .95) !important;
-  --border: rgba(255, 255, 255, .08) !important;
+  --bg: #06070a !important;
+  --surface: #0b0d12 !important;
+  --card: #101219 !important;
+  --card-hover: #171a23 !important;
+  --border: rgba(255, 255, 255, .07) !important;
   --accent: #ff5c47 !important;
   --green: #3ddc91 !important;
   --red: #ff5c47 !important;
@@ -55,6 +58,7 @@ THEME = f"""
   --text-dim: #b3bbcc !important;
   --muted: #7c8497 !important;
 }}
+html, body {{ background: var(--bg) !important; }}
 header {{ background: var(--surface) !important; }}
 header img {{ mix-blend-mode: normal !important; }}
 input, textarea, select {{
@@ -76,11 +80,28 @@ input, textarea, select {{
 }}
 .type-switch, .result-preview, .media-item img, .media-item video,
 .metric-mini {{
-  background: #0d0f15 !important;
+  background: #06070a !important;
 }}
 .select-choice:hover {{ background: var(--card-hover) !important; }}
-.settings-card input {{ background: #171a23 !important; }}
-.settings-card input:focus {{ background: #1d212b !important; }}
+.settings-card input {{ background: #06070a !important; }}
+.settings-card input:focus {{ background: #101219 !important; }}
+/* The largest pale surface on the panel was not a background *colour* at all —
+   `.quick-panel` paints a white-to-white gradient, which no amount of setting
+   background-color reaches. Gradients are dropped wholesale; none of them is
+   carrying meaning, and any that stayed would be a white block on a black page. */
+.quick-panel, .tabs, .monitor-card, .monitor-actions, .settings-card,
+.result-card, .media-item, .history-head, header, main, section, .tab-panel {{
+  background-image: none !important;
+}}
+.quick-panel {{ background-color: var(--surface) !important; }}
+/* Their shadows are near-black spread over a white ground. On a black ground
+   they are invisible at best and a grey halo at worst. */
+* {{ box-shadow: none !important; }}
+/* Everything that separated a card from a white page has to do it against a
+   black one instead, which is a border rather than a shadow. */
+.monitor-card, .settings-card, .result-card, .media-item, .header-badge {{
+  border: 1px solid var(--border) !important;
+}}
 </style>
 """
 

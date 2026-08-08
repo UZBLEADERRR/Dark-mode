@@ -26,6 +26,11 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app ./app
+# Flow Agent's browser extension, handed out from the library already pointed at
+# this deployment. It is data the app serves, not code it imports, which is
+# exactly why it was missed: `COPY app` alone left the panel reporting the files
+# as missing on every deploy while they sat there in the repository.
+COPY flowagent/upstream/flow-extension ./flowagent/upstream/flow-extension
 
 RUN mkdir -p /data
 
