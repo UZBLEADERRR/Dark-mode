@@ -80,13 +80,13 @@ GEMINI_TEXT_MODEL = _env("GEMINI_TEXT_MODEL", "gemini-3.1-pro-preview")
 GEMINI_TEXT_FALLBACK = _env("GEMINI_TEXT_FALLBACK", "gemini-2.5-flash")
 
 # --- image generation --------------------------------------------------------
-# gemini | fal | openai | flow | flowagent
+# gemini | fal | openai | flow | flowagent | manual
 IMAGE_PROVIDER = _env("IMAGE_PROVIDER", "gemini").lower()
 # What the environment asked for, kept apart from what is in force. Switching to
 # `flow` from the app has to be reversible without knowing what it was before —
 # and "before" is this, not whatever was last chosen.
 IMAGE_PROVIDER_ENV = IMAGE_PROVIDER
-IMAGE_PROVIDERS = ("gemini", "fal", "openai", "flow", "flowagent")
+IMAGE_PROVIDERS = ("gemini", "fal", "openai", "flow", "flowagent", "manual")
 
 # Flow Agent — the same Google Flow subscription, reached through its own backend
 # instead of through a browser this app is driving. `flow` parks a prompt and
@@ -543,6 +543,11 @@ def image_provider_ready(provider: str | None = None) -> bool:
     # not for this function.
     if provider == "flowagent":
         return bool(FLOW_AGENT_URL)
+    # `manual` draws nothing at all: the draft stops at the pictures and hands
+    # over the prompts, and the pictures come back as an upload. There is nothing
+    # it could fail to be ready for.
+    if provider == "manual":
+        return True
     return has_key(provider) if provider in {"gemini", "fal", "openai"} else False
 
 
