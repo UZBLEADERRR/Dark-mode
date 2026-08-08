@@ -974,6 +974,28 @@ def update_job(
         )
 
 
+def clear_logs(job_id: str) -> bool:
+    """Throw away a job's diary and the complaints that came with it.
+
+    A project that has been carried across three providers keeps every failure
+    any of them ever reported, and they stay on screen long after they have
+    stopped being true — the errors from the provider you left are not news
+    about the one you moved to. The work itself is untouched; this is the log
+    and the warnings, nothing else.
+    """
+    with _conn() as conn:
+        row = conn.execute("SELECT result FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            return False
+        result = json.loads(row["result"] or "{}")
+        result["warnings"] = []
+        cur = conn.execute(
+            "UPDATE jobs SET logs = ?, error = '', result = ?, updated_at = ? WHERE id = ?",
+            ("[]", json.dumps(result), _now(), job_id),
+        )
+        return cur.rowcount > 0
+
+
 def replace_request(job_id: str, request: dict[str, Any]) -> bool:
     """Rewrite a job's settings in place — used when the editor changes the look."""
     with _conn() as conn:

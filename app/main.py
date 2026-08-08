@@ -1926,6 +1926,21 @@ async def redo_placeholder_images(job_id: str) -> dict[str, Any]:
     return {"id": job_id, "status": "running", "scenes": wanted}
 
 
+@app.delete("/api/jobs/{job_id}/logs")
+async def clear_job_logs(job_id: str) -> dict[str, Any]:
+    """Empty a project's journal and clear the warnings stuck to it.
+
+    Warnings are sticky on purpose — a picture that came out wrong should not
+    stop saying so. The cost is that a project moved between providers carries
+    every complaint the old one ever made, and those are not news about the new
+    one. Nothing that was made is touched.
+    """
+    if store.get_job(job_id) is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found.")
+    store.clear_logs(job_id)
+    return {"id": job_id, "cleared": True}
+
+
 @app.get("/api/jobs/{job_id}/prompts")
 async def scene_prompts(job_id: str) -> dict[str, Any]:
     """The picture prompts as a flat numbered list, ready to be copied one by one.
