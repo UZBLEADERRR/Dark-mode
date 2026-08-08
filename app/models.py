@@ -269,6 +269,11 @@ class ScenePatch(BaseModel):
 class RegenerateRequest(BaseModel):
     image: bool = True
     voice: bool = False
+    # What is wrong with the picture that is there. Drawing the same prompt again
+    # and hoping for a better roll is the expensive way to fix "his jacket is the
+    # wrong colour" — saying so is the cheap one. Kept on the scene, so it still
+    # applies the next time this scene is drawn.
+    note: str = Field(default="", max_length=600)
     # Re-recording is the moment you discover the voice was wrong, so the voice
     # can be changed here. Both apply to the whole video rather than this scene
     # alone: one narrator who changes halfway through is a defect, not a feature.
