@@ -261,12 +261,13 @@ function go(view) {
   closeSheet();
   drawDock();
   scrollTo({ top: 0, behavior: 'instant' in document.documentElement.style ? 'instant' : 'auto' });
-  if (view === 'edit' || view === 'ready') loadJobs();
+  if (view === 'edit' || view === 'ready' || view === 'run') loadJobs();
   // A plan changes on its own — the loop builds it while nobody is looking — so
   // arriving here always asks rather than drawing what was true last time.
   if (view === 'plans') loadPlans();
   else followPlans();
   drawEditEmpty();
+  drawRunEmpty();
   // The channels may have been added from another device, or the conversation
   // continued there — this screen is the same conversation wherever it is opened.
   if (view === 'chat') { loadProfiles(); growChatInput(); }
@@ -1489,7 +1490,7 @@ async function submitDub() {
   if ($('#tts_provider').value) body.append('tts_provider', $('#tts_provider').value);
   if ($('#voice_id').value) body.append('voice_id', $('#voice_id').value);
   const job = await api('/api/dub', { method: 'POST', body });
-  go('edit');
+  go('run');
   watch(job.id, { reveal: true });
 }
 
@@ -1511,7 +1512,7 @@ async function submitSubtitle() {
   body.append('render_speed', state.speed);
   body.append('topic', file.name.replace(/\.[^.]+$/, ''));
   const job = await api('/api/videos/subtitle', { method: 'POST', body });
-  go('edit');
+  go('run');
   watch(job.id, { reveal: true });
 }
 
@@ -1609,7 +1610,7 @@ $('#submit-btn').addEventListener('click', async () => {
         }),
       });
     }
-    go('edit');
+    go('run');
     watch(job.id, { reveal: true });
   } catch (e) {
     err.textContent = e.message;
@@ -1679,7 +1680,12 @@ function watch(jobId, { reveal = false } = {}) {
   state.drawn = null;
   state.reveal = reveal;
   $('#stage').classList.remove('hidden');
+  // A different project's frame must not be left on screen while the new one's
+  // first picture is still being fetched.
+  $('#run-live').innerHTML = '';
   drawEditEmpty();
+  drawRunEmpty();
+  drawRunChips();
   if (state.poll) clearInterval(state.poll);
   tick();
   state.poll = setInterval(tick, 2500);
@@ -1703,6 +1709,7 @@ async function tick() {
   if (!state.activeId) return;
   try {
     const job = await api(`/api/jobs/${state.activeId}`);
+    drawLive(job);
     drawStage(job);
     syncEditor(job);
     if (SETTLED.includes(job.status)) {
@@ -1740,6 +1747,96 @@ async function stopJob(id, button) {
     button.textContent = 'To‘xtatish';
     toast(e.message);
   }
+}
+
+// ── the live frame ────────────────────────────────────────────────
+// The one thing that should never leave the screen while a video is being made:
+// what it looks like so far. It used to be buried under the progress card, and
+// once finished the film sat inside markup that the poll rewrote wholesale —
+// so a <video> two seconds into playing was replaced by a fresh one at zero.
+// Built once, then only the attributes that changed are touched.
+
+function drawLive(job) {
+  const host = $('#run-live');
+  if (!host) return;
+  const shots = (job.scenes || []).filter((s) => s.image_url);
+  const newest = shots.at(-1);
+  const show = Boolean(job.video_url || newest);
+  host.classList.toggle('hidden', !show);
+  if (!show) return;
+
+  if (!host.firstChild) {
+    host.innerHTML = `<div class="live-frame">
+        <img id="live-img" alt="" />
+        <video id="live-vid" class="hidden" controls playsinline preload="metadata"></video>
+      </div>
+      <div class="live-say"><span id="live-what"></span>
+        <button class="btn sm ghost" id="live-edit">Tahrirlash</button></div>`;
+    $('#live-edit').addEventListener('click', () => {
+      go('edit');
+      if (state.activeId) watch(state.activeId, { reveal: true });
+    });
+  }
+
+  const shape = (state.health?.formats || []).find((f) => f.id === job.video_format)
+    || { width: 1920, height: 1080 };
+  $('.live-frame').style.setProperty('--ar', (shape.width / shape.height).toFixed(4));
+
+  const vid = $('#live-vid');
+  const img = $('#live-img');
+  if (job.video_url) {
+    // `getAttribute`, not `.src`: the property is resolved to an absolute URL,
+    // so comparing it to the relative one the server sends never matches and
+    // the video would be reloaded on every poll.
+    if (vid.getAttribute('src') !== job.video_url) vid.setAttribute('src', job.video_url);
+    vid.classList.remove('hidden');
+    img.classList.add('hidden');
+    $('#live-what').textContent = 'Tayyor video';
+  } else {
+    if (newest && img.getAttribute('src') !== newest.image_url) img.src = newest.image_url;
+    img.classList.toggle('hidden', !newest);
+    vid.classList.add('hidden');
+    $('#live-what').textContent = newest
+      ? `Sahna ${newest.index + 1} — hozircha shu yerda` : '';
+  }
+}
+
+/** The projects worth switching between while something is being made. */
+function drawRunChips() {
+  const host = $('#run-chips');
+  if (!host) return;
+  const live = state.jobs.filter((j) => BUSY.includes(j.status) || j.status === 'review');
+  // The one being watched belongs here even when it has finished — otherwise
+  // the chip you are standing on disappears the moment the render succeeds.
+  const open = state.jobs.find((j) => j.id === state.activeId);
+  const rows = open && !live.some((j) => j.id === open.id) ? [open, ...live] : live;
+  host.classList.toggle('hidden', rows.length < 2);
+  host.innerHTML = rows.map((j) => `
+    <button class="runchip${j.id === state.activeId ? ' on' : ''}" data-run="${esc(j.id)}">
+      <i class="dot ${esc(j.status)}"></i>${esc(j.title || j.topic || j.id)}
+      <em>${j.progress ?? 0}%</em>
+    </button>`).join('');
+  $$('#run-chips [data-run]').forEach((b) =>
+    b.addEventListener('click', () => watch(b.dataset.run, { reveal: true })));
+}
+
+/** What the progress screen shows when nothing is being made. */
+function drawRunEmpty() {
+  const empty = $('#run-empty');
+  if (!empty) return;
+  const show = state.view === 'run' && !state.activeId;
+  empty.classList.toggle('hidden', !show);
+  if (!show) return;
+  const pick = state.jobs.find((j) => BUSY.includes(j.status))
+    || state.jobs.find((j) => j.status === 'review');
+  $('#run-empty-acts').innerHTML = [
+    pick ? `<button class="btn primary" data-open-run="${esc(pick.id)}">${
+      esc(pick.title || pick.topic || 'Loyiha')} — kuzatish</button>` : '',
+    '<button class="btn" data-go="create">Yangi video</button>',
+    '<button class="btn ghost" data-go="edit">Tahrirlashga o‘tish</button>',
+  ].join('');
+  $$('#run-empty-acts [data-open-run]').forEach((b) =>
+    b.addEventListener('click', () => watch(b.dataset.openRun, { reveal: true })));
 }
 
 function drawStage(job) {
@@ -1792,7 +1889,7 @@ function drawStage(job) {
   const manual = (job.image_provider_now || '') === 'manual';
   const bare = (job.scenes || []).some((s) => s.needs_image || !s.image_url);
   if (!busy && job.scene_count && (manual || bare)) {
-    p.push('<div class="sheet" id="sheet"></div>');
+    p.push('<div class="prompts" id="prompts"></div>');
   }
 
   // Scenes that ended up with a grey rectangle. Offered here because this is
@@ -1879,8 +1976,9 @@ function drawStage(job) {
   }
 
   if (job.status === 'done' && job.video_url) {
-    p.push(`<video controls playsinline preload="metadata" src="${esc(job.video_url)}"></video>
-      <div class="acts">
+    // No player here — the live frame above this card is holding it, and two
+    // copies of the same film on one screen is one copy too many.
+    p.push(`<div class="acts">
         <a class="btn primary" href="${esc(job.download_url || job.video_url)}" download>Videoni yuklab olish</a>
         <span class="subs">Subtitr:
           <a href="/api/jobs/${esc(job.id)}/subtitles.srt" download>.srt</a>
@@ -1942,7 +2040,7 @@ function drawStage(job) {
     audio.play().catch(() => toast('Brauzer ovozni to‘sdi'));
   }));
 
-  if ($('#sheet')) loadSheet(job);
+  if ($('#prompts')) loadSheet(job);
 
   // The log grows downwards, so without this the newest line is the one you
   // cannot see — which is the whole reason for watching it.
@@ -1966,7 +2064,7 @@ function drawStage(job) {
 // upload at the bottom of it.
 
 async function loadSheet(job) {
-  const host = $('#sheet');
+  const host = $('#prompts');
   if (!host) return;
   // Refetched only when the pictures have actually moved. `tick` redraws this
   // card every couple of seconds and the prompts do not change that often.
@@ -1983,49 +2081,49 @@ async function loadSheet(job) {
 }
 
 function drawSheet(job) {
-  const host = $('#sheet');
+  const host = $('#prompts');
   const sheet = state.sheet;
   if (!host || !sheet || !sheet.items?.length) { if (host) host.innerHTML = ''; return; }
   const left = sheet.items.filter((i) => !i.done).length;
 
   host.innerHTML = `
-    <details class="fold sheet-fold"${left ? ' open' : ''}>
+    <details class="fold pr-fold"${left ? ' open' : ''}>
       <summary>Rasm promptlari · ${sheet.items.length} ta${
         left ? ` — ${left} tasi hali yasalmagan` : ' — hammasi joyida'}</summary>
       <div class="fold-body">
-        <div class="sheet-acts">
-          <button class="btn sm" data-sheet="all">Hammasini nusxalash</button>
+        <div class="pr-acts">
+          <button class="btn sm" data-pr="all">Hammasini nusxalash</button>
           <a class="btn sm ghost" href="/api/jobs/${esc(job.id)}/prompts.txt"
              download>Matn fayli</a>
-          <label class="btn sm primary sheet-up">Rasmlarni yuklash
-            <input type="file" accept="image/*" multiple hidden data-sheet-up /></label>
+          <label class="btn sm primary pr-up">Rasmlarni yuklash
+            <input type="file" accept="image/*" multiple hidden data-pr-up /></label>
         </div>
         <p class="note">Har bir promptni nusxalab Flow'da yasang, faylni o‘sha
           raqam bilan saqlang, so‘ng hammasini birdan yuklang.</p>
-        <ol class="sheet-list">
+        <ol class="pr-list">
           ${sheet.items.map((it) => `
             <li${it.done ? ' class="done"' : ''}>
-              <span class="sheet-n">${it.n}</span>
-              <div class="sheet-body">
+              <span class="pr-n">${it.n}</span>
+              <div class="pr-body">
                 <b>${esc(it.label)} · ${esc(it.filename)}</b>
                 <p>${esc(it.prompt || 'prompt yozilmagan')}</p>
-                ${it.heroes.length ? `<div class="sheet-refs">${it.heroes.map((h) =>
+                ${it.heroes.length ? `<div class="pr-refs">${it.heroes.map((h) =>
                   `<a href="${esc(h.url)}" download="${esc(h.name)}.png">${esc(h.name)}</a>`
                 ).join('')}</div>` : ''}
               </div>
-              <button class="btn sm" data-sheet-copy="${it.n}">Nusxa</button>
+              <button class="btn sm" data-pr-copy="${it.n}">Nusxa</button>
             </li>`).join('')}
         </ol>
       </div>
     </details>`;
 
-  host.querySelector('[data-sheet="all"]').addEventListener('click', (e) =>
+  host.querySelector('[data-pr="all"]').addEventListener('click', (e) =>
     copyText(sheet.items.map((i) => `${i.n}. ${i.prompt}`).join('\n\n'), e.currentTarget));
-  host.querySelectorAll('[data-sheet-copy]').forEach((b) => b.addEventListener('click', () => {
-    const item = sheet.items.find((i) => i.n === Number(b.dataset.sheetCopy));
+  host.querySelectorAll('[data-pr-copy]').forEach((b) => b.addEventListener('click', () => {
+    const item = sheet.items.find((i) => i.n === Number(b.dataset.prCopy));
     if (item) copyText(item.prompt, b);
   }));
-  host.querySelector('[data-sheet-up]').addEventListener('change', async (e) => {
+  host.querySelector('[data-pr-up]').addEventListener('change', async (e) => {
     const files = [...e.target.files];
     e.target.value = '';
     await bulkUpload(files, job.id, sheet.items.length);
@@ -4031,7 +4129,13 @@ function drawEditEmpty() {
 async function loadJobs() {
   state.jobs = await api('/api/jobs');
 
-  const live = state.jobs.filter((j) => BUSY.includes(j.status) || j.status === 'review').length;
+  // Two different counts, because they are now two different screens: how many
+  // are moving, and how many there are to open.
+  const busy = state.jobs.filter((j) => BUSY.includes(j.status)).length;
+  $('#run-badge').textContent = busy;
+  $('#run-badge').classList.toggle('hidden', !busy);
+
+  const live = state.jobs.filter((j) => j.status === 'review').length;
   $('#jobs-badge').textContent = live;
   $('#jobs-badge').classList.toggle('hidden', !live);
 
@@ -4040,25 +4144,51 @@ async function loadJobs() {
   $('#ready-badge').classList.toggle('hidden', !done.length);
 
   drawEditEmpty();
+  drawRunEmpty();
+  drawRunChips();
 
-  // A strip of projects, newest first — pick one and the studio below is it.
-  $('#jobs-list').innerHTML = state.jobs.length
-    ? state.jobs.map((j) => `
+  drawProjects();
+
+  autoProjects();
+  syncProjectsHead();
+  drawReady(done);
+}
+
+// What this list is for changed when the progress card moved out of this screen:
+// it is no longer "which video is running", it is "which finished video am I
+// opening" — so the ones there is something to edit come first, and once there
+// are enough of them to lose one in, they can be searched.
+const EDITABLE_FIRST = { review: 0, done: 1, failed: 2, cancelled: 2 };
+
+function drawProjects() {
+  const find = ($('#projects-find')?.value || '').trim().toLowerCase();
+  $('#projects-find').hidden = state.jobs.length < 6;
+
+  const rows = state.jobs
+    .filter((j) => !find || (j.title || j.topic || '').toLowerCase().includes(find))
+    .slice()
+    .sort((a, b) => (EDITABLE_FIRST[a.status] ?? 3) - (EDITABLE_FIRST[b.status] ?? 3));
+
+  $('#jobs-list').innerHTML = rows.length
+    ? rows.map((j) => `
         <button class="proj${j.id === state.activeId ? ' on' : ''}" data-job="${esc(j.id)}">
           <span class="tag ${esc(j.status)}">${esc(STATUS[j.status] || j.status)}</span>
           <b>${esc(j.title || j.topic || j.id)}</b>
-          <small>${esc(j.video_format)}${j.duration ? ` · ${clock(j.duration)}` : ''}</small>
+          <small>${esc(j.video_format)}${j.duration ? ` · ${clock(j.duration)}` : ''}${
+            j.scene_count ? ` · ${j.scene_count} sahna` : ''}</small>
           <i class="x" data-del-job="${esc(j.id)}" role="button" aria-label="O‘chirish">×</i>
         </button>`).join('')
-    : '<p class="empty">Hali loyiha yo‘q. «Yaratish» bo‘limidan boshlang.</p>';
+    : `<p class="empty">${state.jobs.length
+        ? 'Bunday nomli loyiha topilmadi.'
+        : 'Hali loyiha yo‘q. «Yaratish» bo‘limidan boshlang.'}</p>`;
 
-  $$('[data-job]').forEach((row) => row.addEventListener('click', (e) => {
+  $$('#jobs-list [data-job]').forEach((row) => row.addEventListener('click', (e) => {
     if (e.target.closest('[data-del-job]')) return;
     go('edit');
     watch(row.dataset.job, { reveal: true });
   }));
 
-  $$('[data-del-job]').forEach((b) => b.addEventListener('click', async (e) => {
+  $$('#jobs-list [data-del-job]').forEach((b) => b.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!confirm('Loyihani o‘chirasizmi?')) return;
     await api(`/api/jobs/${b.dataset.delJob}`, { method: 'DELETE' });
@@ -4071,11 +4201,9 @@ async function loadJobs() {
     }
     loadJobs();
   }));
-
-  autoProjects();
-  syncProjectsHead();
-  drawReady(done);
 }
+
+$('#projects-find')?.addEventListener('input', () => drawProjects());
 
 // The strip used to hold the top of the screen open whatever you were doing.
 // It is a way back to another project, so it folds — and it names what is
@@ -4280,7 +4408,7 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
           music_start: Number(answer.music_start) || 0,
         }),
       });
-      go('edit');
+      go('run');
       watch(b.dataset.music, { reveal: true });
       toast(answer.music_id ? 'Musiqa mikslanmoqda' : 'Musiqa olib tashlanmoqda');
     } catch (e) {
@@ -4295,7 +4423,7 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
     b.textContent = 'Yaratilmoqda…';
     try {
       await api(`/api/jobs/${b.dataset.thumbs}/thumbnails`, { method: 'POST' });
-      go('edit');
+      go('run');
       watch(b.dataset.thumbs, { reveal: true });
       toast('Uchta muqova tayyorlanmoqda');
     } catch (e) {
@@ -4337,7 +4465,7 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
         }),
       });
       await loadJobs();
-      go('edit');
+      go('run');
       watch(clone.id, { reveal: true });
       toast('Tarjima tayyor — endi render qiling');
     } catch (e) {
@@ -4378,7 +4506,7 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
         }),
       });
       await loadJobs();
-      go('edit');
+      go('run');
       watch(clone.id, { reveal: true });
       toast('Nusxa tayyor — endi render qiling');
     } catch (e) {
@@ -4560,7 +4688,7 @@ function drawChat() {
       + `${idea.seconds} soniya. Shuni qilamiz.`);
   }));
   $$('#chat-log [data-open-job]').forEach((b) => b.addEventListener('click', () => {
-    go('edit');
+    go('run');
     watch(b.dataset.openJob, { reveal: true });
   }));
 
@@ -4761,7 +4889,7 @@ function drawPlans() {
     </article>`).join('');
 
   $$('#plans-list [data-open-plan]').forEach((b) => b.addEventListener('click', () => {
-    go('edit');
+    go('run');
     watch(b.dataset.openPlan, { reveal: true });
   }));
 
@@ -5147,7 +5275,7 @@ async function cutShorts(job) {
       }),
     });
     await loadJobs();
-    go('edit');
+    go('run');
     watch(made.id, { reveal: true });
     toast('Short kesildi — render boshlandi');
   } catch (e) {
@@ -5558,20 +5686,20 @@ $('#key-form')?.addEventListener('submit', async (e) => {
     const busy = state.jobs.find((j) => BUSY.includes(j.status));
 
     if (mine && BUSY.includes(mine.status)) {
-      go('edit');
+      go('run');
       watch(mine.id);
     } else if (mine && SETTLED.includes(mine.status)) {
       // It finished while you were away. Say so and show it, rather than
       // dropping you on the composer as though nothing had happened.
       remember(null);
-      go('edit');
+      go('run');
       state.activeId = mine.id;
       state.reveal = true;
       $('#stage').classList.remove('hidden');
       tick();
       toast(mine.status === 'done' ? 'Videongiz tayyor bo‘libdi' : 'Ish tugagan');
     } else if (busy) {
-      go('edit');
+      go('run');
       watch(busy.id);
     }
   } catch (e) {

@@ -1103,6 +1103,63 @@ label.frame-add svg {
 }
 .made-strip .hear:hover { color: var(--accent); }
 
+/* ── the live frame ───────────────────────────────────────────────
+   The one thing that stays on screen while a video is being made. Sticky, so
+   scrolling down to read the log does not take the picture away with it. */
+.livebox { margin-bottom: 14px; }
+/* The frame takes the video's own shape, capped by height — a 9:16 short at
+   full width would be taller than the phone showing it, which is exactly the
+   screenful the progress card needs. */
+.live-frame {
+  --ar: 1.7778;
+  position: relative; aspect-ratio: var(--ar);
+  width: min(100%, calc(56vh * var(--ar)));
+  margin: 0 auto;
+  border-radius: var(--r); overflow: hidden;
+  background: #000; border: 1px solid var(--line);
+  display: grid; place-items: center;
+}
+.live-frame img, .live-frame video {
+  width: 100%; height: 100%; object-fit: contain; display: block;
+}
+.live-frame video { object-fit: contain; background: #000; }
+.live-say {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 7px; font-size: .76rem; color: var(--muted); min-height: 26px;
+}
+.live-say span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* One chip per project still being worked on. Hidden below two of them — a
+   switch with one position is not a switch. */
+.runchips {
+  display: flex; gap: 6px; margin-bottom: 12px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.runchips::-webkit-scrollbar { display: none; }
+.runchip {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  max-width: 62vw; padding: 6px 11px; border-radius: 99px;
+  background: var(--surface); border: 1px solid var(--line);
+  color: var(--muted); font-size: .76rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.runchip.on { border-color: var(--accent); color: var(--text); }
+.runchip em { font-style: normal; color: var(--faint); font-variant-numeric: tabular-nums; }
+.runchip .dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--faint);
+}
+.runchip .dot.running, .runchip .dot.rendering, .runchip .dot.queued { background: var(--warn); }
+.runchip .dot.review { background: var(--accent); }
+.runchip .dot.done { background: var(--ok); }
+
+.projects-find {
+  width: 100%; margin: 8px 0 0; padding: 8px 11px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--text); font-size: .8rem;
+}
+.projects-wrap.shut .projects-find { display: none; }
+
 /* The step line is where progress is actually read, so while something is
    running it is the loudest thing on the card. */
 .step.busy { color: var(--text); }
@@ -1422,36 +1479,36 @@ label.frame-add svg {
    app's shadow. So: one row per picture, the number big enough to find your
    place again, the copy button always in the same column, and the prompt itself
    clamped — you copy prompts, you do not read them. */
-.sheet-fold summary { color: var(--text); }
-.sheet-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-.sheet-acts .sheet-up { cursor: pointer; }
-.sheet-list {
+.pr-fold summary { color: var(--text); }
+.pr-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.pr-acts .pr-up { cursor: pointer; }
+.pr-list {
   list-style: none; margin: 10px 0 0; padding: 0;
   display: grid; gap: 8px; max-height: 60vh; overflow-y: auto;
 }
-.sheet-list li {
+.pr-list li {
   display: grid; grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: start; gap: 10px;
   padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--surface-2, rgba(255, 255, 255, .02));
 }
-.sheet-list li.done { opacity: .5; }
-.sheet-n {
+.pr-list li.done { opacity: .5; }
+.pr-n {
   font-variant-numeric: tabular-nums; font-weight: 700; font-size: .9rem;
   color: var(--accent); text-align: right;
 }
-.sheet-body { min-width: 0; }
-.sheet-body b { display: block; font-size: .74rem; color: var(--muted); font-weight: 600; }
-.sheet-body p {
+.pr-body { min-width: 0; }
+.pr-body b { display: block; font-size: .74rem; color: var(--muted); font-weight: 600; }
+.pr-body p {
   margin: 3px 0 0; font-size: .8rem; color: var(--text); overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
-.sheet-refs { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 6px; }
-.sheet-refs a {
+.pr-refs { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 6px; }
+.pr-refs a {
   font-size: .7rem; padding: 2px 7px; border-radius: 99px;
   border: 1px solid var(--line); color: var(--muted);
 }
-.sheet-list .btn { align-self: center; }
+.pr-list .btn { align-self: center; }
 
 /* Tapping a pile of pictures into the order they should land in. Four across on
    a phone is the largest a thumbnail can be while the grid still shows enough of
