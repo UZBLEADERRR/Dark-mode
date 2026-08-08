@@ -5791,7 +5791,10 @@ function drawAgent() {
       </ol>
       <p class="note">Kengaytma o'zi ulanadi — kompyuteringizda hech qanday port
         ochish shart emas. Rasmlarni Google'dan sizning brauzeringiz so'raydi,
-        shuning uchun hisobingiz va IP manzilingiz o'zgarmaydi.</p>` : ''}`;
+        shuning uchun hisobingiz va IP manzilingiz o'zgarmaydi.</p>
+      ${a.keyed ? `<p class="note warnish">Flow Agent kalit bilan himoyalangan,
+        shuning uchun kalit shu faylning ichiga yoziladi —
+        <b>faylni birovga bermang</b>.</p>` : ''}` : ''}`;
 }
 
 let flowPoll = null;
