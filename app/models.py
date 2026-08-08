@@ -99,6 +99,11 @@ class BrandKit(BaseModel):
     logo_y: float = Field(default=0.1, ge=0, le=1)
     logo_size: float = Field(default=0.11, ge=0.02, le=0.5)
     logo_opacity: float = Field(default=0.9, ge=0.1, le=1)
+    # Which frame shape the placement was last checked against. Nothing reads it
+    # but the placement pad, which reopens on the shape you left it on — a corner
+    # that reads well on a wide frame can sit under a phone's own furniture on a
+    # tall one, so which one you were looking at is worth remembering.
+    logo_shape: Literal["16:9", "9:16"] = "16:9"
     art_style: str = Field(default="", max_length=600)
     tone: str = Field(default="", max_length=200)
     voice_id: str = Field(default="", max_length=120)
@@ -348,6 +353,13 @@ class ProfilePatch(BaseModel):
 
 class ChatTurn(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+
+
+class LengthAsk(BaseModel):
+    """A title, and what to say back about how long it should be."""
+
+    topic: str = Field(min_length=2, max_length=500)
+    language: str = Field(default="", max_length=8)
 
 
 class PublishRequest(BaseModel):

@@ -26,6 +26,7 @@ from .models import (
     ApiKeyPatch,
     BrandKit,
     ChatTurn,
+    LengthAsk,
     CreateJobRequest,
     HeroPatch,
     JobPatch,
@@ -706,6 +707,29 @@ async def remove_profile(profile_id: str) -> dict[str, bool]:
     if not store.delete_profile(profile_id):
         raise HTTPException(status_code=404, detail="Profile not found.")
     return {"deleted": True}
+
+
+@app.post("/api/advise/length")
+async def advise_length(body: LengthAsk) -> dict[str, Any]:
+    """Roughly how long this subject should run, and whether it is a Short.
+
+    The two decisions that have to be made before anything can be made, and the
+    two the composer used to leave to a number box with a default in it. Read
+    only — nothing is started, nothing is saved.
+    """
+    topic = body.topic.strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="Mavzu bo'sh.")
+    if not config.llm_ready():
+        raise HTTPException(
+            status_code=400,
+            detail="Tavsiya uchun AI kaliti kerak — kutubxonadagi \"API kalitlari\" "
+                   "bo'limiga Gemini yoki Anthropic kalitini qo'shing.")
+    try:
+        return await skills.advise_length(
+            topic, profiles=store.list_profiles(), language=body.language or "")
+    except llm.LLMError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.get("/api/chat")

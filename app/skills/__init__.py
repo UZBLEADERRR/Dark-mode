@@ -11,6 +11,7 @@
     shorts     -> finds the Shorts already inside a long video
     rewriter   -> revises a script to a note, before anything is made from it
     arranger   -> works out which scene each hand-made picture belongs to
+    adviser    -> how long a subject should run, and whether it is a Short
 """
 
 from .director import (
@@ -18,6 +19,7 @@ from .director import (
     segment_existing_narration,
     segment_written_script,
 )
+from .adviser import advise_length
 from .arranger import arrange_images, place_in_order
 from .choreographer import stage_scenes
 from .rewriter import revise_script
@@ -43,4 +45,5 @@ __all__ = [
     "revise_script",
     "arrange_images",
     "place_in_order",
+    "advise_length",
 ]

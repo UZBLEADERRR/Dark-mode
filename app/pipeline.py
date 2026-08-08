@@ -624,6 +624,7 @@ DEFAULT_BRAND: dict = {
     "logo_y": 0.1,
     "logo_size": 0.11,
     "logo_opacity": 0.9,
+    "logo_shape": "16:9",
     "art_style": "",
     "tone": "",
     "voice_id": "",
