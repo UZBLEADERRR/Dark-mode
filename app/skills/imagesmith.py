@@ -33,12 +33,15 @@ Rules:
   name and say explicitly that their face and clothing must match the reference exactly.
 - A character must look the same in every scene they appear in. An image model has
   no memory between calls, so the only thing holding a face together across a video
-  is the words you write. First fill in `cast_bible`: one entry per character who
-  appears more than once — the people with reference photos, and also anyone the
-  story itself invents. Each `look` is 15-35 words of fixed, checkable physical
-  detail — age, build, hair colour and style, skin tone, eye colour, exact clothing
-  and its colours, and any one distinguishing feature. No mood, no lighting, no
-  camera: those change between scenes and these must not.
+  is the words you write. First fill in `cast_bible`: one entry per character the
+  story itself invents and who appears more than once. Each `look` is 15-35 words of
+  fixed, checkable physical detail — age, build, hair colour and style, skin tone,
+  eye colour, exact clothing and its colours, and any one distinguishing feature.
+  No mood, no lighting, no camera: those change between scenes and these must not.
+- Do NOT write a `look` for a character listed under CHARACTER REFERENCES. You have
+  not seen their reference photo, so anything you write about their appearance is a
+  guess that would be drawn instead of the person the user chose. Their description
+  is supplied and is used as given.
 - Then list in each prompt's `characters` field the names of whoever is in that
   shot, spelled exactly as in `cast_bible`.
 - Never put words, captions, letters, logos, watermarks or UI in the image. Say so in
@@ -131,6 +134,11 @@ async def build_image_prompts(
         )
         or "(none)"
     )
+    if heroes:
+        cast_block += (
+            "\nThese are the people of this video. Name them, do not rename them, "
+            "and do not describe their appearance — their photo and the words above "
+            "already do that. Give none of them a `cast_bible` entry.")
 
     user = f"""VIDEO TITLE
 {title}
@@ -173,12 +181,26 @@ number given above — a scene listed without shots has one prompt with `shot` 0
         look = " ".join(str(entry.get("look") or "").split())[:400]
         if name and look:
             cast[name.casefold()] = f"{name}: {look}"
-    # Anyone with a photo but no entry still gets one from what the user typed
-    # about them — better a short description than none.
+
+    # A chosen hero's entry is written here and overwrites whatever the model
+    # wrote for that name — not filled in only when missing.
+    #
+    # The model has never seen the photo. Asked for a character bible it will
+    # cheerfully invent one for the hero too, and because that invented look is
+    # then appended to every prompt as fixed fact, the words end up fighting the
+    # reference picture and winning: you upload a nine-year-old in a red coat and
+    # get a blonde teenager, the same blonde teenager in all eighteen scenes. So
+    # for anybody with a photo the description is the user's own, and where they
+    # wrote none the prompt is pointed at the photo rather than at a guess.
     for hero in heroes:
         key = (hero.get("name") or "").strip().casefold()
-        if key and key not in cast and (hero.get("description") or "").strip():
-            cast[key] = f"{hero['name']}: {' '.join(hero['description'].split())[:400]}"
+        if not key:
+            continue
+        said = " ".join((hero.get("description") or "").split())[:400]
+        cast[key] = (
+            f"{hero['name']}: {said + ' — ' if said else ''}exactly the person in "
+            f"the supplied reference photo of {hero['name']}, same face, same hair, "
+            f"same clothing, unchanged")
     by_key: dict[tuple[int, int], dict] = {}
     for entry in data.get("prompts", []):
         if "index" not in entry:
