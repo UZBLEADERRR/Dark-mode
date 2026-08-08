@@ -466,7 +466,7 @@ async def health() -> dict[str, Any]:
         # open, and that is worth being able to see from the health panel.
         "flow_waiting": len(store.list_image_tasks()),
         "tts_providers": {n: config.tts_provider_ready(n)
-                          for n in ("elevenlabs", "openai", "gemini")},
+                          for n in config.TTS_PROVIDERS},
         "transcription": config.has_key("openai"),
         "defaults": {
             "image_provider": config.IMAGE_PROVIDER,
@@ -1424,8 +1424,9 @@ async def remove_key(key_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/voices")
-async def list_voices(provider: str | None = None) -> dict[str, Any]:
-    return await catalog.list_voices(provider or config.TTS_PROVIDER)
+async def list_voices(provider: str | None = None,
+                      language: str = "") -> dict[str, Any]:
+    return await catalog.list_voices(provider or config.TTS_PROVIDER, language)
 
 
 @app.get("/api/voices/preview")

@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 
 from .. import config
-from . import tts
+from . import edge, tts
 
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
@@ -166,7 +166,7 @@ async def list_models(provider: str) -> dict:
 
 # ── voices ────────────────────────────────────────────────────────────────────
 
-async def list_voices(provider: str) -> dict:
+async def list_voices(provider: str, language: str = "") -> dict:
     provider = (provider or config.TTS_PROVIDER).lower()
 
     if provider == "gemini":
@@ -175,6 +175,11 @@ async def list_voices(provider: str) -> dict:
     if provider == "openai":
         return {"provider": provider, "voices": OPENAI_VOICES,
                 "default": config.default_voice("openai")}
+    if provider == "edge":
+        # Written down rather than fetched: a dropdown that needs a network call
+        # to draw is a dropdown that is sometimes empty.
+        return {"provider": provider, "voices": edge.catalogue(language),
+                "default": edge.DEFAULT}
 
     if provider == "elevenlabs":
         if not config.has_key("elevenlabs"):

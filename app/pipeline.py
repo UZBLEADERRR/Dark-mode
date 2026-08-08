@@ -342,6 +342,36 @@ async def arrange_uploaded_images(
             path.unlink(missing_ok=True)
 
 
+def _cast_everyone(scenes: list[dict], heroes: list[dict],
+                   job_id: str = "", warnings: list[str] | None = None) -> int:
+    """If the Director cast nobody, put the uploaded characters in every scene.
+
+    A hero's photo only reaches the image model through the scene it is cast in:
+    the draw call takes its references from `scene["hero_ids"]`. When the
+    Director returns those empty for every scene — which it does often enough,
+    especially for a story where the characters are described rather than named
+    — the photos are uploaded, listed in the composer, and then used for nothing
+    at all. The pictures come out with a different stranger in each one.
+
+    Only when *no* scene has anybody. A Director that cast two scenes out of ten
+    made a decision about the other eight, and overruling that would put a face
+    into shots that are meant to be landscapes.
+    """
+    if not heroes or any(scene.get("hero_ids") for scene in scenes):
+        return 0
+    everyone = [h["id"] for h in heroes]
+    for scene in scenes:
+        scene["hero_ids"] = list(everyone)
+    if job_id:
+        _note(job_id, f"{len(heroes)} ta qahramon hamma sahnaga qo'shildi")
+    if warnings is not None:
+        warnings.append(
+            f"Ssenariy qahramonlarni sahnalarga taqsimlamadi — "
+            f"{len(heroes)} tasi hamma sahnaga qo'yildi. Kerak bo'lmagan "
+            f"sahnadan tahrirlashda olib tashlashingiz mumkin.")
+    return len(scenes)
+
+
 def set_fix(scene: dict, note: str) -> None:
     """Remember what was wrong with this scene's picture, or forget it.
 
@@ -1698,6 +1728,7 @@ async def run_draft(job_id: str) -> None:
             _progress(job_id, "script", 20, f"{len(scenes)} scenes ready")
 
         _ensure_sids(scenes)
+        _cast_everyone(scenes, heroes, job_id, warnings)
         store.update_job(job_id, result={"title": script.get("title"),
                                          "scene_count": len(scenes)})
 
@@ -1835,7 +1866,10 @@ async def _build_from_script(job_id: str, scenes: list[dict], script: dict,
         batch_patience_minutes=float(request.get("batch_patience_minutes") or 0),
     )
 
+    # The cast bible is kept with the video, not thrown away with the call that
+    # wrote it: a scene redrawn next week has to describe the same face.
     _save_scenes(job_id, scenes, style_bible=prompt_pack.get("style_bible"),
+                 cast_bible=prompt_pack.get("cast_bible") or {},
                  warnings=warnings)
     _kept_note(job_id, scenes, await keep_media(scenes, job_id))
 
