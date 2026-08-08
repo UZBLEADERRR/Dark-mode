@@ -1542,6 +1542,73 @@ def _staged_uploads(request: dict[str, Any]) -> list[Path]:
     return out
 
 
+def _tree_bytes(path: Path) -> int:
+    """How much disk a folder is actually using, missing folders counting as none."""
+    total = 0
+    if not path.exists():
+        return 0
+    for child in path.rglob("*"):
+        try:
+            if child.is_file():
+                total += child.stat().st_size
+        except OSError:  # noqa: PERF203 - a file that vanished mid-walk is zero
+            continue
+    return total
+
+
+@app.get("/api/storage")
+async def storage_used() -> dict[str, Any]:
+    """What is taking up room, so clearing it is a decision rather than a guess."""
+    jobs = store.list_jobs(limit=500)
+    return {
+        "jobs": len(jobs),
+        # The three places a project's bytes end up. They are separate on
+        # purpose: on a service with no volume the folder is empty after every
+        # redeploy while the database copy is not, and "why is it still full"
+        # has a different answer in each case.
+        "project_bytes": _tree_bytes(config.PROJECTS_DIR),
+        "media_bytes": store.media_bytes(),
+        "db_bytes": config.DB_PATH.stat().st_size if config.DB_PATH.exists() else 0,
+        # Voice-overs and videos handed to us for dubbing. They are staged
+        # outside any project folder, which is exactly why they are worth
+        # counting separately — they used to outlive the project they belonged to.
+        "upload_bytes": _tree_bytes(config.DATA_DIR / "uploads"),
+    }
+
+
+@app.delete("/api/jobs")
+async def delete_every_job(confirm: str = "") -> dict[str, Any]:
+    """Delete every project — the rows, the folders, the kept media, the bucket.
+
+    Deliberately the same path as deleting one, run over all of them, rather
+    than a faster truncate: a project's bytes live in four places and only that
+    path knows all four. Heroes, the brand kit, music and API keys are not
+    projects and are not touched.
+    """
+    if confirm != "hammasi":
+        raise HTTPException(
+            status_code=400,
+            detail="Tasdiqlanmadi — bu hamma loyihalarni butunlay o'chiradi.")
+    gone, failed = 0, 0
+    for job in store.list_jobs(limit=500):
+        try:
+            await delete_job(job["id"])
+            gone += 1
+        except Exception:  # noqa: BLE001 - one stuck project must not stop the rest
+            failed += 1
+    # Whatever the loop could not account for: a folder whose row had already
+    # gone, an upload staged for a project that never started.
+    if config.PROJECTS_DIR.exists():
+        for leftover in config.PROJECTS_DIR.iterdir():
+            if leftover.is_dir() and store.get_job(leftover.name) is None:
+                shutil.rmtree(leftover, ignore_errors=True)
+    # Every project is gone, so nothing can still be referring to a staged
+    # upload. Safe to empty here in a way it never is for a single deletion.
+    if not failed:
+        shutil.rmtree(config.DATA_DIR / "uploads", ignore_errors=True)
+    return {"deleted": gone, "failed": failed}
+
+
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str) -> dict[str, Any]:
     """Delete a project — everywhere it exists, not only where it is cheapest.

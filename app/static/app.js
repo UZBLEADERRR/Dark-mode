@@ -30,6 +30,7 @@ const state = {
   drawn: null,      // stamp of the editor currently on screen
   sheet: null,      // the prompt sheet on screen, and the job state it was
   sheetKey: null,   // fetched for — it is refetched only when that moves
+  space: null,      // what is taking up room, as of the last time it was asked
   reveal: false,
   mark: null,       // last `updated_at` we saw, and when we saw it —
   markAt: 0,        // measured here so a server clock offset cannot skew it
@@ -2323,8 +2324,13 @@ async function bulkUpload(rawFiles, jobId, wanted = 0) {
         <select name="mode">
           <option value="pick">Men tanlagan tartibda — bosib raqamlayman</option>
           <option value="order">Fayl tartibida — 1-rasm 1-sahnaga</option>
-          <option value="auto">AI o‘zi qarab joylashtirsin</option>
+          <option value="auto">AI o‘zi qarab joylashtirsin — sekin</option>
         </select></label>
+      <!-- Said before the choice, not discovered after it. The first two modes
+           are arithmetic and land instantly; the third sends every picture to a
+           model and can sit at the same percentage for minutes. -->
+      <p class="note">Birinchi ikki usul bir zumda ishlaydi. AI usuli har bir
+        rasmni modelga yuboradi — bir necha daqiqa turishi mumkin.</p>
       <div class="pick-wrap" data-pickwrap>
         <!-- Tapping is right for reordering a handful. For a folder that was
              already saved in the right order — which is what the prompt sheet
@@ -5512,6 +5518,89 @@ function grow(el) {
   el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
 }
 
+// ── space, and getting it back ────────────────────────────────────
+// A project's bytes live in four places — the folder on disk, the copy kept in
+// the database, the file you handed over to be dubbed, and the bucket — and
+// "why is this still full" has a different answer in each. So they are counted
+// apart rather than added up into one number that explains nothing.
+
+const size = (n) => {
+  const b = Number(n) || 0;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
+  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
+};
+
+async function loadSpace() {
+  try {
+    state.space = await api('/api/storage');
+  } catch { return; }
+  drawSpace();
+}
+
+function drawSpace() {
+  const s = state.space;
+  const box = $('#space-box');
+  if (!box || !s) return;
+  const total = s.project_bytes + s.media_bytes + s.upload_bytes;
+  libCount('space', total ? size(total) : '');
+
+  box.innerHTML = `
+    <div class="space-rows">
+      <div><span>Loyihalar</span><b>${s.jobs} ta</b></div>
+      <div><span>Rasm va videolar (disk)</span><b>${size(s.project_bytes)}</b></div>
+      <div><span>Saqlangan nusxalar (baza)</span><b>${size(s.media_bytes)}</b></div>
+      <div><span>Siz yuklagan fayllar</span><b>${size(s.upload_bytes)}</b></div>
+      <div><span>Baza fayli</span><b>${size(s.db_bytes)}</b></div>
+    </div>
+    <p class="note">«Saqlangan nusxalar» — servis qayta ishga tushganda disk
+      tozalanadi, shuning uchun rasmlar bazaga ham yoziladi. Diskda 0 bo‘lsa
+      ham videolaringiz shu yerdan qayta tiklanadi.</p>
+    <button class="btn danger" id="space-wipe">Barcha loyihalarni o‘chirish</button>
+    <p class="note">Herolar, brend, musiqa va API kalitlari o‘chmaydi — faqat
+      loyihalar va ularning fayllari.</p>`;
+
+  $('#space-wipe').addEventListener('click', async () => {
+    // Typed, not tapped. This is the only button in the app that cannot be
+    // undone by anything, and a mis-tap on a phone is one pixel wide.
+    const answer = await ask({
+      title: `${s.jobs} ta loyiha o‘chiriladi`,
+      ok: "O‘chirish",
+      html: `<p class="note">Hamma videolar, rasmlar, ovozlar va matnlar
+          butunlay o‘chadi. Buni ortga qaytarib bo‘lmaydi.</p>
+        <label class="f"><span>Tasdiqlash uchun <b>hammasi</b> deb yozing</span>
+          <input name="word" placeholder="hammasi" autocomplete="off" /></label>`,
+    });
+    if (!answer) return;
+    if ((answer.word || '').trim().toLowerCase() !== 'hammasi') {
+      toast('Tasdiqlanmadi — hech narsa o‘chirilmadi');
+      return;
+    }
+    const btn = $('#space-wipe');
+    btn.disabled = true;
+    btn.textContent = 'O‘chirilmoqda…';
+    try {
+      const out = await api('/api/jobs?confirm=hammasi', { method: 'DELETE' });
+      state.activeId = null;
+      ED.job = null;
+      $('#stage').classList.add('hidden');
+      $('#editor').classList.add('hidden');
+      $('#run-live').innerHTML = '';
+      if (state.poll) { clearInterval(state.poll); state.poll = null; }
+      await loadJobs();
+      await loadSpace();
+      drawDock();
+      toast(`${out.deleted} ta loyiha o‘chirildi`);
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Barcha loyihalarni o‘chirish';
+    }
+  });
+}
+
 let flowPoll = null;
 
 async function loadFlow() {
@@ -5862,7 +5951,8 @@ $('#key-form')?.addEventListener('submit', async (e) => {
     wireFades();
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
     await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat(),
-                       loadYouTube(), loadPlans(), loadKeys(), loadFlow()]);
+                       loadYouTube(), loadPlans(), loadKeys(), loadFlow(),
+                       loadSpace()]);
     applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.

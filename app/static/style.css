@@ -1622,6 +1622,21 @@ textarea.flow-prompt:focus { outline: none; border-color: var(--accent); }
 .brand-box .btn.primary { justify-self: start; }
 .brand-box .saver { text-align: left; }
 
+/* ── space, and getting it back ───────────────────────────────────── */
+.space-rows { display: grid; gap: 1px; margin-bottom: 10px; }
+.space-rows > div {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 7px 0; border-bottom: 1px solid var(--line);
+  font-size: .8rem; color: var(--muted);
+}
+.space-rows > div:last-child { border-bottom: 0; }
+.space-rows b { color: var(--text); font-variant-numeric: tabular-nums; }
+.space-box .btn.danger {
+  justify-self: start; margin-top: 4px;
+  border-color: var(--accent); color: var(--accent);
+}
+.space-box .btn.danger:hover { background: var(--accent); color: #fff; }
+
 /* ── length advice ────────────────────────────────────────────────
    Sits under the topic box, because that is where the subject it is advising
    about was typed. Quiet until asked. */
