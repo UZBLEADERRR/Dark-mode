@@ -381,12 +381,27 @@ class PublishRequest(BaseModel):
 
 
 class PlanIn(BaseModel):
-    """A video asked for in advance."""
+    """A video asked for in advance, or an idea put on the shelf for one.
+
+    Two things with one shape, separated by whether `publish_at` is set. With a
+    slot it builds itself and publishes at the minute chosen. Without one it
+    just sits there under its channel's name until you press the button — which
+    is what a content plan actually is: a list you work through, not a timer.
+    """
 
     topic: str = Field(min_length=2, max_length=500)
+    # Which of your channels this is for. Free text rather than a link to a
+    # stored profile: a plan is often written for a channel before there is a
+    # screenshot of it in the app, and refusing it then would be absurd.
+    channel: str = Field(default="", max_length=80)
     # When it should be live. RFC3339; the browser sends an absolute instant.
-    publish_at: str = Field(min_length=10, max_length=40)
+    # Empty means the shelf: nothing starts until it is asked for.
+    publish_at: str = Field(default="", max_length=40)
     title: str = Field(default="", max_length=200)
+    # Who draws the pictures for this one. `manual` is the answer to "voice and
+    # subtitles now, pictures later" — the draft stops at the images and hands
+    # over the prompts. Empty means whatever the app is set to.
+    image_provider: str = Field(default="", max_length=20)
     video_format: str = "9:16"
     target_seconds: int = Field(default=45, ge=20, le=1800)
     language: str = "uz"
@@ -410,12 +425,13 @@ class PlanIn(BaseModel):
 
 class PlanPatch(BaseModel):
     title: str | None = Field(default=None, max_length=200)
+    channel: str | None = Field(default=None, max_length=80)
     publish_at: str | None = Field(default=None, max_length=40)
     lead_minutes: int | None = Field(default=None, ge=10, le=10080)
     privacy: Literal["private", "unlisted", "public"] | None = None
     approve: bool | None = None
     batch: Literal["auto", "on", "off"] | None = None
-    status: Literal["planned", "cancelled"] | None = None
+    status: Literal["planned", "cancelled", "idea"] | None = None
 
 
 # ── API keys ──────────────────────────────────────────────────────────────────

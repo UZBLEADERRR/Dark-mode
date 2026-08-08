@@ -83,6 +83,13 @@ def describe(plan: dict[str, Any]) -> str:
     """One line for the card. What is happening, and what happens next."""
     status = plan.get("status")
     when = plan.get("publish_at", "")
+    # An idea on the shelf. It has no slot and no lead time, so nothing about it
+    # is going to happen on its own — which is the whole point of it, and worth
+    # saying rather than leaving the card looking like a schedule that is stuck.
+    if status == "idea":
+        return "Rejada turibdi — o'zi boshlanmaydi. «Yasashni boshlash» ni bosing."
+    if status == "used":
+        return "Bu g'oyadan video boshlangan."
     if status == "planned":
         lead = int(plan.get("lead_minutes") or 0)
         moment = _parse(when)

@@ -2090,7 +2090,23 @@ textarea.flow-prompt:focus { outline: none; border-color: var(--accent); }
    A plan is a promise with a time on it, so the time is the loudest thing on the
    card and the status sits next to it. */
 
-.plans { display: grid; gap: 10px; }
+.plans { display: grid; gap: 18px; }
+
+/* One heading per channel. A content plan is written per channel, and a flat
+   list of everything is a list you have to read every row of to use. */
+.plan-group { display: grid; gap: 10px; }
+.plan-group > h2 {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  margin: 0; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+  font-size: .88rem; font-weight: 600;
+}
+.plan-group > h2 em {
+  font-style: normal; font-size: .72rem; color: var(--faint);
+  white-space: nowrap;
+}
+/* On the shelf, not on a clock: no accent border, because nothing is pending. */
+.plan.idea { border-color: var(--line); }
+.plan.used { opacity: .62; }
 .plan {
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--r); padding: 14px 15px;

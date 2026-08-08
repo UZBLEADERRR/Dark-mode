@@ -494,14 +494,18 @@ async function loadHealth() {
   // that needs saying most is `flow`, which is the only one that spends no money
   // and the only one that will not work unless a browser is helping.
   const PROVIDER_NOTE = { flow: ' — o‘z brauzeringiz, kalitsiz' };
-  const fill = (sel, map, preferred) => {
+  const fill = (sel, map, preferred, names = null) => {
     const pick = map[preferred] ? preferred : Object.keys(map).find((k) => map[k]);
     $(sel).innerHTML = Object.entries(map).map(([n, ok]) =>
-      `<option value="${n}"${ok ? '' : ' disabled'}${n === pick ? ' selected' : ''}>${n}${
-        ok ? (PROVIDER_NOTE[n] || '') : ' — kalit yo‘q'}</option>`
+      `<option value="${n}"${ok ? '' : ' disabled'}${n === pick ? ' selected' : ''}>${
+        esc(names?.[n] || n)}${ok ? (names ? '' : PROVIDER_NOTE[n] || '') : ' — kalit yo‘q'}</option>`
     ).join('');
   };
-  fill('#image_provider', h.image_providers, h.defaults.image_provider);
+  // Named rather than listed: "manual" is the one people actually want here —
+  // voice and subtitles now, pictures later — and it is the one whose bare
+  // name says least about what it does.
+  fill('#image_provider', h.image_providers, h.defaults.image_provider,
+       IMAGE_PROVIDER_LABELS);
   fill('#tts_provider', h.tts_providers, h.defaults.tts_provider);
   await loadVoices();
 
@@ -542,11 +546,13 @@ async function loadHealth() {
     ['ffmpeg', h.ffmpeg],
     [`skript — ${h.llm_provider}`, h.llm],
     ['transkripsiya', h.transcription],
-    // `flow` is left out on purpose: it has no key, so it is always "ready",
-    // and a green row saying so would mean nothing. Whether anything is actually
-    // answering its prompts is the Flow queue's business, not this list's.
+    // `flow` and `manual` are left out on purpose: neither has a key, so both
+    // are always "ready", and a green row saying so would mean nothing. Whether
+    // anything is actually answering the queue's prompts is the Flow queue's
+    // business, not this list's.
     ...Object.entries(h.image_providers)
-      .filter(([n]) => n !== 'flow').map(([n, v]) => [`rasm — ${n}`, v]),
+      .filter(([n]) => n !== 'flow' && n !== 'manual')
+      .map(([n, v]) => [`rasm — ${n}`, v]),
     ...Object.entries(h.tts_providers).map(([n, v]) => [`ovoz — ${n}`, v]),
     [`fayllar — ${h.storage}`, true],
     // Worth its own row, and worth being strict about: whether your work
@@ -5001,9 +5007,16 @@ async function loadChat() {
 // told it is good, and YouTube holds it until the minute that was chosen.
 
 const PLAN_STATUS = {
-  planned: 'rejada', building: 'tayyorlanmoqda', ready: 'tasdiqlashni kutmoqda',
+  idea: 'rejada', used: 'boshlangan',
+  planned: 'vaqtga qo‘yilgan', building: 'tayyorlanmoqda',
+  ready: 'tasdiqlashni kutmoqda',
   published: 'joylandi', failed: 'xato', cancelled: 'bekor',
 };
+
+// An idea does nothing on its own. Kept apart from the scheduled ones because
+// the two answer different questions — "what shall I make next" and "what is
+// about to go out" — and mixing them makes the first list unreadable.
+const ON_SHELF = new Set(['idea', 'used']);
 
 let PLANS = [];
 let planPoll = null;
@@ -5037,29 +5050,39 @@ function planWhen(iso) {
                                       hour: '2-digit', minute: '2-digit' });
 }
 
-function drawPlans() {
-  const list = $('#plans-list');
-  if (!list) return;
-  if (!PLANS.length) {
-    list.innerHTML = `<p class="empty">Hali reja yo‘q. Yuqorida «Yangi reja» ni
-      to‘ldirsangiz, ilova o‘sha vaqtga video tayyorlab qo‘yadi.</p>`;
-    return;
-  }
-  list.innerHTML = PLANS.map((p) => `
+const IMAGE_PLAN_NOTE = {
+  manual: 'rasmsiz — ovoz va subtitr',
+  flow: 'Flow navbati',
+  flowagent: 'Flow Agent',
+};
+
+/** The channel names already in use, so the next plan is picked not retyped. */
+function planChannels() {
+  return [...new Set(PLANS.map((p) => (p.channel || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function planCard(p) {
+  const shelf = ON_SHELF.has(p.status);
+  const bits = [p.video_format];
+  if (p.compose?.target_seconds) bits.push(durationLabel(p.compose.target_seconds));
+  if (IMAGE_PLAN_NOTE[p.image_provider]) bits.push(IMAGE_PLAN_NOTE[p.image_provider]);
+  if (!shelf) bits.push(p.approve ? 'tasdiqlash bilan' : 'o‘zi joylaydi');
+
+  return `
     <article class="plan ${esc(p.status)}">
       <div class="plan-head">
         <span class="tag ${esc(p.status)}">${esc(PLAN_STATUS[p.status] || p.status)}</span>
-        <b>${esc(planWhen(p.publish_at))}</b>
-        ${p.batch
+        ${shelf ? '' : `<b>${esc(planWhen(p.publish_at))}</b>`}
+        ${!shelf && p.batch
           ? `<em class="cheap" title="Rasmlar batch orqali — yarim narx">batch${
               p.batch_mode === 'on' ? ' ·' : ''}</em>`
-          : (p.batch_mode === 'off'
+          : (!shelf && p.batch_mode === 'off'
               ? '<em class="cheap off" title="Batch o‘chirilgan — to‘liq narx, tez">oddiy</em>' : '')}
         <i class="x" data-del-plan="${esc(p.id)}" role="button" aria-label="O‘chirish">×</i>
       </div>
       <h3>${esc(p.title || p.topic)}</h3>
-      <small>${esc(p.video_format)} · ${esc(p.privacy)}${
-        p.approve ? ' · tasdiqlash bilan' : ' · o‘zi joylaydi'}</small>
+      <small>${esc(bits.join(' · '))}</small>
       ${p.status === 'planned' ? `
         <label class="f tight"><span>Rasmlar</span>
           <select data-batch="${esc(p.id)}">
@@ -5071,6 +5094,8 @@ function drawPlans() {
       ${p.status === 'building' && p.job_progress
         ? `<div class="track live"><i style="width:${p.job_progress}%"></i></div>` : ''}
       <div class="plan-acts">
+        ${shelf
+          ? `<button class="btn primary" data-use-plan="${esc(p.id)}">Yasashni boshlash</button>` : ''}
         ${p.status === 'ready'
           ? `<button class="btn primary" data-approve="${esc(p.id)}">Tasdiqlash va joylash</button>` : ''}
         ${p.job_id
@@ -5082,7 +5107,100 @@ function drawPlans() {
           ? `<a class="btn ok" href="${esc(p.video_url)}" target="_blank" rel="noopener">YouTube'da</a>` : ''}
       </div>
       ${p.error && p.status !== 'failed' ? `<p class="msg warn">${esc(p.error)}</p>` : ''}
-    </article>`).join('');
+    </article>`;
+}
+
+/** Take an idea off the shelf and hand it to the composer, already answered.
+ *
+ * Deliberately stops one press short of making the video. The whole point of
+ * writing a plan down and coming back to it is looking at it again — so this
+ * fills the form and steps out of the way, rather than starting a render on a
+ * decision made a fortnight ago.
+ */
+async function usePlan(id, button) {
+  if (button) button.disabled = true;
+  try {
+    const plan = await api(`/api/plans/${id}/activate`, { method: 'POST' });
+    const c = plan.compose || {};
+
+    // A plan describes a video to be invented, so the composer has to be on the
+    // tab that invents one — dubbing somebody else's clip is a different form.
+    $('#mode-tabs [data-mode="topic"]').click();
+    $('#topic').value = c.topic || '';
+    $('#topic').dispatchEvent(new Event('input'));
+    if (c.video_format) setFormat(c.video_format);
+    if (c.target_seconds) {
+      duration.value = String(Math.max(Number(duration.min),
+        Math.min(Number(duration.max), Number(c.target_seconds))));
+    }
+    if (c.language) $('#language').value = c.language;
+    if (c.art_style) $('#art_style').value = c.art_style;
+    if (c.tone) $('#tone').value = c.tone;
+    $('#action').value = c.action || '';
+    $('#animate_actors').checked = !!c.animate_actors;
+    $('#music_id').value = c.music_id || '';
+    // Only when the plan asked for one. An empty choice means "whatever the app
+    // is set to", and forcing that to the first option would silently change it.
+    if (c.image_provider) $('#image_provider').value = c.image_provider;
+    $$('#hero-picker input').forEach((box) => {
+      box.checked = (c.hero_ids || []).includes(box.value);
+    });
+
+    syncDuration();
+    syncAnimate();
+    drawSummary();
+    go('create');
+    await loadPlans();
+    toast('Reja to‘ldirildi — sozlab «Video yaratish» ni bosing');
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function drawPlans() {
+  const list = $('#plans-list');
+  if (!list) return;
+
+  // Offered to the channel box as you type, so the second plan for a channel
+  // does not become a second channel because of a capital letter.
+  const known = planChannels();
+  const box = $('#plan-channels');
+  if (box) box.innerHTML = known.map((c) => `<option value="${esc(c)}"></option>`).join('');
+
+  if (!PLANS.length) {
+    list.innerHTML = `<p class="empty">Hali reja yo‘q. Yuqorida «Yangi reja» ni
+      to‘ldirsangiz, g‘oyangiz shu yerda turadi — xohlagan paytingizda bir
+      bosishda yasashga o‘tasiz.</p>`;
+    return;
+  }
+
+  // Grouped by channel, and inside each the shelf first: "what shall I make
+  // next" is the question this screen is opened with, and a scheduled video
+  // that is already building is not an answer to it.
+  const groups = new Map();
+  for (const p of PLANS) {
+    const key = (p.channel || '').trim() || '—';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+  const order = [...groups.keys()].sort((a, b) =>
+    a === '—' ? 1 : b === '—' ? -1 : a.localeCompare(b));
+
+  list.innerHTML = order.map((name) => {
+    const rows = groups.get(name).slice().sort((a, b) =>
+      Number(ON_SHELF.has(b.status)) - Number(ON_SHELF.has(a.status)));
+    const waiting = rows.filter((p) => p.status === 'idea').length;
+    return `<section class="plan-group">
+      <h2>${esc(name === '—' ? 'Kanal ko‘rsatilmagan' : name)}
+        <em>${rows.length} ta${waiting ? ` · ${waiting} tayyor emas` : ''}</em></h2>
+      ${rows.map(planCard).join('')}
+    </section>`;
+  }).join('');
+
+  $$('#plans-list [data-use-plan]').forEach((b) =>
+    b.addEventListener('click', () => usePlan(b.dataset.usePlan, b)));
 
   $$('#plans-list [data-open-plan]').forEach((b) => b.addEventListener('click', () => {
     go('run');
@@ -5157,8 +5275,9 @@ $('#plan-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const form = e.target;
   const button = $('button', form);
+  const timed = form.mode.value === 'timed';
   const when = form.publish_at.value;
-  if (!when) { toast('Chiqish vaqtini tanlang'); return; }
+  if (timed && !when) { toast('Chiqish vaqtini tanlang'); return; }
   button.disabled = true;
   $('#plan-error').classList.add('hidden');
   try {
@@ -5167,9 +5286,11 @@ $('#plan-form').addEventListener('submit', async (e) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         topic: form.topic.value.trim(),
+        channel: form.channel.value.trim(),
+        image_provider: form.image_provider.value || '',
         // An absolute instant: a wall-clock time means nothing to a server in
-        // another timezone, or to YouTube.
-        publish_at: new Date(when).toISOString(),
+        // another timezone, or to YouTube. Empty means the shelf.
+        publish_at: timed ? new Date(when).toISOString() : '',
         video_format: form.video_format.value,
         target_seconds: Number(form.target_seconds.value) || 45,
         language: form.language.value,
@@ -5179,11 +5300,17 @@ $('#plan-form').addEventListener('submit', async (e) => {
         batch: form.batch.value,
       }),
     });
+    // The channel is kept and the topic is cleared: a content plan is written
+    // several rows at a time for one channel, so retyping its name for every
+    // row is the tax this screen exists to remove.
+    const channel = form.channel.value;
     form.reset();
+    form.channel.value = channel;
     form.target_seconds.value = 45;
-    $('#plan-new').open = false;
+    syncPlanMode();
+    form.topic.focus();
     await loadPlans();
-    toast('Rejaga qo‘shildi');
+    toast(timed ? 'Vaqtga qo‘yildi' : 'Rejaga qo‘shildi');
   } catch (err) {
     $('#plan-error').textContent = err.message;
     $('#plan-error').classList.remove('hidden');
@@ -5191,6 +5318,21 @@ $('#plan-form').addEventListener('submit', async (e) => {
     button.disabled = false;
   }
 });
+
+// Publishing settings only exist for a plan that publishes itself. Hidden
+// rather than disabled: a field that cannot apply is not a field, it is a
+// distraction on a screen already full of them.
+function syncPlanMode() {
+  const form = $('#plan-form');
+  if (!form) return;
+  const timed = form.mode.value === 'timed';
+  $('#plan-timed').classList.toggle('hidden', !timed);
+  form.publish_at.required = timed;
+  $('button', form).textContent = timed ? 'Vaqtga qo‘yish' : 'Rejaga qo‘shish';
+}
+
+$('#plan-mode')?.addEventListener('change', syncPlanMode);
+syncPlanMode();
 
 // ══ YouTube ═══════════════════════════════════════════════════════
 // The one thing this app does that other people can see, so it is never a side

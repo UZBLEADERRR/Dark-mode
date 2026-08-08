@@ -454,8 +454,11 @@ async def health() -> dict[str, Any]:
         # The pacing that applies to the provider actually configured — a number
         # that belongs to some other provider's key would only mislead.
         "tts_rate_limit": config.tts_rate_limit(config.TTS_PROVIDER),
+        # Read from the list rather than repeated here. It was repeated, and
+        # `manual` — added later — never reached the composer's picker because
+        # of it, so the one mode that needs no key was the hardest to find.
         "image_providers": {n: config.image_provider_ready(n)
-                            for n in ("gemini", "fal", "openai", "flow", "flowagent")},
+                            for n in config.IMAGE_PROVIDERS},
         # How many scene prompts are sitting in the queue right now. Zero is the
         # normal answer; a number that is not going down is a browser that is not
         # open, and that is worth being able to see from the health panel.
@@ -793,10 +796,29 @@ async def chat(body: ChatTurn) -> dict[str, Any]:
 
 def _plan_out(plan: dict[str, Any]) -> dict[str, Any]:
     job = store.get_job(plan.get("job_id") or "") if plan.get("job_id") else None
+    request = plan.get("request") or {}
     return {
         "id": plan["id"],
-        "title": plan.get("title") or (plan.get("request") or {}).get("topic", ""),
-        "topic": (plan.get("request") or {}).get("topic", ""),
+        "title": plan.get("title") or request.get("topic", ""),
+        "topic": request.get("topic", ""),
+        "channel": plan.get("channel", ""),
+        # Everything the composer needs to be filled in from this plan, so
+        # activating one is a form that is already answered rather than a note
+        # telling you what to type.
+        "compose": {
+            "topic": request.get("topic", ""),
+            "video_format": request.get("video_format", "9:16"),
+            "target_seconds": request.get("target_seconds", 45),
+            "language": request.get("language", "uz"),
+            "tone": request.get("tone", ""),
+            "art_style": request.get("art_style", ""),
+            "action": request.get("action", ""),
+            "hero_ids": request.get("hero_ids") or [],
+            "animate_actors": bool(request.get("animate_actors")),
+            "music_id": request.get("music_id") or "",
+            "image_provider": request.get("image_provider") or "",
+        },
+        "image_provider": request.get("image_provider") or "",
         "publish_at": plan.get("publish_at", ""),
         "lead_minutes": plan.get("lead_minutes", 0),
         "privacy": plan.get("privacy", "public"),
@@ -826,7 +848,9 @@ async def list_plans(limit: int = 60) -> list[dict[str, Any]]:
 @app.post("/api/plans", status_code=201)
 async def create_plan(body: PlanIn) -> dict[str, Any]:
     when = body.publish_at.strip()
-    if planner.hours_until(when) <= 0:
+    # No slot means the shelf, not a mistake. A dated plan still has to be in
+    # the future — a schedule that has already passed will never fire.
+    if when and planner.hours_until(when) <= 0:
         raise HTTPException(status_code=400,
                             detail="Chiqish vaqti o'tib ketgan — kelajakdagi vaqtni tanlang.")
     request = {
@@ -843,12 +867,43 @@ async def create_plan(body: PlanIn) -> dict[str, Any]:
                        ("action", body.action)):
         if value.strip():
             request[key] = value.strip()
-    _validate(request)
+    wanted = body.image_provider.strip().lower()
+    if wanted:
+        if wanted not in config.IMAGE_PROVIDERS:
+            raise HTTPException(status_code=400,
+                                detail=f"'{wanted}' — bunday rasm provayderi yo'q.")
+        request["image_provider"] = wanted
+    # Only a dated plan is checked against what is configured right now. An idea
+    # written today may well be built next month with different keys, and
+    # refusing to write it down for that reason would be absurd.
+    if when:
+        _validate(request)
     plan = store.add_plan(
         title=body.title.strip() or body.topic.strip(), request=request,
         publish_at=when, lead_minutes=body.lead_minutes,
-        privacy=body.privacy, approve=body.approve, batch=body.batch)
+        privacy=body.privacy, approve=body.approve, batch=body.batch,
+        channel=body.channel.strip(), status="planned" if when else "idea")
     return _plan_out(plan)
+
+
+@app.post("/api/plans/{plan_id}/activate")
+async def activate_plan(plan_id: str) -> dict[str, Any]:
+    """Take an idea off the shelf: mark it used and hand back the composer's answers.
+
+    Deliberately does not start anything. The point of the shelf is that you
+    look at the idea again before making it — the plan fills the form in and
+    then gets out of the way.
+    """
+    plan = store.get_plan(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Reja topilmadi.")
+    if plan.get("status") not in {"idea", "used"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Bu reja vaqtga qo'yilgan — o'zi tayyorlanadi, "
+                   "hoziroq boshlash uchun «Hoziroq boshlash» ni bosing.")
+    store.update_plan(plan_id, status="used")
+    return _plan_out(store.get_plan(plan_id) or {})
 
 
 @app.patch("/api/plans/{plan_id}")
