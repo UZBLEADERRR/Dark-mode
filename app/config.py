@@ -79,6 +79,20 @@ LLM_EFFORT = _env("LLM_EFFORT", "high")
 GEMINI_TEXT_MODEL = _env("GEMINI_TEXT_MODEL", "gemini-3.1-pro-preview")
 GEMINI_TEXT_FALLBACK = _env("GEMINI_TEXT_FALLBACK", "gemini-2.5-flash")
 
+# How long to wait on the model that writes, and how long before deciding it is
+# not going to answer at all.
+#
+# These are two different numbers on purpose. The preferred model is a reasoning
+# one: it can think for minutes before it writes a word, and a script is the
+# largest thing it is ever asked for. The fallback is a fast model that answers
+# in seconds. Waiting the full patience on the slow one before even trying the
+# fast one is five minutes of a progress bar not moving — which is what it did.
+# So the first model gets a shorter leash and the fallback gets the full one:
+# the worst case becomes "two minutes, then an answer" instead of "five minutes,
+# then five more".
+LLM_TIMEOUT = float(_env("LLM_TIMEOUT", "300"))
+LLM_FIRST_WAIT = float(_env("LLM_FIRST_WAIT", "120"))
+
 # --- image generation --------------------------------------------------------
 # gemini | fal | openai | flow | flowagent | manual
 IMAGE_PROVIDER = _env("IMAGE_PROVIDER", "gemini").lower()
