@@ -31,6 +31,8 @@ const state = {
   sheet: null,      // the prompt sheet on screen, and the job state it was
   sheetKey: null,   // fetched for — it is refetched only when that moves
   space: null,      // what is taking up room, as of the last time it was asked
+  agent: null,      // where the Flow Agent backend is, and whether the
+                    // ready-made extension can be handed out for it
   reveal: false,
   mark: null,       // last `updated_at` we saw, and when we saw it —
   markAt: 0,        // measured here so a server clock offset cannot skew it
@@ -5743,6 +5745,55 @@ function drawSpace() {
   });
 }
 
+// ── the Flow Agent extension ──────────────────────────────────────
+// Flow Agent's own extension has its server address compiled into two files
+// and no field in its panel to change either, so pointing it at a backend of
+// your own otherwise means editing a zip by hand from written instructions.
+// Sarideo hands out the same folder with the edits already made.
+
+async function loadAgent() {
+  try {
+    state.agent = await api('/api/flow-agent');
+  } catch { state.agent = null; }
+  drawAgent();
+}
+
+function drawAgent() {
+  const a = state.agent;
+  const box = $('#agent-box');
+  if (!box) return;
+  if (!a) { box.innerHTML = ''; libCount('agent', ''); return; }
+
+  libCount('agent', a.host || 'sozlanmagan', !a.ready || a.local);
+  box.innerHTML = `
+    <div class="agent-where">
+      <span>Manzil</span>
+      <b>${esc(a.host || '— sozlanmagan —')}</b>
+    </div>
+    ${!a.ready ? `<p class="msg warn">${esc(a.why)}</p>` : ''}
+    ${a.local ? `<p class="msg warn">Bu manzil faqat shu kompyuterda ishlaydi.
+      Telefondan foydalanish uchun Flow Agent'ni Railway'da ishga tushiring va
+      Sarideo'ning <code>FLOW_AGENT_URL</code> o'zgaruvchisiga o'sha manzilni
+      yozing.</p>` : ''}
+    ${a.ready ? `
+      <a class="btn primary" href="/api/flow-agent/extension.zip" download>
+        Kengaytmani yuklab olish</a>
+      <ol class="agent-steps">
+        <li>Faylni yechib oling (unzip).</li>
+        <li>Chrome'da <code>chrome://extensions</code> ni oching,
+          <b>Developer mode</b> ni yoqing.</li>
+        <li><b>Load unpacked</b> — yechilgan papkani tanlang.</li>
+        <li><code>labs.google/fx/tools/flow</code> ni oching va o'sha varaqni
+          yopmang.</li>
+        <li>Kengaytma panelida <b>Connected</b> yozuvi chiqishi kerak.</li>
+        <li>Shu yerdan yuqoridagi «Rasmlarni kim yasaydi» ni
+          <b>Flow Agent</b> qiling.</li>
+      </ol>
+      <p class="note">Kengaytma o'zi ulanadi — kompyuteringizda hech qanday port
+        ochish shart emas. Rasmlarni Google'dan sizning brauzeringiz so'raydi,
+        shuning uchun hisobingiz va IP manzilingiz o'zgarmaydi.</p>` : ''}`;
+}
+
 let flowPoll = null;
 
 async function loadFlow() {
@@ -6094,7 +6145,7 @@ $('#key-form')?.addEventListener('submit', async (e) => {
     await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
     await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat(),
                        loadYouTube(), loadPlans(), loadKeys(), loadFlow(),
-                       loadSpace()]);
+                       loadSpace(), loadAgent()]);
     applyBrandToComposer();
     // Only reattach to work that is actually moving. A draft waiting on review
     // is not urgent, and unfolding it on load would bury the composer.

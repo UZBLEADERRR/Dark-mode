@@ -47,7 +47,7 @@ from .models import (
     ShotIn,
     TranslateRequest,
 )
-from .providers import catalog, images, storage, tts, youtube
+from .providers import catalog, flowext, images, storage, tts, youtube
 from .skills import llm, strategist
 from .render import kenburns, overlays as ov
 from .render import shots
@@ -2389,6 +2389,33 @@ async def flow_tasks(job_id: str = "", pending: bool = True) -> dict[str, Any]:
             "on": config.IMAGE_PROVIDER == "flow",
             # What it goes back to when switched off, so the button can say it.
             "off_provider": config.IMAGE_PROVIDER_ENV}
+
+
+@app.get("/api/flow-agent")
+async def flow_agent_status() -> dict[str, Any]:
+    """Whether the ready-made extension can be handed out, and where it points."""
+    return {**flowext.status(), "url": config.FLOW_AGENT_URL}
+
+
+@app.get("/api/flow-agent/extension.zip")
+async def flow_agent_extension() -> Response:
+    """Flow Agent's extension, already pointed at this app's backend.
+
+    The address is compiled into the extension's `config.js` and repeated in its
+    manifest permissions, with no field in its panel to change either — so
+    connecting it to a backend of your own otherwise means editing two files by
+    hand on a laptop from written instructions. This is the same folder with
+    those edits already made: download, unzip, load unpacked.
+    """
+    try:
+        data = flowext.build()
+    except flowext.NotReady as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=data, media_type="application/zip",
+        headers={"Content-Disposition":
+                 'attachment; filename="flow-agent-extension.zip"'},
+    )
 
 
 @app.post("/api/flow/mode")
