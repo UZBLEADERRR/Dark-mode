@@ -3894,7 +3894,26 @@ function drawScenePanel() {
     watch(ED.job.id);
   });
 
-  $('[data-a="image"]', host).addEventListener('click', () => regen({ image: true, voice: false }));
+  // Drawing the same prompt again and hoping for a better roll is the expensive
+  // way to fix "his jacket is the wrong colour". Saying what is wrong is the
+  // cheap one, and the note sticks to the scene so it still applies the next
+  // time anything draws it.
+  $('[data-a="image"]', host).addEventListener('click', async () => {
+    const answer = await ask({
+      title: `${s.index + 1}-sahna rasmini qayta yasash`,
+      ok: 'Qayta yasash',
+      html: `<label class="f"><span>Nimasi noto‘g‘ri? (ixtiyoriy)</span>
+          <textarea name="note" rows="3" maxlength="600"
+            placeholder="Masalan: kurtkasi qizil bo‘lsin, ko‘k emas. Fonda odam ko‘p — kamaytiring."
+            >${esc(s.fix || '')}</textarea></label>
+        <small class="note">Yozganingiz promptga qo‘shiladi va shu sahnada
+          saqlanadi — keyingi safar ham hisobga olinadi. Bo‘sh qoldirsangiz
+          oldingi izoh o‘chadi.</small>`,
+    });
+    if (!answer) return;
+    s.fix = (answer.note || '').trim();
+    regen({ image: true, voice: false, note: s.fix });
+  });
 
   $('[data-a="record"]', host)?.addEventListener('click', () => recordScene(s));
 
@@ -4064,9 +4083,16 @@ function drawLayersPanel() {
       <small class="note">0 — sahna oxirigacha ko‘rinadi.</small>
 
       <div class="sc-acts">
+        <!-- What a channel mark is: the same thing in the same corner from the
+             first frame to the last. It is also how a watermark burned in by
+             somebody else's generator gets covered. -->
+        <button class="btn primary" data-a="everywhere">Hamma sahnaga qo‘yish</button>
         <button class="btn ghost" data-a="dup">Nusxalash</button>
         <button class="btn ghost" data-a="drop">O‘chirish</button>
       </div>
+      <small class="note">«Hamma sahnaga qo‘yish» — shu qatlamni butun video
+        davomida, shu joyda saqlaydi. Keyin istagan sahnada alohida surib
+        qo‘yish mumkin.</small>
     </div>` : ''}`;
 
   $$('[data-pick]', host).forEach((b) => b.addEventListener('click', (e) => {
@@ -4100,6 +4126,26 @@ function drawLayersPanel() {
   }));
 
   $('[data-a="drop"]', host).addEventListener('click', () => dropLayer(l.id));
+
+  $('[data-a="everywhere"]', host).addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      // Flushed first: the layer has to exist on the server before the server
+      // can be asked to copy it, and it may have been dragged a second ago.
+      await flush();
+      const out = await api(
+        `/api/jobs/${ED.job.id}/scenes/${s.index}/layers/${encodeURIComponent(l.id)}/everywhere`,
+        { method: 'POST' });
+      mergeScenes((await api(`/api/jobs/${ED.job.id}`)).scenes || []);
+      toast(`${out.stamped} ta sahnaga qo‘yildi`);
+    } catch (err) {
+      editorError(err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   $('[data-a="dup"]', host).addEventListener('click', () => {
     const copy = { ...l, id: newLayerId(), x: Math.min(1, l.x + 0.06), y: Math.min(1, l.y + 0.06) };
     s.overlays.push(copy);

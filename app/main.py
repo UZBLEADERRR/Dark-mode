@@ -1805,6 +1805,48 @@ def _apply_voice(job_id: str, request: dict[str, Any],
     return changed
 
 
+@app.post("/api/jobs/{job_id}/scenes/{index}/layers/{layer_id}/everywhere")
+async def layer_everywhere(job_id: str, index: int, layer_id: str) -> dict[str, Any]:
+    """Put this layer on every scene, for the whole of each one.
+
+    What a channel mark is: the same thing in the same corner from the first
+    frame to the last. Doing it by hand is adding one sticker forty times and
+    lining it up forty times, and it is also how you cover a watermark somebody
+    else's generator burned into the picture.
+
+    Copied rather than shared: once it is there it behaves like any other layer,
+    so a single scene where it sits over somebody's face can be nudged without
+    the other thirty-nine moving with it.
+    """
+    _job, scenes = _editable_job(job_id)
+    source = next((s for s in scenes if s["index"] == index), None)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Scene {index} does not exist.")
+    layer = next((l for l in (source.get("overlays") or [])
+                  if l.get("id") == layer_id), None)
+    if layer is None:
+        raise HTTPException(status_code=404, detail="Bu sahnada bunday qatlam yo'q.")
+
+    stamped = 0
+    for scene in scenes:
+        if scene["index"] == index:
+            # Spanning the whole scene is the point, so the source is fixed too.
+            layer["start"], layer["end"] = 0, 0
+            continue
+        # Its own id per scene: two layers sharing one would make "delete this
+        # one" ambiguous, and the editor addresses layers by id.
+        copy = {**layer, "id": f"{layer_id}-{scene['index']}", "start": 0, "end": 0}
+        rest = [l for l in (scene.get("overlays") or [])
+                if l.get("id") != copy["id"]]
+        scene["overlays"] = ov.normalize_all([*rest, copy])
+        stamped += 1
+
+    source["overlays"] = ov.normalize_all(source.get("overlays") or [])
+    store.update_job(job_id, result={"scenes": scenes},
+                     log=f"Belgi {stamped + 1} ta sahnaga qo'yildi")
+    return {"id": job_id, "scenes": len(scenes), "stamped": stamped + 1}
+
+
 @app.patch("/api/jobs/{job_id}/scenes/{index}")
 async def edit_scene(job_id: str, index: int, patch: ScenePatch) -> dict[str, Any]:
     """Rewrite one scene. Changed text marks the scene's assets stale."""
@@ -2009,7 +2051,7 @@ async def regenerate_scene(job_id: str, index: int, body: RegenerateRequest) -> 
         redo_voice=redo_voice or bool(switching),
         redo_all_voices=body.all_scenes or bool(switching),
         voice_range=None if switching else span,
-        language=switching or None), job_id)
+        language=switching or None, note=body.note.strip()), job_id)
     return {"id": job_id, "status": "running",
             "voice_range": None if switching else span,
             "language": switching or job["request"].get("language", "")}

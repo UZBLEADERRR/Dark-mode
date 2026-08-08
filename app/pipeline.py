@@ -342,6 +342,43 @@ async def arrange_uploaded_images(
             path.unlink(missing_ok=True)
 
 
+def set_fix(scene: dict, note: str) -> None:
+    """Remember what was wrong with this scene's picture, or forget it.
+
+    On the scene rather than passed to one call: the same complaint applies to
+    the render that redraws it, to a resume that finds it missing, and to the
+    prompt sheet somebody is pasting into Flow by hand. An empty note clears it,
+    which is how you say "never mind, it was fine".
+    """
+    said = " ".join((note or "").split())[:600]
+    if said:
+        scene["fix"] = said
+    else:
+        scene.pop("fix", None)
+    # Shots draw from their own prompts, so the note has to reach them too.
+    for shot in scene.get("shots") or []:
+        if said:
+            shot["fix"] = said
+        else:
+            shot.pop("fix", None)
+
+
+def drawn_prompt(scene: dict, holder: dict | None = None) -> str:
+    """The words this picture is actually drawn from, complaint included.
+
+    One place, so the sheet you copy from and the request a provider is sent are
+    the same text — a prompt sheet that omitted the correction would send you off
+    to redraw the very thing you had just said was wrong.
+    """
+    holder = holder if holder is not None else scene
+    base = (holder.get("prompt") or holder.get("image_prompt")
+            or scene.get("image_prompt") or scene.get("visual")
+            or scene.get("narration", "")[:300] or "cinematic still")
+    said = (holder.get("fix") or scene.get("fix") or "").strip()
+    return f"{base}\n\nIMPORTANT — fix this from the previous attempt: {said}" \
+        if said else base
+
+
 def prompt_sheet(job: dict) -> dict:
     """Every picture this project still wants, written out to be copied by hand.
 
@@ -367,8 +404,7 @@ def prompt_sheet(job: dict) -> dict:
         holders: list[dict | None] = list(scene.get("shots") or []) or [None]
         for shot in holders:
             holder = shot if shot is not None else scene
-            prompt = (holder.get("prompt") or holder.get("image_prompt")
-                      or scene.get("image_prompt") or scene.get("visual") or "").strip()
+            prompt = drawn_prompt(scene, holder).strip()
             label = f"Sahna {scene['index'] + 1}"
             if shot is not None and len(scene.get("shots") or []) > 1:
                 label += f" · kadr {scene['shots'].index(shot) + 1}"
@@ -941,6 +977,9 @@ def public_scene(job_id: str, scene: dict) -> dict:
         "audio_url": _file_url(scene.get("audio_path"), scene.get("voice_version", 0)),
         "words": scene.get("words") or [],
         "needs_image": bool(scene.get("needs_image")),
+        # What was said to be wrong with the picture last time, so the box you
+        # would type it into again already has it.
+        "fix": scene.get("fix", ""),
         # There is a picture, and it is a grey rectangle. The editor says so
         # rather than showing it as finished work.
         "placeholder": bool(scene.get("placeholder")
@@ -1391,9 +1430,7 @@ async def _render_images(
         # scene. What the scene is *about* is always known, so it is drawn from
         # that instead.
         path, warning = await images.generate_image(
-            prompt=(holder.get("prompt") or holder.get("image_prompt")
-                    or scene.get("image_prompt") or scene.get("visual")
-                    or scene.get("narration", "")[:300] or "cinematic still"),
+            prompt=drawn_prompt(scene, holder),
             negative_prompt=holder.get("negative_prompt") or scene.get("negative_prompt", ""),
             reference_paths=refs,
             aspect=aspect,
@@ -2402,7 +2439,7 @@ async def relanguage(job_id: str, language: str) -> list[dict]:
 async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_voice: bool,
                            redo_all_voices: bool = False,
                            voice_range: tuple[int, int] | None = None,
-                           language: str | None = None) -> None:
+                           language: str | None = None, note: str = "") -> None:
     """Rebuild one scene's image and/or voice in place.
 
     `redo_all_voices` re-records the whole video instead — what you want after
@@ -2416,6 +2453,12 @@ async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_vo
     `language` rewrites the narration first. It always covers the whole video and
     ignores any range, because half a video in another language is not something
     anybody wants.
+
+    `note` is what is wrong with the picture that is there. Drawing the same
+    prompt again and hoping for a better roll is the expensive way to fix "his
+    jacket is the wrong colour"; saying so is the cheap one. It is kept on the
+    scene rather than used once, so it still applies the next time this scene is
+    drawn — by the render, by a resume, or by hand from the prompt sheet.
     """
     job = store.get_job(job_id)
     if job is None:
@@ -2464,6 +2507,7 @@ async def regenerate_scene(job_id: str, index: int, *, redo_image: bool, redo_vo
             )
 
         if redo_image:
+            set_fix(target, note)
             heroes = store.get_heroes(request.get("hero_ids") or [])
             hero_paths = _materialize_heroes(workdir, [h["id"] for h in heroes])
             _progress(job_id, "images", 60, f"Regenerating the image for scene {index + 1}")
