@@ -31,6 +31,7 @@ const state = {
   sheet: null,      // the prompt sheet on screen, and the job state it was
   sheetKey: null,   // fetched for — it is refetched only when that moves
   space: null,      // what is taking up room, as of the last time it was asked
+  project: null,    // which Flow project the agent is filing pictures into
   agent: null,      // where the Flow Agent backend is, and whether the
                     // ready-made extension can be handed out for it
   reveal: false,
@@ -5801,7 +5802,59 @@ async function loadAgent() {
   try {
     state.agent = await api('/api/flow-agent');
   } catch { state.agent = null; }
+  // Asked separately: it reaches across to the agent, which may be asleep, and
+  // the download half of this panel must not wait on that.
+  try {
+    state.project = await api('/api/flow-agent/project');
+  } catch { state.project = null; }
   drawAgent();
+}
+
+/** Point the agent at another Flow project, from wherever you happen to be. */
+function drawProject() {
+  const p = state.project;
+  const host = $('#agent-project');
+  if (!host) return;
+  if (!p) { host.innerHTML = ''; return; }
+
+  host.innerHTML = `
+    <label class="f"><span>Flow loyiha ID</span>
+      <input id="proj-id" value="${esc(p.project_id || '')}" spellcheck="false"
+        placeholder="0143adf4-5864-4cb4-abb5-fe4254ad0dc7" /></label>
+    ${p.ready ? '' : `<p class="msg warn">${esc(p.why || '')}</p>`}
+    <div class="sc-acts">
+      <button class="btn primary" id="proj-save">Shu loyihaga o‘tish</button>
+      ${p.url ? `<a class="btn ghost" href="${esc(p.url)}" target="_blank"
+        rel="noopener">Flow'da ochish</a>` : ''}
+    </div>
+    <p class="note">Loyiha to‘lib qolsa Flow'da yangisini oching, manzildagi
+      <code>…/project/<b>ID</b></code> qismini shu yerga qo‘ying va tugmani
+      bosing. Railway'ga kirish shart emas — brauzeringizdagi Flow varag‘i ham
+      o‘sha loyihaga o‘tadi.${
+      p.browsers === 0 ? ' <b>Hozir hech qaysi brauzer ulanmagan.</b>' : ''}</p>`;
+
+  $('#proj-save').addEventListener('click', async () => {
+    const btn = $('#proj-save');
+    const wanted = $('#proj-id').value.trim();
+    if (!wanted) { toast('Loyiha ID ni kiriting'); return; }
+    btn.disabled = true;
+    btn.textContent = 'O‘tilmoqda…';
+    try {
+      const out = await api('/api/flow-agent/project', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: wanted, open_tab: true }),
+      });
+      toast(out.opened ? 'Loyiha almashtirildi — brauzerda ochildi'
+        : 'Loyiha almashtirildi (brauzer ulanmagan)');
+      await loadAgent();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Shu loyihaga o‘tish';
+    }
+  });
 }
 
 function drawAgent() {
@@ -5812,6 +5865,7 @@ function drawAgent() {
 
   libCount('agent', a.host || 'sozlanmagan', !a.ready || a.local);
   box.innerHTML = `
+    <div class="agent-project" id="agent-project"></div>
     <div class="agent-where">
       <span>Manzil</span>
       <b>${esc(a.host || '— sozlanmagan —')}</b>
@@ -5841,6 +5895,8 @@ function drawAgent() {
       ${a.keyed ? `<p class="note warnish">Flow Agent kalit bilan himoyalangan,
         shuning uchun kalit shu faylning ichiga yoziladi —
         <b>faylni birovga bermang</b>.</p>` : ''}` : ''}`;
+
+  drawProject();
 }
 
 let flowPoll = null;
