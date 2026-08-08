@@ -22,6 +22,10 @@
   <nav class="topnav" id="topnav">
     <button data-go="chat"><b>Suhbat</b><u>Suhbat</u></button>
     <button data-go="create" aria-pressed="true"><b>Yaratish</b><u>Yangi</u></button>
+    <!-- Watching a video being made and editing one are two different jobs,
+         and putting them on one screen meant neither had room. This is the
+         watching one: what is happening now, and how far through it is. -->
+    <button data-go="run"><b>Jarayon</b><u>Jarayon</u><i class="badge hidden" id="run-badge"></i></button>
     <button data-go="edit"><b>Tahrirlash</b><u>Tahrir</u><i class="badge hidden" id="jobs-badge"></i></button>
     <button data-go="plans"><b>Reja</b><u>Reja</u><i class="badge hidden" id="plans-badge"></i></button>
     <button data-go="ready"><b>Tayyor</b><u>Tayyor</u><i class="badge hidden" id="ready-badge"></i></button>
@@ -156,6 +160,32 @@
     </div>
   </section>
 
+  <!-- ══ Jarayon ════════════════════════════════════════════════════ -->
+  <!-- What is being made right now. The progress card used to sit on top of the
+       editor, where it pushed the film off the screen and was itself pushed off
+       by it — so neither the picture nor the progress was ever fully visible. -->
+  <section class="view" id="view-run">
+    <h1 class="view-title">Jarayon</h1>
+
+    <!-- One chip per project that is not finished with. Small, because this is
+         a switch between two or three things, not a library. -->
+    <div class="runchips" id="run-chips"></div>
+
+    <!-- Built once and updated in place, never re-rendered. The newest picture
+         while it is drawing, the finished film once there is one — and a
+         <video> element that survives the poll instead of being torn down and
+         rebuilt under the user every two and a half seconds. -->
+    <div class="livebox hidden" id="run-live"></div>
+
+    <section class="stage hidden" id="stage"></section>
+
+    <div class="nothing hidden" id="run-empty">
+      <h2>Hozir hech narsa yasalmayapti</h2>
+      <p>Yangi video boshlang, yoki tugallanmagan loyihani tanlang.</p>
+      <div class="nothing-acts" id="run-empty-acts"></div>
+    </div>
+  </section>
+
   <!-- ══ Tahrirlash ═════════════════════════════════════════════════ -->
   <section class="view" id="view-edit">
     <!-- Collapsed by default once there is something open below it: the strip
@@ -166,10 +196,12 @@
         <em id="projects-count"></em>
         <i class="chev" aria-hidden="true"></i>
       </button>
+      <!-- Finished and reviewable projects first, and a search box once there
+           are enough of them to have lost one in. -->
+      <input class="projects-find" id="projects-find" type="search"
+             placeholder="Loyiha nomi bo‘yicha qidirish" hidden />
       <div class="projects" id="jobs-list"></div>
     </div>
-
-    <section class="stage hidden" id="stage"></section>
 
     <!-- With nothing open this screen used to be a blank page under a dead row
          of tools. It says what to do, and offers the obvious thing to do it to. -->
