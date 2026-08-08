@@ -1000,13 +1000,36 @@ function drawBrand() {
         </select>
       </div>
     </div>
-    ${b.logo_asset_id ? `<div class="f2">
+    ${b.logo_asset_id ? `
+    <!-- Two sliders and no picture is not a way to place anything. This is the
+         frame the logo will sit in, with the logo in it: drag it where it goes,
+         or tap a corner. It stays there for the whole video. -->
+    <div class="f"><span>Logotip qayerda tursin — sudrab qo‘ying</span>
+      <div class="logopad">
+        <div class="seg tight logopad-shape" id="logo-shape">
+          <button type="button" data-ar="1.7778" aria-pressed="${
+            (b.logo_shape || '16:9') === '16:9'}">16:9</button>
+          <button type="button" data-ar="0.5625" aria-pressed="${
+            b.logo_shape === '9:16'}">9:16</button>
+        </div>
+        <div class="logopad-frame" id="logo-frame"
+             style="--ar:${b.logo_shape === '9:16' ? '0.5625' : '1.7778'}">
+          <img id="logo-ghost" src="${esc(logo?.url || '')}" alt="" draggable="false" />
+        </div>
+        <div class="logo-anchors" id="logo-anchors">
+          ${[['0.08', '0.1', 'yuqori chap'], ['0.5', '0.1', 'yuqori o‘rta'],
+             ['0.92', '0.1', 'yuqori o‘ng'],
+             ['0.08', '0.5', 'chap'], ['0.5', '0.5', 'markaz'], ['0.92', '0.5', 'o‘ng'],
+             ['0.08', '0.9', 'quyi chap'], ['0.5', '0.9', 'quyi o‘rta'],
+             ['0.92', '0.9', 'quyi o‘ng']].map(([x, y, name]) =>
+            `<button type="button" data-ax="${x}" data-ay="${y}" aria-label="${name}"
+              class="${Math.abs(b.logo_x - Number(x)) < 0.02
+                && Math.abs(b.logo_y - Number(y)) < 0.02 ? 'on' : ''}"></button>`).join('')}
+        </div>
+      </div></div>
+    <div class="f2">
       ${brandSlider('logo_size', 'Logotip kattaligi', 0.03, 0.35, 0.01, b.logo_size)}
       ${brandSlider('logo_opacity', 'Shaffofligi', 0.1, 1, 0.05, b.logo_opacity)}
-    </div>
-    <div class="f2">
-      ${brandSlider('logo_x', 'Gorizontal', 0, 1, 0.01, b.logo_x)}
-      ${brandSlider('logo_y', 'Vertikal', 0, 1, 0.01, b.logo_y)}
     </div>` : ''}
 
     <div class="f"><span>Brend rangi — hook va yozuvlar shu rangda chiqadi</span>
@@ -1052,7 +1075,9 @@ function drawBrand() {
   $$('[data-b]').forEach((el) => el.addEventListener('input', () => {
     state.brand[el.dataset.b] = el.type === 'range' ? Number(el.value) : el.value;
     if (['logo_asset_id', 'accent'].includes(el.dataset.b)) drawBrand();
+    else if (el.dataset.b.startsWith('logo_')) placeLogoGhost();
   }));
+  wireLogoPad();
   $$('[data-brand-swatch] button').forEach((btn) => btn.addEventListener('click', () => {
     state.brand.accent = btn.dataset.c;
     drawBrand();
@@ -1077,6 +1102,67 @@ function drawBrand() {
       alert(e.message);
     } finally { btn.disabled = false; }
   });
+}
+
+/** Put the ghost logo where the brand says it goes, in the frame's own terms.
+ *
+ * The same arithmetic the renderer and the editor's canvas use: `x`/`y` are the
+ * centre as a fraction of the frame, `size` is the width as a fraction of it.
+ * Anything else here would be a preview of a placement that never happens.
+ */
+function placeLogoGhost() {
+  const ghost = $('#logo-ghost');
+  if (!ghost) return;
+  const b = state.brand || {};
+  ghost.style.left = `${(b.logo_x ?? 0.9) * 100}%`;
+  ghost.style.top = `${(b.logo_y ?? 0.1) * 100}%`;
+  ghost.style.width = `${(b.logo_size ?? 0.11) * 100}%`;
+  ghost.style.opacity = String(b.logo_opacity ?? 0.9);
+  $$('#logo-anchors button').forEach((btn) => btn.classList.toggle('on',
+    Math.abs((b.logo_x ?? 0) - Number(btn.dataset.ax)) < 0.02
+    && Math.abs((b.logo_y ?? 0) - Number(btn.dataset.ay)) < 0.02));
+}
+
+function wireLogoPad() {
+  const frame = $('#logo-frame');
+  if (!frame) return;
+  placeLogoGhost();
+
+  // Dragging is on the frame, not on the logo: a logo at 3% of the width is a
+  // target too small to grab on a phone, and dropping anywhere in the frame
+  // meaning "put it there" is the behaviour people expect anyway.
+  const put = (event) => {
+    const box = frame.getBoundingClientRect();
+    const clamp = (v) => Math.min(1, Math.max(0, v));
+    state.brand.logo_x = Math.round(clamp((event.clientX - box.left) / box.width) * 100) / 100;
+    state.brand.logo_y = Math.round(clamp((event.clientY - box.top) / box.height) * 100) / 100;
+    placeLogoGhost();
+  };
+  frame.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    frame.setPointerCapture(e.pointerId);
+    frame.classList.add('dragging');
+    put(e);
+  });
+  frame.addEventListener('pointermove', (e) => {
+    if (frame.hasPointerCapture(e.pointerId)) put(e);
+  });
+  frame.addEventListener('pointerup', () => frame.classList.remove('dragging'));
+  frame.addEventListener('pointercancel', () => frame.classList.remove('dragging'));
+
+  $$('#logo-anchors button').forEach((btn) => btn.addEventListener('click', () => {
+    state.brand.logo_x = Number(btn.dataset.ax);
+    state.brand.logo_y = Number(btn.dataset.ay);
+    placeLogoGhost();
+  }));
+
+  // Which shape you are checking the placement against. A corner that looks
+  // right on a wide frame can be under a phone's own furniture on a tall one.
+  $$('#logo-shape button').forEach((btn) => btn.addEventListener('click', () => {
+    $$('#logo-shape button').forEach((x) => x.setAttribute('aria-pressed', x === btn));
+    frame.style.setProperty('--ar', btn.dataset.ar);
+    state.brand.logo_shape = btn.dataset.ar === '0.5625' ? '9:16' : '16:9';
+  }));
 }
 
 const brandSlider = (key, label, min, max, step, value) =>
@@ -1434,6 +1520,67 @@ syncDuration();
 $('#topic').addEventListener('input', (e) => {
   e.target.style.height = 'auto';
   e.target.style.height = `${Math.min(e.target.scrollHeight, 220)}px`;
+  // The advice was about a different subject the moment the subject changes.
+  $('#advise-out').classList.add('hidden');
+});
+
+// ── how long should this be ───────────────────────────────────────
+// Length and shape were a slider with 180 on it and a format nobody moved.
+// Neither can be guessed from the app's side, but both can be advised on from
+// the subject — so it is asked here, and applied with one tap rather than
+// described and left for the user to go and set by hand.
+
+const setFormat = (id) => {
+  state.format = id;
+  $$('#format-seg button').forEach((x) => x.setAttribute('aria-pressed', x.dataset.fmt === id));
+};
+
+$('#advise-btn').addEventListener('click', async () => {
+  const btn = $('#advise-btn');
+  const out = $('#advise-out');
+  const topic = $('#topic').value.trim();
+  if (topic.length < 2) { toast('Avval mavzuni yozing'); $('#topic').focus(); return; }
+
+  btn.disabled = true;
+  const was = btn.textContent;
+  btn.textContent = 'So‘ralmoqda…';
+  try {
+    const a = await api('/api/advise/length', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic, language: $('#language').value || '' }),
+    });
+    out.classList.remove('hidden');
+    out.innerHTML = `
+      <div class="advise-head">
+        <b>${esc(a.label)} · ${durationLabel(a.seconds)}</b>
+        <em>${durationLabel(a.low)} – ${durationLabel(a.high)}</em>
+      </div>
+      <p>${esc(a.why)}</p>
+      ${a.title_note ? `<p class="advise-note">${esc(a.title_note)}</p>` : ''}
+      <div class="advise-acts">
+        <button type="button" class="btn sm primary" data-take="${a.seconds}"
+          data-fmt="${esc(a.video_format)}">Shu tanlansin</button>
+        ${a.both ? `<button type="button" class="btn sm" data-take="${a.other_seconds}"
+          data-fmt="${esc(a.other_format)}">${esc(a.other_label)} — ${
+            durationLabel(a.other_seconds)}</button>` : ''}
+      </div>`;
+    $$('#advise-out [data-take]').forEach((b) => b.addEventListener('click', () => {
+      // Clamped to what the slider can hold, so applying advice never leaves
+      // the control showing one number and the request carrying another.
+      const secs = Math.max(Number(duration.min), Math.min(Number(duration.max),
+        Number(b.dataset.take)));
+      duration.value = String(secs);
+      setFormat(b.dataset.fmt);
+      syncDuration();
+      toast(`${durationLabel(secs)} · ${b.dataset.fmt} tanlandi`);
+    }));
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = was;
+  }
 });
 
 /** Cartoon mode only works with characters, so it says so rather than failing.

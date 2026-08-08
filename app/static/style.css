@@ -1621,6 +1621,59 @@ textarea.flow-prompt:focus { outline: none; border-color: var(--accent); }
 .brand-box .btn.primary { justify-self: start; }
 .brand-box .saver { text-align: left; }
 
+/* ── length advice ────────────────────────────────────────────────
+   Sits under the topic box, because that is where the subject it is advising
+   about was typed. Quiet until asked. */
+.advise { margin-top: 8px; display: grid; gap: 8px; justify-items: start; }
+.advise-out {
+  width: 100%; padding: 11px 13px; border-radius: 12px;
+  background: var(--raised); border: 1px solid var(--line);
+}
+.advise-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+}
+.advise-head b { font-size: .86rem; }
+.advise-head em { font-style: normal; font-size: .74rem; color: var(--faint); }
+.advise-out p { margin: 6px 0 0; font-size: .8rem; color: var(--muted); }
+.advise-note { color: var(--warn) !important; }
+.advise-acts { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ── placing the channel logo ─────────────────────────────────────
+   The frame the logo will actually sit in, with the logo in it. Dragging is on
+   the frame rather than on the logo: at 3% of the frame's width the logo is
+   too small a target for a thumb, and "drop it here" is what a tap on the
+   frame means anyway. */
+.logopad { display: grid; gap: 8px; }
+.logopad-shape { justify-self: start; }
+.logopad-frame {
+  --ar: 1.7778;
+  position: relative; aspect-ratio: var(--ar);
+  width: min(100%, calc(34vh * var(--ar)));
+  border-radius: 10px; overflow: hidden; touch-action: none; cursor: crosshair;
+  border: 1px solid var(--line-2); background: #0a0c11;
+  /* A checker says "this is the export frame", not "this is a photo" — the
+     same cue the editor's canvas uses. */
+  background-image:
+    linear-gradient(45deg, #11141b 25%, transparent 25%, transparent 75%, #11141b 75%),
+    linear-gradient(45deg, #11141b 25%, transparent 25%, transparent 75%, #11141b 75%);
+  background-size: 18px 18px;
+  background-position: 0 0, 9px 9px;
+}
+.logopad-frame.dragging { border-color: var(--accent); }
+#logo-ghost {
+  position: absolute; transform: translate(-50%, -50%);
+  pointer-events: none; user-select: none; display: block;
+}
+.logo-anchors {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px;
+  max-width: 132px;
+}
+.logo-anchors button {
+  aspect-ratio: 16 / 10; border-radius: 6px;
+  background: var(--raised); border: 1px solid var(--line);
+}
+.logo-anchors button.on { border-color: var(--accent); background: var(--accent-soft); }
+
 /* ── toast ─────────────────────────────────────────────────────── */
 .toast {
   position: fixed; z-index: 80;
