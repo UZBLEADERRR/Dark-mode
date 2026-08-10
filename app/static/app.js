@@ -2095,6 +2095,20 @@ function drawStage(job) {
     </div>`);
   }
 
+  // And redrawing the ones you name. Redoing scene three, then seven, then
+  // twelve meant opening each, pressing its own button, and waiting out the
+  // whole stage in between — three times.
+  if (!busy && job.scene_count > 1 && ['review', 'done'].includes(job.status)) {
+    p.push(`<div class="stage-redo pick">
+      <label class="f"><span>Qaysi sahnalarning rasmini qayta yasash kerak?</span>
+        <input id="redo-which" inputmode="numeric" autocomplete="off"
+               value="${esc(state.redoWhich || '')}"
+               placeholder="masalan: 3, 5, 8-12" /></label>
+      <button class="btn" data-redo-some="${esc(job.id)}">Shu sahnalarni qayta yasash</button>
+      <small>1 dan ${job.scene_count} gacha. Vergul bilan yozing, oraliq uchun 3-7.</small>
+    </div>`);
+  }
+
   // Nothing has been drawn or recorded yet — the whole video is still just these
   // words, which is exactly why this is the moment to read them.
   if (job.status === 'script') {
@@ -2247,6 +2261,32 @@ function drawStage(job) {
     } catch (e) {
       b.disabled = false;
       alert(e.message);
+    }
+  }));
+  // The stage is redrawn on every poll, which used to take whatever was being
+  // typed with it. What is in the box is remembered, so a redraw restores it.
+  $('#redo-which')?.addEventListener('input', (e) => {
+    state.redoWhich = e.target.value;
+  });
+  $$('#stage [data-redo-some]').forEach((b) => b.addEventListener('click', async () => {
+    const said = ($('#redo-which')?.value || state.redoWhich || '').trim();
+    if (!said) { toast('Sahna raqamlarini yozing — masalan 3, 5, 8-12'); return; }
+    b.disabled = true;
+    b.textContent = 'Boshlandi…';
+    try {
+      const out = await api(`/api/jobs/${b.dataset.redoSome}/images/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenes: said }),
+      });
+      toast(`${out.scenes.length} ta sahna rasmi qayta yasalmoqda`);
+      state.redoWhich = '';
+      state.drawn = null;
+      watch(b.dataset.redoSome);
+    } catch (e) {
+      b.disabled = false;
+      b.textContent = 'Shu sahnalarni qayta yasash';
+      toast(e.message);
     }
   }));
   $$('#stage [data-resume]').forEach((b) => b.addEventListener('click', async () => {
@@ -2967,10 +3007,7 @@ function drawFilmstrip() {
     });
     b.addEventListener('click', (e) => {
       if (e.target.closest('[data-move]')) return;
-      // Tapping the scene that is already open is how you say "this one":
-      // it opens the picker for its picture. One tap to choose a scene, a
-      // second on the same scene to change what is in it.
-      if (ED.i === index) { $('#swap-file')?.click(); return; }
+      if (ED.i === index) return;
       // Picking a scene while the whole video is playing is a seek, not a stop:
       // it carries on from there. Only a single-scene preview ends here.
       if (PREVIEW.chain && ED.scenes[index]?.audio_url) {
@@ -3326,17 +3363,25 @@ async function swapSceneImage(index, file) {
   if (!file || !ED.job) return;
   const target = ED.scenes[index];
   if (!target) return;
+  // A split scene draws from its shots, not from the scene's own picture, so
+  // replacing "the scene's picture" on one used to save a file the render never
+  // looked at. The shot on screen is the one being replaced.
+  const cuts = (target.shots || []).length;
+  const which = cuts ? Math.min(ED.shot || 0, cuts - 1) : -1;
   const pill = $('#swap-pic');
   pill?.classList.add('busy');
   try {
     await flush();
     const body = new FormData();
     body.append('image', file);
+    body.append('shot', String(which));
     await api(`/api/jobs/${ED.job.id}/scenes/${target.index}/image`,
       { method: 'POST', body });
     state.drawn = null;
     await tick();
-    toast(`Sahna ${index + 1} — rasm almashtirildi`);
+    toast(which >= 0
+      ? `Sahna ${index + 1}, ${which + 1}-kadr — rasm qo‘yildi`
+      : `Sahna ${index + 1} — rasm qo‘yildi`);
   } catch (err) {
     editorError(err.message || 'Rasmni almashtirib bo‘lmadi');
   } finally {
@@ -3646,6 +3691,8 @@ function shotBlock(s, motions, transitions) {
         : '<i class="shot-blank"></i>'}
       <b>${j + 1}</b>
       ${split ? `<em>${seconds(sh).toFixed(1)}s</em>` : ''}
+      ${split ? `<i class="shot-x" data-shot-drop="${j}" role="button"
+          aria-label="${j + 1}-kadrni o‘chirish">×</i>` : ''}
     </button>`).join('');
 
   return `
@@ -3681,7 +3728,7 @@ function shotBlock(s, motions, transitions) {
       <div class="sc-acts tight">
         <button class="btn ghost" data-shot-move="-1"${i === 0 ? ' disabled' : ''}>‹ chapga</button>
         <button class="btn ghost" data-shot-move="1"${i === list.length - 1 ? ' disabled' : ''}>o‘ngga ›</button>
-        <button class="btn ghost" data-shot-drop>Kadrni o‘chirish</button>
+        <button class="btn ghost" data-shot-drop="${i}">Kadrni o‘chirish</button>
       </div>` : ''}`;
 }
 
@@ -3701,7 +3748,8 @@ function writeShots(s, list) {
 }
 
 function wireShots(host, s) {
-  $$('[data-shot]', host).forEach((b) => b.addEventListener('click', () => {
+  $$('[data-shot]', host).forEach((b) => b.addEventListener('click', (e) => {
+    if (e.target.closest('[data-shot-drop]')) return;
     ED.shot = Number(b.dataset.shot);
     drawScenePanel();
   }));
@@ -3735,13 +3783,16 @@ function wireShots(host, s) {
     toast('Kadr qo‘shildi — render qilganda rasmi chiziladi');
   });
 
-  $('[data-shot-drop]', host)?.addEventListener('click', () => {
+  $$('[data-shot-drop]', host).forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
     const list = shotList(s).map((x) => ({ ...x }));
     if (list.length < 2) return;
-    list.splice(Math.min(ED.shot || 0, list.length - 1), 1);
-    ED.shot = Math.max(0, (ED.shot || 0) - 1);
+    const gone = Math.min(Number(b.dataset.shotDrop) || 0, list.length - 1);
+    list.splice(gone, 1);
+    ED.shot = Math.max(0, Math.min(ED.shot || 0, list.length - 1) - (gone <= (ED.shot || 0) ? 1 : 0));
     writeShots(s, list);
-  });
+    toast(`${gone + 1}-kadr o‘chirildi`);
+  }));
 
   $$('[data-shot-move]', host).forEach((b) => b.addEventListener('click', () => {
     const list = shotList(s).map((x) => ({ ...x }));
@@ -3924,10 +3975,11 @@ function drawScenePanel() {
     </div>` : ''}
 
     <div class="sc-acts">
+      <label class="btn primary" data-a="upload">Rasm tanlash
+        <input type="file" accept="image/*" hidden /></label>
       <button class="btn" data-a="image">Rasmni qayta yaratish</button>
       ${ED.job.uses_uploaded_audio ? '' : '<button class="btn" data-a="voice">Ovozni qayta yozish</button>'}
       ${ED.job.uses_uploaded_audio ? '' : '<button class="btn" data-a="record">🎙 O‘zim aytaman</button>'}
-      <label class="btn" data-a="upload">O‘z rasmim<input type="file" accept="image/*" hidden /></label>
       ${ED.scenes.length > 1 ? '<button class="btn ghost" data-a="drop-scene">Sahnani o‘chirish</button>' : ''}
     </div>`;
 
@@ -4090,19 +4142,12 @@ function drawScenePanel() {
     });
     if (switching) toast('Matn tarjima qilinib, butun video qayta o‘qiladi');
   });
-  $('[data-a="upload"] input', host).addEventListener('change', (e) => {
+  $('[data-a="upload"] input', host).addEventListener('change', async (e) => {
     const file = e.target.files[0];
-    if (!file) return;
-    guard(async () => {
-      await flush();
-      const body = new FormData();
-      body.append('image', file);
-      await api(`/api/jobs/${ED.job.id}/scenes/${s.index}/image`, { method: 'POST', body });
-      e.target.value = '';
-      state.drawn = null;
-      await tick();
-      toast('Rasm almashtirildi');
-    });
+    e.target.value = '';
+    // One path for both places the button appears, so a split scene is handled
+    // the same way whichever one was pressed.
+    await swapSceneImage(ED.i, file);
   });
 }
 

@@ -826,6 +826,18 @@ input[type="range"]::-moz-range-thumb {
   font-size: .58rem; font-style: normal; color: #fff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, .9); font-variant-numeric: tabular-nums;
 }
+/* The opposite of the + sits on the thing it removes, not below two sliders. */
+.shot-x {
+  position: absolute; right: 2px; top: 2px;
+  width: 18px; height: 18px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: .78rem; font-style: normal; line-height: 1;
+  color: #fff; background: rgba(10, 12, 18, .78);
+  border: 1px solid rgba(255, 255, 255, .22);
+  cursor: pointer;
+}
+.shot-x:hover { background: var(--danger, #b3261e); }
+
 .shot-add {
   flex: 0 0 auto; width: 38px; border-radius: 8px;
   background: var(--raised); color: var(--muted);
@@ -1495,6 +1507,12 @@ label.frame-add svg {
 .stage-redo .btn { border-color: var(--warn); color: var(--warn); }
 .stage-redo .btn:disabled { opacity: .55; }
 .stage-redo small { font-size: .72rem; color: var(--muted); }
+/* Naming scenes is typing, so this one is a column with a full-width field
+   rather than a button with a box wedged next to it. */
+.stage-redo.pick { display: block; }
+.stage-redo.pick .f { margin-bottom: 8px; }
+.stage-redo.pick .btn { border-color: var(--line-2); color: var(--text); }
+.stage-redo.pick small { display: block; margin-top: 6px; }
 
 /* ── the prompt sheet ──────────────────────────────────────────────
    A hundred prompts to be worked through one at a time, on a phone, in another
