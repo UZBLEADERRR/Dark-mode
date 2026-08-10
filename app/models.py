@@ -191,6 +191,12 @@ class CreateJobRequest(BaseModel):
     brand_logo: bool = True
     # fast | balanced | quality — trades encode time against picture quality.
     render_speed: Literal["fast", "balanced", "quality"] = "balanced"
+    # Deliver a long video as several short ones, this many scenes each. 0 keeps
+    # it as one file. A ninety-scene video is easier to check and easier to redo
+    # in pieces, and joining them in a phone editor takes a minute — which is a
+    # far better trade than waiting out, and re-waiting out, a single half-hour
+    # render.
+    part_size: int = Field(default=0, ge=0, le=200)
     # How often the picture changes. steady = one image per line, as before;
     # dynamic and fast split longer lines across two to four, which costs that
     # many more images to generate.

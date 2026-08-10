@@ -1687,6 +1687,7 @@ async function submitDub() {
   body.append('source_language', $('#dub_source').value);
   body.append('original_volume', $('#dub_original').value);
   body.append('render_speed', state.speed);
+  body.append('part_size', String(Number($('#part_size')?.value || 0)));
   body.append('shot_pace', state.pace);
   body.append('topic', file.name.replace(/\.[^.]+$/, ''));
   if ($('#tts_provider').value) body.append('tts_provider', $('#tts_provider').value);
@@ -1712,6 +1713,7 @@ async function submitSubtitle() {
   body.append('subtitle_style', $('#subtitle_style').value);
   body.append('burn_subtitles', $('#sub_burn').value === '1' ? 'true' : 'false');
   body.append('render_speed', state.speed);
+  body.append('part_size', String(Number($('#part_size')?.value || 0)));
   body.append('topic', file.name.replace(/\.[^.]+$/, ''));
   const job = await api('/api/videos/subtitle', { method: 'POST', body });
   go('run');
@@ -1775,6 +1777,7 @@ $('#submit-btn').addEventListener('click', async () => {
     burn_subtitles: $('#burn_subtitles').checked,
     render_speed: state.speed,
     shot_pace: state.pace,
+    part_size: Number($('#part_size')?.value || 0),
     auto_hook: $('#auto_hook').checked,
     brand_logo: $('#brand_logo').checked,
     action: $('#action').value.trim(),
@@ -4744,13 +4747,25 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
           <small>${esc(j.video_format)} · ${clock(j.duration)} · ${
             j.caption_count ? `${j.caption_count} ta satr` : `${j.scene_count || 0} sahna`}</small>
         </div>
+        ${(j.parts || []).length ? `<div class="parts">
+          <span class="parts-head">Bo‘laklar — tartib bilan yuklab oling va
+            muharringizda ketma-ket qo‘ying</span>
+          ${j.parts.map((p) => `
+            <a class="part" href="${esc(p.download_url)}" download>
+              <b>${p.number}</b>
+              <span>${p.from_scene}–${p.to_scene}-sahna</span>
+              <em>${clock(p.duration)}</em>
+            </a>`).join('')}
+        </div>` : ''}
         <div class="acts" style="margin-top:0">
           <!-- A subtitled upload has no video of ours to download unless the
                words were burned in; with "faqat fayl" the deliverable is the
                subtitle, and a download button pointing at nothing is worse than
                no button. -->
           ${j.kind === 'subtitle' && !j.download_url ? '' :
-            `<a class="btn primary" href="${esc(j.download_url || j.video_url || '')}" download>Videoni yuklab olish</a>`}
+            (j.parts || []).length
+              ? `<span class="parts-note">${j.parts.length} ta bo‘lak — pastdan birma-bir yuklab oling</span>`
+              : `<a class="btn primary" href="${esc(j.download_url || j.video_url || '')}" download>Videoni yuklab olish</a>`}
           <!-- The same cues in the shape you are about to use them in: an editor
                takes .srt, a web player only loads .vtt, and the description box
                wants the words with no timings at all. -->

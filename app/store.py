@@ -961,7 +961,7 @@ def create_job(request: dict[str, Any]) -> str:
 # and what is still unfinished — this module cannot import it back.
 CARD_FIELDS = ("title", "duration", "scene_count", "caption_count", "video_url",
                "download_url", "subtitle_url", "metadata", "thumbnails",
-               "youtube", "warnings")
+               "youtube", "warnings", "parts")
 
 
 def plain_card(result: dict[str, Any]) -> dict[str, Any]:

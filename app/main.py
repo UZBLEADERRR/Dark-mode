@@ -282,6 +282,11 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "duration": result.get("duration"),
         "title": result.get("title"),
         "scene_count": result.get("scene_count") or len(scenes),
+        # Empty unless the video was delivered in pieces, which is what a
+        # ninety-scene project asks for when it would rather have ten short
+        # files it can join itself than one it has to wait out whole.
+        "parts": result.get("parts") or [],
+        "part_size": int(request.get("part_size") or 0),
         # Only a subtitling job has one, and for that job it is the count that
         # means something.
         "caption_count": result.get("caption_count"),
@@ -3082,13 +3087,37 @@ async def subtitles(job_id: str, kind: str) -> Response:
 
 
 @app.get("/api/jobs/{job_id}/download")
-async def download(job_id: str) -> FileResponse:
-    _get_job_or_404(job_id)
+async def download(job_id: str, part: int = 0) -> FileResponse:
+    """The finished video — or one piece of it, when it was made in pieces.
+
+    A long video can be delivered as several short ones to be joined in a phone
+    editor. `part` is 1-based and counts from the start of the video, so
+    downloading them in order is downloading 1, 2, 3.
+    """
+    job = _get_job_or_404(job_id)
     folder = config.PROJECTS_DIR / job_id
+    pieces = (job.get("result") or {}).get("parts") or []
+    if part and pieces:
+        chosen = next((p for p in pieces if p.get("number") == part), None)
+        if chosen is None:
+            raise HTTPException(status_code=404, detail=f"{part}-qism yo'q.")
+        target = folder / chosen["name"]
+        if not target.exists():
+            raise HTTPException(status_code=404,
+                                detail=f"{part}-qism fayli diskda yo'q — "
+                                       "loyihani qayta render qiling.")
+        return FileResponse(target, media_type="video/mp4", filename=target.name)
+
     videos = [v for v in folder.glob("*.mp4")
-              if not v.name.startswith(("clip_", "fuse_"))] if folder.exists() else []
+              if not v.name.startswith(("clip_", "fuse_", "wave_"))] if folder.exists() else []
     if not videos:
         raise HTTPException(status_code=404, detail="This job has no rendered video yet.")
+    # In pieces, "the video" is the first piece rather than whichever file was
+    # written last — the last one written is the end of the story.
+    if pieces:
+        first = folder / pieces[0]["name"]
+        if first.exists():
+            return FileResponse(first, media_type="video/mp4", filename=first.name)
     newest = max(videos, key=lambda p: p.stat().st_mtime)
     return FileResponse(newest, media_type="video/mp4", filename=newest.name)
 
