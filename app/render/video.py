@@ -600,7 +600,7 @@ def _next_fuse(workdir: Path) -> int:
 async def fuse_wave(
     clips: list[Path], durations: list[float], transition: float,
     effects: list[str | None], workdir: Path, profile: dict,
-    drop_inputs: bool = False,
+    drop_inputs: bool = False, out_path: Path | None = None,
 ) -> tuple[Path, float, str | None]:
     """Cross-fade one batch into a single file, and say what it became.
 
@@ -611,8 +611,14 @@ async def fuse_wave(
     carried = effects[0] if effects else None
     if len(clips) == 1:
         return clips[0], max(MIN_CLIP_SECONDS, durations[0]), carried
-    out = workdir / f"fuse_{_next_fuse(workdir)}.mp4"
-    await _fuse_group(clips, durations, transition, effects, out, profile)
+    out = out_path or workdir / f"fuse_{_next_fuse(workdir)}.mp4"
+    # Written under another name and moved into place. A render killed halfway
+    # through this encode would otherwise leave a file that exists, probes, and
+    # is half a batch — and the retry, seeing it there, would build the video
+    # around it.
+    part = out.with_suffix(".part.mp4")
+    await _fuse_group(clips, durations, transition, effects, part, profile)
+    part.replace(out)
     if drop_inputs:
         # Read once and never again. Holding them costs the size of the finished
         # video a second time, on a box that is also holding every scene picture,
