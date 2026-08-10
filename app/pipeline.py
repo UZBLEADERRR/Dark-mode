@@ -24,7 +24,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, pgstore, skills, store
+from . import config, pgstore, skills, store, watch
 from .providers import align, batch, images, storage, tts
 from .render import overlays as ov
 from .render import shots
@@ -982,6 +982,27 @@ async def shrink_narration(workdir: Path) -> int:
         return 0
     source.unlink(missing_ok=True)
     return max(0, was - target.stat().st_size)
+
+
+def _room_for(wanted: int, job_id: str = "") -> int:
+    """How many encoders to start, given how full the container already is.
+
+    Being killed is the worst way to find out there was no room: the container
+    restarts, the job is interrupted, and nothing on screen ever says why. The
+    platform will say how much it is using if asked, so it is asked — and when
+    the answer is close to the edge, fewer are started rather than the same
+    number and a crash. Slower is a far better failure than gone.
+    """
+    if wanted <= 1 or not config.MEMORY_LIMIT:
+        return max(1, wanted)
+    full = watch.pressure(config.MEMORY_LIMIT)
+    if full < 0.70:
+        return wanted
+    room = max(1, wanted // 2 if full < 0.85 else 1)
+    if room < wanted and job_id:
+        _note(job_id, f"Xotira {full * 100:.0f}% band — bir vaqtda {room} ta "
+                      f"kadr yasaladi (sekinroq, lekin to'xtamaydi)")
+    return room
 
 
 def _clip_failure(scene: dict, exc: Exception) -> str:
@@ -2331,6 +2352,30 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
         music_start = float(request.get("music_start") or 0.0)
         by_sid = {s.get("sid"): n for n, s in enumerate(scenes)}
         built: list[dict] = []
+        done_parts: list[dict] = []
+
+        async def hand_over(number: int, path: Path, first: int, count: int,
+                            length: float) -> None:
+            """Publish one piece the moment it exists, not at the very end.
+
+            Ten pieces that all appear together after forty minutes is the same
+            wait as one file. Ten that appear one at a time is a video you can
+            start putting together after four.
+            """
+            url, trouble = await storage.publish(path, f"{job_id}/{path.name}")
+            await keep_media([{"image_path": str(path)}], job_id)
+            if trouble:
+                warnings.append(trouble)
+            done_parts.append({
+                "number": number, "name": path.name,
+                "from_scene": first + 1, "to_scene": first + count,
+                "duration": round(float(length), 2), "url": url,
+                "download_url": f"/api/jobs/{job_id}/download?part={number}",
+            })
+            if len(chunks) > 1:
+                store.update_job(job_id, result={"parts": list(done_parts)},
+                                 log=f"{number}/{len(chunks)}-qism tayyor — "
+                                     f"hoziroq yuklab olsangiz bo'ladi")
 
         for number, chunk in enumerate(chunks, start=1):
             single = len(chunks) == 1
@@ -2345,10 +2390,10 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
                 # would have deleted it otherwise. Seven finished parts are seven
                 # parts a failure at the eighth must not cost.
                 made += len(chunk)
+                length = await video.probe_duration(out_path)
                 built.append({"path": out_path, "from": first + 1,
-                              "to": first + len(chunk),
-                              "duration": await video.probe_duration(out_path)})
-                _note(job_id, f"{number}-qism allaqachon tayyor — o'tkazib yuborildi")
+                              "to": first + len(chunk), "duration": length})
+                await hand_over(number, out_path, first, len(chunk), length)
                 continue
 
             if not single:
@@ -2381,9 +2426,19 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
                     _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
                               f"Animated scene {made}/{len(scenes)}", status="rendering")
                     continue
+                # Announced before it starts, not after each one finishes. A
+                # twelve-second scene at 1080p takes half a minute to animate, so
+                # a batch of eight is four minutes in which the screen used to
+                # say nothing at all — and four minutes of nothing reads as
+                # broken however much work is going on behind it.
+                _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
+                          f"{at + 1}–{at + len(wave)} sahna chizilmoqda "
+                          f"({watch.line(workdir, config.MEMORY_LIMIT)})",
+                          status="rendering")
                 # Each clip is independent, and animating them is the slowest
                 # stage of a render, so a batch goes out together.
-                await _gather_limited([one_clip(s) for s in wave], speed["workers"])
+                await _gather_limited([one_clip(s) for s in wave],
+                                      _room_for(speed["workers"], job_id))
                 if not streaming:
                     continue
                 # Said before it starts, not after. Joining twelve scenes is one
@@ -2476,6 +2531,7 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
                 (workdir / f"{stem}-voice.wav").unlink(missing_ok=True)
             built.append({"path": out_path, "from": first + 1,
                           "to": first + len(chunk), "duration": span})
+            await hand_over(number, out_path, first, len(chunk), span)
 
         freed = drop_scratch(workdir)
         if not uploaded_audio:
@@ -2490,22 +2546,7 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
             language=language, duration=total_audio,
         )
 
-        parts: list[dict] = []
-        for number, part in enumerate(built, start=1):
-            url, upload_warning = await storage.publish(
-                part["path"], f"{job_id}/{part['path'].name}")
-            await keep_media([{"image_path": str(part["path"])}], job_id)
-            if upload_warning:
-                warnings.append(upload_warning)
-            parts.append({
-                "number": number,
-                "name": part["path"].name,
-                "from_scene": part["from"],
-                "to_scene": part["to"],
-                "duration": round(float(part["duration"]), 2),
-                "url": url,
-                "download_url": f"/api/jobs/{job_id}/download?part={number}",
-            })
+        parts = sorted(done_parts, key=lambda p: p["number"])
 
         subtitle_url, _ = await storage.publish(srt_path, f"{job_id}/subtitles.srt")
         await keep_media([{"image_path": str(srt_path)}], job_id)

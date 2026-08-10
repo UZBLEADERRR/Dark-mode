@@ -475,13 +475,19 @@ def speed_profile(name: str | None = None) -> dict:
     # Clips run several at a time, but each ffmpeg also threads internally, so
     # the two have to be divided rather than both given the whole machine —
     # oversubscribing costs more in context switching than it wins in overlap.
-    workers = max(1, min(CPU_COUNT, 4))
+    # Up to eight, not four. Measured: four scenes animate in the time one does
+    # (4.1x on a four-core box), because the Ken Burns filter is one thread and
+    # the work is spread across processes rather than inside them. Capping at
+    # four therefore left half of an eight-core plan idle and made a
+    # ninety-scene render take twice as long as the box could do it in.
+    workers = max(1, min(CPU_COUNT, 8))
     if MEMORY_LIMIT:
         # Each 1080p encoder holds a decoded frame, a supersampled copy and the
-        # zoompan buffer at once. Roughly a quarter of a gigabyte at the default
-        # settings, so on a box that has said how much it has, the count is
-        # brought down rather than discovered by being killed.
-        workers = max(1, min(workers, int(MEMORY_LIMIT / (768 * 1024 * 1024))))
+        # zoompan buffer at once. Measured at 221 MB, and — worth knowing — flat
+        # in the length of the scene: a sixty-second scene costs the same as a
+        # four-second one. Half a gigabyte each leaves room for everything else
+        # the box is doing.
+        workers = max(1, min(workers, int(MEMORY_LIMIT / (512 * 1024 * 1024))))
     workers = max(1, _int("RENDER_WORKERS", workers))
     return {**profile, "workers": workers, "threads": max(1, CPU_COUNT // workers)}
 
