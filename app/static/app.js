@@ -2152,7 +2152,7 @@ function drawStage(job) {
   // nothing to say until a batch of twelve scenes is joined. Calling that "the
   // provider is not answering" was alarming and wrong.
   if (busy && idle >= IDLE_WARN) {
-    const OWN_WORK = { clips: 'Kadrlar birlashtirilmoqda',
+    const OWN_WORK = { clips: 'Kadrlar tayyorlanmoqda',
                        render: 'Video yig‘ilmoqda',
                        captions: 'Subtitrlar yozilmoqda',
                        publish: 'Yakunlanmoqda' };
