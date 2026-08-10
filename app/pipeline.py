@@ -104,6 +104,15 @@ def _short(exc: Exception, limit: int = 120) -> str:
     return text[:limit] + "…" if len(text) > limit else text
 
 
+def _size(nbytes: float) -> str:
+    """Bytes as something a person reads without counting zeroes."""
+    for unit in ("B", "KB", "MB"):
+        if abs(nbytes) < 1024:
+            return f"{nbytes:.0f} {unit}"
+        nbytes /= 1024
+    return f"{nbytes:.1f} GB"
+
+
 def _slug(text: str, limit: int = 60) -> str:
     ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_text).strip("-").lower()
@@ -859,6 +868,60 @@ def _keep_in_db(job_id: str, paths: list[Path]) -> int:
         store.put_media(job_id, key, data)
         kept += 1
     return kept
+
+
+# What a render makes on its way to the video and never needs again. Every one
+# of these is rebuilt from the pictures and the voice clips on the next render,
+# so keeping them buys nothing and costs the size of the finished video several
+# times over — on the same box that is holding the pictures and the voice clips.
+SCRATCH = ("clip_*.mp4", "fuse_*.mp4", "voice_part_*.wav")
+
+
+def drop_scratch(workdir: Path) -> int:
+    """Delete a render's working files. Returns the bytes freed.
+
+    Called when the video is written and equally when it is not: a render that
+    ran the box out of room and then left its scratch behind is a render that
+    fails again on the retry, for the same reason, with less room than before.
+    """
+    freed = 0
+    for pattern in SCRATCH:
+        for path in workdir.glob(pattern):
+            try:
+                size = path.stat().st_size
+                path.unlink()
+            except OSError:  # noqa: PERF203 - a file already gone is already freed
+                continue
+            freed += size
+    return freed
+
+
+async def shrink_narration(workdir: Path) -> int:
+    """Keep the joined voice-over losslessly compressed. Returns the bytes freed.
+
+    It has to be kept: swapping the music under a finished video mixes against
+    this rather than against the video's own soundtrack, which is what makes a
+    track auditionable in seconds instead of in another whole render.
+
+    But it is kept as a WAV, and a WAV is a megabyte for every six seconds — two
+    hours of narration is seven hundred of them, sitting on the box for the rest
+    of the project's life for the sake of a feature that may never be used.
+    FLAC is the same samples, about half the size, and every tool downstream
+    reads it without being told.
+    """
+    source = workdir / "narration.wav"
+    if not source.exists():
+        return 0
+    target = workdir / "narration.flac"
+    was = source.stat().st_size
+    try:
+        await video.to_flac(source, target)
+    except video.RenderError:
+        # Better a large voice-over than none: this is a saving, not a step.
+        target.unlink(missing_ok=True)
+        return 0
+    source.unlink(missing_ok=True)
+    return max(0, was - target.stat().st_size)
 
 
 def _kept_note(job_id: str, scenes: list[dict], kept: int) -> None:
@@ -2059,9 +2122,44 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
                 _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
                           f"Animated scene {made}/{len(scenes)}", status="rendering")
 
-        # Each clip is independent, and animating them is the slowest stage of a
-        # render, so they go out together rather than one after another.
-        await _gather_limited([one_clip(s) for s in scenes], speed["workers"])
+        # Animated a batch at a time, and each batch joined and freed before the
+        # next one starts.
+        #
+        # Every clip used to be made first and joined afterwards, which meant a
+        # two-hundred-scene project held two hundred clips, then a second copy of
+        # the whole video as half-joined batches, then a third as the finished
+        # file — all at once, on top of every picture and every line of voice-
+        # over. What the box has to carry grew with the length of the video, so
+        # a long enough video could not be rendered on any box. Joining each
+        # batch as it is finished makes the peak the size of one batch: a
+        # ten-minute video and a two-hour one now cost the same room.
+        effects = [s.get("transition") or None for s in scenes]
+        batch = video.MAX_GRAPH_INPUTS
+        streaming = len(scenes) > batch
+        pieces: list[Path] = []
+        piece_durations: list[float] = []
+        piece_effects: list[str | None] = []
+
+        for start in range(0, len(scenes), batch):
+            wave = scenes[start:start + batch]
+            # Each clip is independent, and animating them is the slowest stage
+            # of a render, so a batch goes out together rather than one at a time.
+            await _gather_limited([one_clip(s) for s in wave], speed["workers"])
+            if not streaming:
+                continue
+            path, length, carried = await video.fuse_wave(
+                [clips[start + i] for i in range(len(wave))],
+                clip_durations[start:start + len(wave)], transition,
+                effects[start:start + len(wave)], workdir, speed, drop_inputs=True,
+            )
+            pieces.append(path)
+            piece_durations.append(length)
+            piece_effects.append(carried)
+
+        if streaming:
+            _note(job_id, f"{len(scenes)} sahna {len(pieces)} bo'lakka birlashtirildi")
+        else:
+            pieces, piece_durations, piece_effects = clips, clip_durations, effects
 
         # --- assemble ----------------------------------------------------------
         _progress(job_id, "render", 90, "Rendering the final video", status="rendering")
@@ -2072,15 +2170,21 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
         # ffmpeg runs with the project folder as its cwd so every path in the
         # filter graph is a bare filename — no escaping of ':' or '\' needed.
         await video.assemble(
-            clips=clips, clip_durations=clip_durations, narration=narration_path,
+            clips=pieces, clip_durations=piece_durations, narration=narration_path,
             total_duration=total_audio, out_path=out_path, workdir=workdir,
             subtitle_file=ass_path if burn_file else None,
             music=music_path,
             music_start=float(request.get("music_start") or 0.0),
-            effects=[s.get("transition") or None for s in scenes],
+            effects=piece_effects,
             sfx=_materialize_sfx(workdir, scenes),
             speed=speed,
+            drop_scratch=True,
         )
+        freed = drop_scratch(workdir)
+        if not uploaded_audio:
+            freed += await shrink_narration(workdir)
+        if freed:
+            _note(job_id, f"Ishchi fayllar tozalandi — {_size(freed)} bo'shadi")
 
         # --- publish -----------------------------------------------------------
         _progress(job_id, "publish", 96, "Writing the YouTube metadata", status="rendering")
@@ -2116,6 +2220,11 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
         )
 
     except Exception as exc:  # noqa: BLE001 - surfaced to the user verbatim
+        # Freed here too, and deliberately. A render that ran the box out of room
+        # and then kept its half-joined batches leaves the retry less room than
+        # the attempt that just failed — the same failure, forever. The clips are
+        # rebuilt from the pictures, which are still there and still paid for.
+        drop_scratch(workdir_for(job_id))
         _fail(job_id, exc, warnings)
 
 

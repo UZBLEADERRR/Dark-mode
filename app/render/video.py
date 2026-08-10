@@ -580,10 +580,55 @@ async def _fuse_group(
     return out_path
 
 
+def _next_fuse(workdir: Path) -> int:
+    """One past the highest `fuse_N` on disk.
+
+    Counted from the names rather than from how many files there are: consumed
+    intermediates are deleted as soon as they have been read, so counting files
+    would hand out a number that is already taken and a half-joined batch would
+    overwrite the one still waiting to be joined.
+    """
+    highest = -1
+    for path in workdir.glob("fuse_*.mp4"):
+        try:
+            highest = max(highest, int(path.stem.split("_")[1]))
+        except (IndexError, ValueError):
+            continue
+    return highest + 1
+
+
+async def fuse_wave(
+    clips: list[Path], durations: list[float], transition: float,
+    effects: list[str | None], workdir: Path, profile: dict,
+    drop_inputs: bool = False,
+) -> tuple[Path, float, str | None]:
+    """Cross-fade one batch into a single file, and say what it became.
+
+    Returns the file, its measured length, and the transition that still has to
+    be applied *into* it — that one belongs to the seam with the batch before,
+    which is a level up and not this call's business.
+    """
+    carried = effects[0] if effects else None
+    if len(clips) == 1:
+        return clips[0], max(MIN_CLIP_SECONDS, durations[0]), carried
+    out = workdir / f"fuse_{_next_fuse(workdir)}.mp4"
+    await _fuse_group(clips, durations, transition, effects, out, profile)
+    if drop_inputs:
+        # Read once and never again. Holding them costs the size of the finished
+        # video a second time, on a box that is also holding every scene picture,
+        # every line of voice-over, and the batches joined before this one.
+        for spent in clips:
+            spent.unlink(missing_ok=True)
+    # Measured, not calculated. An offset derived from arithmetic that has
+    # drifted a few milliseconds past the real end of a stream makes xfade emit
+    # nothing, which surfaces much later as the encoder refusing to open.
+    return out, max(MIN_CLIP_SECONDS, await probe_duration(out)), carried
+
+
 async def fuse_clips(
     clips: list[Path], durations: list[float], transition: float,
     effects: list[str | None] | None, workdir: Path, profile: dict,
-    limit: int = MAX_GRAPH_INPUTS,
+    limit: int = MAX_GRAPH_INPUTS, drop_inputs: bool = False,
 ) -> tuple[list[Path], list[float], list[str | None]]:
     """Reduce a long list of clips to one short enough to assemble in one go.
 
@@ -594,6 +639,10 @@ async def fuse_clips(
 
     A project short enough to assemble directly is returned untouched: no extra
     encode, no second generation of compression, nothing about it changes.
+
+    `drop_inputs` deletes each batch's inputs once the batch has been written.
+    Scene clips are rebuilt from the pictures on every render, so on that path
+    they are scratch and holding them only doubles what the box has to carry.
     """
     effects = list(effects or [])
     while len(clips) > limit:
@@ -603,28 +652,18 @@ async def fuse_clips(
         if len(starts) > 1 and len(clips) - starts[-1] == 1:
             starts.pop()
         fused: list[Path] = []
+        fused_durations: list[float] = []
         fused_effects: list[str | None] = []
-        level = len(list(workdir.glob("fuse_*.mp4")))
         for n, start in enumerate(starts):
             end = starts[n + 1] if n + 1 < len(starts) else len(clips)
-            group = clips[start:end]
-            # The transition *into* this group is applied at the next level up,
-            # not inside it, so it is carried rather than used here.
-            fused_effects.append(effects[start] if start < len(effects) else None)
-            if len(group) == 1:
-                fused.append(group[0])
-                continue
-            out = workdir / f"fuse_{level + n}.mp4"
-            await _fuse_group(
-                group, durations[start:end], transition,
-                effects[start:end], out, profile,
+            path, length, carried = await fuse_wave(
+                clips[start:end], durations[start:end], transition,
+                effects[start:end], workdir, profile, drop_inputs=drop_inputs,
             )
-            fused.append(out)
-        # Measured, not calculated. An offset derived from arithmetic that has
-        # drifted a few milliseconds past the real end of a stream makes xfade
-        # emit nothing, which surfaces much later as the encoder refusing to open.
-        durations = [max(MIN_CLIP_SECONDS, await probe_duration(path)) for path in fused]
-        clips, effects = fused, fused_effects
+            fused.append(path)
+            fused_durations.append(length)
+            fused_effects.append(carried)
+        clips, durations, effects = fused, fused_durations, fused_effects
     return clips, durations, effects
 
 
@@ -793,11 +832,17 @@ async def assemble(
     effects: list[str | None] | None = None,
     sfx: list[dict] | None = None,
     speed: dict | None = None,
+    drop_scratch: bool = False,
 ) -> Path:
     """Cross-fade the clips, burn the captions, mix the audio, write the MP4.
 
     `sfx[i]` is `{"path": Path, "at": seconds, "volume": float}` — a one-shot
     sting cued at an absolute point on the timeline.
+
+    `drop_scratch` frees each half-joined batch as soon as it has been read.
+    The render path passes it: those files are rebuilt from the pictures every
+    time and carrying them all at once is what a long project runs out of room
+    doing. A caller that wants its inputs back afterwards leaves it off.
     """
     if not clips:
         raise RenderError("There are no scene clips to assemble.")
@@ -816,10 +861,18 @@ async def assemble(
     # Done once, before the music and ducking retries: those re-run the final
     # call, and re-fusing seventy-four clips for each of them would triple the
     # cost of a failure that has nothing to do with the picture.
+    #
+    # Only what this render is not already holding. The caller may have joined
+    # its batches as they were made — that is how a long project keeps a dozen
+    # clips on the box instead of two hundred — and deleting those here used to
+    # take the render's own inputs out from under it.
+    keep = {clip.resolve() for clip in clips}
     for stale in workdir.glob("fuse_*.mp4"):
-        stale.unlink(missing_ok=True)
+        if stale.resolve() not in keep:
+            stale.unlink(missing_ok=True)
     clips, clip_durations, effects = await fuse_clips(
         clips, clip_durations, transition, effects, workdir, profile,
+        drop_inputs=drop_scratch,
     )
     # Half-joined batches are the size of the finished video all over again, on a
     # disk that has to hold every scene clip as well. They go as soon as the
@@ -904,6 +957,18 @@ async def assemble(
     finally:
         for piece in scratch:
             piece.unlink(missing_ok=True)
+
+
+async def to_flac(source: Path, out_path: Path) -> Path:
+    """Re-container audio as FLAC — same samples, about half the bytes."""
+    await _run([
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", source.name, "-c:a", "flac", "-compression_level", "5",
+        out_path.name,
+    ], cwd=source.parent)
+    if not out_path.exists() or out_path.stat().st_size < 128:
+        raise RenderError("FLAC conversion produced nothing.")
+    return out_path
 
 
 async def slice_audio(source: Path, out_path: Path, start: float, end: float) -> Path:

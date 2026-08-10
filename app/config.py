@@ -378,7 +378,38 @@ def set_voice_overrides(values: dict | None) -> dict[str, str]:
 
 import os as _os
 
-CPU_COUNT = max(1, _os.cpu_count() or 2)
+
+def _cpu_allowance() -> int:
+    """How many cores this container may actually use.
+
+    `os.cpu_count()` reports the *machine*, and a container on a shared host is
+    told about all of them — thirty-two on a box where the plan allows eight.
+    Every thread count derived from that number is then four times too large,
+    and the kernel answers by throttling: the work does not go faster, it goes
+    slower, in stalls, while each extra ffmpeg thread still costs its buffers.
+
+    The quota is what the scheduler enforces, so the quota is what is asked.
+    """
+    for quota_file, period_file in (("cpu.max", None),
+                                    ("cpu/cpu.cfs_quota_us", "cpu/cpu.cfs_period_us")):
+        try:
+            raw = (Path("/sys/fs/cgroup") / quota_file).read_text().split()
+            if period_file is None:  # cgroup v2: "<quota> <period>", or "max ..."
+                quota, period = raw[0], raw[1]
+            else:
+                quota = raw[0]
+                period = (Path("/sys/fs/cgroup") / period_file).read_text().strip()
+            if quota in ("max", "-1"):
+                continue
+            cores = int(quota) / int(period)
+            if cores >= 0.5:
+                return max(1, int(cores))
+        except (OSError, ValueError, IndexError):
+            continue
+    return max(1, _os.cpu_count() or 2)
+
+
+CPU_COUNT = _int("CPU_COUNT", _cpu_allowance())
 RENDER_SPEED = _env("RENDER_SPEED", "balanced").lower()
 
 SPEED_PROFILES: dict[str, dict] = {
