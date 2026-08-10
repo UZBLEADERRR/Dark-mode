@@ -874,10 +874,18 @@ def _keep_in_db(job_id: str, paths: list[Path]) -> int:
 # of these is rebuilt from the pictures and the voice clips on the next render,
 # so keeping them buys nothing and costs the size of the finished video several
 # times over — on the same box that is holding the pictures and the voice clips.
-SCRATCH = ("clip_*.mp4", "fuse_*.mp4", "voice_part_*.wav")
+SCRATCH = ("clip_*.mp4", "fuse_*.mp4", "wave_*.mp4", "voice_part_*.wav",
+           "*.part.mp4")
+
+# What a *failed* render keeps: the batches it had already finished. Each one is
+# a dozen scenes that are animated, joined and moved into place under their own
+# name, and throwing them away would make every retry of a long video start from
+# scene one — which is the difference between a render that eventually finishes
+# and one that never can.
+KEPT_ON_FAILURE = ("wave_*.mp4",)
 
 
-def drop_scratch(workdir: Path) -> int:
+def drop_scratch(workdir: Path, keep: tuple[str, ...] = ()) -> int:
     """Delete a render's working files. Returns the bytes freed.
 
     Called when the video is written and equally when it is not: a render that
@@ -885,7 +893,7 @@ def drop_scratch(workdir: Path) -> int:
     fails again on the retry, for the same reason, with less room than before.
     """
     freed = 0
-    for pattern in SCRATCH:
+    for pattern in (p for p in SCRATCH if p not in keep):
         for path in workdir.glob(pattern):
             try:
                 size = path.stat().st_size
@@ -922,6 +930,27 @@ async def shrink_narration(workdir: Path) -> int:
         return 0
     source.unlink(missing_ok=True)
     return max(0, was - target.stat().st_size)
+
+
+def _clip_failure(scene: dict, exc: Exception) -> str:
+    """Why one scene's picture would not animate, in words that name a next step.
+
+    "ffmpeg failed (-9)" is the message this used to end a long render with, and
+    it says nothing: -9 is the kernel killing the process, which is not ffmpeg's
+    opinion about anything. The two causes worth telling apart are the two the
+    user can do something about.
+    """
+    said = " ".join(str(exc).split())
+    where = f"Sahna {scene['index'] + 1}"
+    if "(-9)" in said or "(137)" in said or "killed" in said.lower():
+        return (f"{where}: server xotirasi yetmadi (kadr yasashda to'xtatildi). "
+                f"«Render» ni yana bosing — tugagan bo'laklar qayta ishlanmaydi. "
+                f"Takrorlansa Sozlamalarda «Tez» rejimini tanlang yoki videoni "
+                f"qisqartiring.")
+    if "no space left" in said.lower():
+        return (f"{where}: diskda joy qolmadi. Kutubxona → «Joy va tozalash» dan "
+                f"ishchi fayllarni tozalab, «Render» ni yana bosing.")
+    return f"{where}: kadr yasalmadi — {said[:300]}"
 
 
 def _kept_note(job_id: str, scenes: list[dict], kept: int) -> None:
@@ -1509,6 +1538,20 @@ async def _render_images(
                   f"{len(work)} ta rasm sizdan kutilmoqda")
         return warnings
 
+    def provider_now() -> str:
+        """Which provider draws *this* picture, asked again for every one.
+
+        A key runs out halfway through eighteen scenes, and the answer used to
+        be to let the rest fail and start the project again somewhere else. The
+        choice is read from the job each time instead, so switching to another
+        provider from the running project's own screen takes effect on the next
+        picture and the ones already drawn are kept.
+        """
+        wanted = (store.job_request(job_id).get("image_provider") or "").lower()
+        if wanted and wanted != provider and wanted in config.IMAGE_PROVIDERS:
+            return wanted
+        return provider
+
     async def one(scene: dict, shot: dict | None) -> None:
         nonlocal done
         refs = [hero_paths[h] for h in scene.get("hero_ids", []) if h in hero_paths]
@@ -1522,13 +1565,30 @@ async def _render_images(
         # prompts — and a KeyError takes down the whole run rather than the one
         # scene. What the scene is *about* is always known, so it is drawn from
         # that instead.
+        using = provider_now()
+        if using != provider:
+            async with lock:
+                if not any("provayder" in w for w in warnings):
+                    _note(job_id, f"Rasm provayderi «{using}» ga o'zgartirildi — "
+                                  f"qolgan rasmlar shunda yasaladi")
+                    warnings.append(
+                        f"Yarim yo'lda «{provider}» dan «{using}» provayderiga "
+                        f"o'tildi — avvalgi rasmlar boshqa uslubda bo'lishi mumkin.")
+            if using == "manual":
+                # Nobody is drawing these any more: the rest are handed over as
+                # prompts rather than left to fail one at a time.
+                holder["needs_image"] = True
+                async with lock:
+                    done += 1
+                return
+
         path, warning = await images.generate_image(
             prompt=drawn_prompt(scene, holder),
             negative_prompt=holder.get("negative_prompt") or scene.get("negative_prompt", ""),
             reference_paths=refs,
             aspect=aspect,
             size=size,
-            provider=provider,
+            provider=using,
             out_path=image_dir / (f"shot_{shot['sid']}.png" if shot is not None
                                   else f"scene_{scene['sid']}.png"),
             on_retry=_retry_note(job_id, f"{label} image"),
@@ -2096,6 +2156,8 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
         clips: list[Path] = [workdir / f"clip_{s['index']:03d}.mp4" for s in scenes]
         made = 0
         lock = asyncio.Lock()
+        # Held by a retry, so the second attempt really is on its own.
+        solo = asyncio.Lock()
 
         async def one_clip(scene: dict) -> None:
             nonlocal made
@@ -2110,13 +2172,30 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
             cuts = shots.plan(scene, scene["audio_duration"] + transition, inner)
             for cut in cuts:
                 cut["image"] = Path(cut.get("image_path") or scene["image_path"])
-            await video.make_scene_clip(
-                shots=cuts,
-                duration=scene["audio_duration"] + transition, width=width, height=height,
-                inner_transition=inner,
-                image_overlays=picture_layers, speed=speed,
-                out_path=workdir / f"clip_{scene['index']:03d}.mp4",
-            )
+            async def draw(alone: bool) -> None:
+                await video.make_scene_clip(
+                    shots=cuts,
+                    duration=scene["audio_duration"] + transition,
+                    width=width, height=height, inner_transition=inner,
+                    image_overlays=picture_layers,
+                    # A second attempt runs on its own, with the machine to
+                    # itself: four encoders at once is what a box short of
+                    # memory kills one of, and the one it killed usually
+                    # finishes fine when it is the only one asking.
+                    speed={**speed, "threads": 1} if alone else speed,
+                    out_path=workdir / f"clip_{scene['index']:03d}.mp4",
+                )
+
+            try:
+                await draw(alone=False)
+            except video.RenderError as first:
+                _note(job_id, f"Sahna {scene['index'] + 1}: kadr chiqmadi, "
+                              f"yolg'iz qayta urinilmoqda")
+                async with solo:
+                    try:
+                        await draw(alone=True)
+                    except video.RenderError as again:
+                        raise PipelineError(_clip_failure(scene, again)) from first
             async with lock:
                 made += 1
                 _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
@@ -2142,6 +2221,19 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
 
         for start in range(0, len(scenes), batch):
             wave = scenes[start:start + batch]
+            joined = workdir / f"wave_{start:04d}.mp4"
+            if streaming and joined.exists():
+                # An earlier attempt got this far. The batch is finished and
+                # moved into place under its own name, so it is not redone —
+                # which is what makes a render that died at scene a hundred and
+                # eighty carry on from there instead of from scene one.
+                made += len(wave)
+                pieces.append(joined)
+                piece_durations.append(max(0.05, await video.probe_duration(joined)))
+                piece_effects.append(effects[start])
+                _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
+                          f"Animated scene {made}/{len(scenes)}", status="rendering")
+                continue
             # Each clip is independent, and animating them is the slowest stage
             # of a render, so a batch goes out together rather than one at a time.
             await _gather_limited([one_clip(s) for s in wave], speed["workers"])
@@ -2151,6 +2243,7 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
                 [clips[start + i] for i in range(len(wave))],
                 clip_durations[start:start + len(wave)], transition,
                 effects[start:start + len(wave)], workdir, speed, drop_inputs=True,
+                out_path=joined,
             )
             pieces.append(path)
             piece_durations.append(length)
@@ -2224,7 +2317,7 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
         # and then kept its half-joined batches leaves the retry less room than
         # the attempt that just failed — the same failure, forever. The clips are
         # rebuilt from the pictures, which are still there and still paid for.
-        drop_scratch(workdir_for(job_id))
+        drop_scratch(workdir_for(job_id), keep=KEPT_ON_FAILURE)
         _fail(job_id, exc, warnings)
 
 
@@ -3521,3 +3614,23 @@ def _fail(job_id: str, exc: Exception, warnings: list[str]) -> None:
 
 # Backwards-compatible alias: a full run is a draft that renders itself.
 run_job = run_draft
+
+
+def job_card(result: dict) -> dict:
+    """The summary the projects list draws from, built once when a job is saved.
+
+    The two counts here are why this lives in the pipeline rather than in the
+    store: both are read off the scene list, and the whole point of the card is
+    that the list never has to load the scene list to draw a card.
+    """
+    card = store.plain_card(result)
+    scenes = result.get("scenes") or []
+    if scenes:
+        card["placeholders"] = len(placeholder_scenes(scenes))
+        card["progress_detail"] = unfinished(scenes)
+    return card
+
+
+# Registered rather than imported: the store is imported by this module, so it
+# cannot import this one back to ask.
+store.card_of = job_card

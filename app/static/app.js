@@ -902,14 +902,41 @@ function drawModels() {
 function drawnByNote(job) {
   const now = job.image_provider_now || '';
   if (!now) return '';
-  const label = IMAGE_PROVIDER_LABELS[now] || now;
-  const app = state.models?.image_provider || '';
-  // Only worth explaining when this project has been left behind by the app's
-  // own choice — otherwise it is just a label, and the card is not a form.
-  const stale = app && app !== now;
-  return `<span class="stage-drawnby">Rasmlar: <b>${esc(label)}</b>${
-    stale ? ' — o‘zgartirish uchun avval To‘xtating' : ''}</span>`;
+  // A picker, not a label with an apology attached. A key runs out at scene
+  // nine and the answer has to be "switch it here", not "stop, change a setting
+  // three screens away, and start the whole video again" — the image stage asks
+  // again for every picture, so the change lands on the next one.
+  const ready = (state.health?.image_providers) || {};
+  const options = Object.keys(IMAGE_PROVIDER_LABELS)
+    .filter((id) => ready[id] || id === now)
+    .map((id) => `<option value="${esc(id)}"${id === now ? ' selected' : ''}>${
+      esc(IMAGE_PROVIDER_LABELS[id] || id)}</option>`).join('');
+  return `<label class="stage-drawnby">Rasmlar:
+    <select data-swap-provider="${esc(job.id)}">${options}</select></label>`;
 }
+
+// Wired once, on the container: the stage is redrawn on every poll and a
+// listener attached per draw would stack up one per second.
+document.addEventListener('change', async (e) => {
+  const picker = e.target.closest('[data-swap-provider]');
+  if (!picker) return;
+  const id = picker.dataset.swapProvider;
+  const wanted = picker.value;
+  picker.disabled = true;
+  try {
+    await api(`/api/jobs/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_provider: wanted }),
+    });
+    toast(`Rasm provayderi: ${IMAGE_PROVIDER_LABELS[wanted] || wanted}`);
+    await loadJobs({ fresh: true });
+    if (state.activeId === id) await tick();
+  } catch (err) {
+    toast(err.message || 'O‘zgartirib bo‘lmadi');
+  }
+  picker.disabled = false;
+});
 
 // The provider names are what the API calls them; these are what a person calls
 // them. `openai` in a menu is not obviously "the one that made ChatGPT".
@@ -1892,7 +1919,7 @@ async function tick() {
       state.poll = null;
       remember(null);
       announce(job);
-      loadJobs();
+      loadJobs({ fresh: true });
     }
   } catch (e) {
     clearInterval(state.poll);
@@ -1911,7 +1938,7 @@ async function stopJob(id, button) {
     drawStage(job);
     syncEditor(job);
     if (state.poll) { clearInterval(state.poll); state.poll = null; }
-    loadJobs();
+    loadJobs({ fresh: true });
     // Anything already made is kept, so say where it went rather than leaving
     // the user to guess whether the last ten minutes were wasted.
     toast(job.status === 'review'
@@ -2091,7 +2118,13 @@ function drawStage(job) {
     </div>`);
   }
 
-  if (job.status === 'failed' && job.error) p.push(`<p class="msg err">${esc(job.error)}</p>`);
+  if (job.status === 'failed' && job.error) {
+    p.push(`<p class="msg err">${esc(job.error)}</p>`);
+    // The commonest reason a project fails is the picture provider, and this is
+    // the screen you are looking at when it does. Offered here so switching and
+    // carrying on is one tap from the error rather than a hunt through settings.
+    p.push(`<div class="stage-stop">${drawnByNote(job)}</div>`);
+  }
   (job.warnings || []).forEach((w) => p.push(`<p class="msg warn">${esc(w)}</p>`));
 
   // What has actually been made so far. While it is running this is the honest
@@ -2934,7 +2967,10 @@ function drawFilmstrip() {
     });
     b.addEventListener('click', (e) => {
       if (e.target.closest('[data-move]')) return;
-      if (ED.i === index) return;
+      // Tapping the scene that is already open is how you say "this one":
+      // it opens the picker for its picture. One tap to choose a scene, a
+      // second on the same scene to change what is in it.
+      if (ED.i === index) { $('#swap-file')?.click(); return; }
       // Picking a scene while the whole video is playing is a seek, not a stop:
       // it carries on from there. Only a single-scene preview ends here.
       if (PREVIEW.chain && ED.scenes[index]?.audio_url) {
@@ -3278,10 +3314,41 @@ function drawCanvas() {
 
   $('#canvas-time').textContent = s
     ? `${clock(s.start)} · ${s.duration.toFixed(1)}s` : '';
+  $('#swap-pic').classList.toggle('hidden', !s);
 
   drawLayers();
   drawCaptionSample();
 }
+
+// Replacing one scene's picture, from wherever the gesture came from: the
+// button on the frame, or tapping a frame that is already the one on screen.
+async function swapSceneImage(index, file) {
+  if (!file || !ED.job) return;
+  const target = ED.scenes[index];
+  if (!target) return;
+  const pill = $('#swap-pic');
+  pill?.classList.add('busy');
+  try {
+    await flush();
+    const body = new FormData();
+    body.append('image', file);
+    await api(`/api/jobs/${ED.job.id}/scenes/${target.index}/image`,
+      { method: 'POST', body });
+    state.drawn = null;
+    await tick();
+    toast(`Sahna ${index + 1} — rasm almashtirildi`);
+  } catch (err) {
+    editorError(err.message || 'Rasmni almashtirib bo‘lmadi');
+  } finally {
+    pill?.classList.remove('busy');
+  }
+}
+
+$('#swap-file')?.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  await swapSceneImage(ED.i, file);
+});
 
 function layerBoxStyle(l, px) {
   if (!l.box) return '';
@@ -4395,9 +4462,35 @@ function drawEditEmpty() {
 }
 
 // ── jobs + ready gallery ──────────────────────────────────────────
-async function loadJobs() {
-  state.jobs = await api('/api/jobs');
+// The projects list, drawn from what is already known and refreshed behind it.
+//
+// Every move between screens used to wait on the network before drawing
+// anything, so switching tabs felt like loading a website rather than using an
+// app. What is on screen is almost always still true — a project does not
+// change because you looked at another tab — so it is drawn immediately and the
+// fresh answer is folded in when it arrives.
+let jobsInFlight = null;
+let jobsFetched = 0;
 
+async function loadJobs({ fresh = false } = {}) {
+  if (state.jobs?.length) paintJobs();
+  // One request at a time, and not again within a second unless something is
+  // actually running: three screens each asking on arrival made three calls.
+  const busyNow = (state.jobs || []).some((j) => BUSY.includes(j.status));
+  if (!fresh && !busyNow && Date.now() - jobsFetched < 1000) return;
+  if (jobsInFlight) return jobsInFlight;
+  jobsInFlight = api('/api/jobs')
+    .then((rows) => {
+      state.jobs = rows;
+      jobsFetched = Date.now();
+      paintJobs();
+    })
+    .finally(() => { jobsInFlight = null; });
+  // Nothing on screen yet: there is no cached answer to show, so wait for one.
+  if (!state.jobs?.length) await jobsInFlight;
+}
+
+function paintJobs() {
   // Two different counts, because they are now two different screens: how many
   // are moving, and how many there are to open.
   const busy = state.jobs.filter((j) => BUSY.includes(j.status)).length;
@@ -4473,7 +4566,7 @@ function drawProjects() {
       $('#editor').classList.add('hidden');
       drawDock();
     }
-    loadJobs();
+    loadJobs({ fresh: true });
   }));
 }
 
@@ -4738,7 +4831,7 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
           tts_provider: $('#tts_provider').value || null,
         }),
       });
-      await loadJobs();
+      await loadJobs({ fresh: true });
       go('run');
       watch(clone.id, { reveal: true });
       toast('Tarjima tayyor — endi render qiling');
@@ -4779,7 +4872,7 @@ function drawReady(done = state.jobs.filter((j) => j.status === 'done')) {
           regenerate_images: !!answer.regenerate_images,
         }),
       });
-      await loadJobs();
+      await loadJobs({ fresh: true });
       go('run');
       watch(clone.id, { reveal: true });
       toast('Nusxa tayyor — endi render qiling');
@@ -5030,7 +5123,7 @@ async function sendChat(text) {
     });
     CHAT.busy = false;
     pushChat({ role: 'bot', text: out.reply, ideas: out.ideas, asks: out.asks, job_id: out.job_id });
-    if (out.job_id) { loadJobs(); toast('Video yaratish boshlandi'); }
+    if (out.job_id) { loadJobs({ fresh: true }); toast('Video yaratish boshlandi'); }
   } catch (e) {
     CHAT.busy = false;
     drawChat();
@@ -5285,7 +5378,7 @@ function drawPlans() {
     try {
       await api(`/api/plans/${b.dataset.approve}/approve`, { method: 'POST' });
       await loadPlans();
-      await loadJobs();
+      await loadJobs({ fresh: true });
       toast('Joylandi — belgilangan vaqtda chiqadi');
     } catch (e) { b.disabled = false; b.textContent = 'Tasdiqlash va joylash'; alert(e.message); }
   }));
@@ -5518,7 +5611,7 @@ async function publishToYouTube(job) {
         with_thumbnail: answer.with_thumbnail,
       }),
     });
-    await loadJobs();
+    await loadJobs({ fresh: true });
     drawReady();
     // Asked for public and given private is Google's rule for an unverified app,
     // and it is the kind of thing you find out weeks later if nobody says it.
@@ -5625,7 +5718,7 @@ async function cutShorts(job) {
           // Closed with no value: the cutting is done, so the manual picker
           // below would only be a second, contradictory instruction.
           closeModal(null);
-          await loadJobs();
+          await loadJobs({ fresh: true });
           go('ready');
           toast(`${out.count} ta Short kesildi — navbatda render bo'lyapti`);
         } catch (e) {
@@ -5684,7 +5777,7 @@ async function cutShorts(job) {
         video_format: '9:16',
       }),
     });
-    await loadJobs();
+    await loadJobs({ fresh: true });
     go('run');
     watch(made.id, { reveal: true });
     toast('Short kesildi — render boshlandi');
@@ -5844,7 +5937,7 @@ function drawSpace() {
       $('#editor').classList.add('hidden');
       $('#run-live').innerHTML = '';
       if (state.poll) { clearInterval(state.poll); state.poll = null; }
-      await loadJobs();
+      await loadJobs({ fresh: true });
       await loadSpace();
       drawDock();
       toast(`${out.deleted} ta loyiha o‘chirildi`);
@@ -6312,7 +6405,7 @@ $('#key-form')?.addEventListener('submit', async (e) => {
     if (shut !== null) setProjectsShut(shut === '1', false);
     wireLibrarySections();
     wireFades();
-    await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs()]);
+    await Promise.all([loadHeroes(), loadMusic(), loadAssets(), loadJobs({ fresh: true })]);
     await Promise.all([loadBrand(), loadModels(), loadProfiles(), loadChat(),
                        loadYouTube(), loadPlans(), loadKeys(), loadFlow(),
                        loadSpace(), loadAgent()]);

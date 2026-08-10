@@ -672,6 +672,28 @@ input[type="range"]::-moz-range-thumb {
   color: var(--faint); font-size: .84rem;
 }
 
+/* Sits on the picture it replaces. Bottom-right, out of the way of the caption
+   sample at the bottom-centre and the overlays people drag around the middle. */
+.swap-pic {
+  position: absolute; right: 8px; bottom: 8px; z-index: 4;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 11px; border-radius: 999px; cursor: pointer;
+  font-size: .76rem; font-weight: 600; line-height: 1;
+  color: #fff; background: rgba(10, 12, 18, .82);
+  border: 1px solid rgba(255, 255, 255, .18);
+  backdrop-filter: blur(6px);
+}
+.swap-pic:hover { background: rgba(20, 24, 34, .95); }
+.swap-pic svg {
+  width: 16px; height: 16px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.swap-pic.hidden { display: none; }
+/* On a narrow phone the words push the pill across half the frame; the icon
+   alone is unmistakable once it is the only thing sitting on a picture. */
+@media (max-width: 430px) { .swap-pic span { display: none; } }
+
 .ov-layer { position: absolute; inset: 0; }
 .ov {
   position: absolute; cursor: grab;
@@ -1535,8 +1557,17 @@ label.frame-add svg {
 }
 .pick em:empty { display: none; }
 
-.stage-drawnby { font-size: .74rem; color: var(--muted); min-width: 0; }
+.stage-drawnby {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: .74rem; color: var(--muted); min-width: 0;
+}
 .stage-drawnby b { color: var(--text); font-weight: 600; }
+.stage-drawnby select {
+  font: inherit; color: var(--text); font-weight: 600;
+  background: var(--card2, rgba(255, 255, 255, .06));
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 4px 8px; max-width: 58vw;
+}
 
 .model-pick { padding-bottom: .7rem; margin-bottom: .5rem;
   border-bottom: 1px solid var(--line); }
@@ -2185,3 +2216,5 @@ textarea.flow-prompt:focus { outline: none; border-color: var(--accent); }
 .plan .f.tight { margin-top: 8px; gap: 4px; }
 .plan .f.tight span { font-size: .72rem; color: var(--muted); }
 .plan .f.tight select { padding: 6px 9px; font-size: .78rem; }
+
+.swap-pic.busy { opacity: .6; pointer-events: none; }

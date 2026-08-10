@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     progress     INTEGER NOT NULL DEFAULT 0,
     request      TEXT NOT NULL,
     result       TEXT NOT NULL DEFAULT '{{}}',
+    -- The handful of fields the projects list shows, kept apart from `result`.
+    -- `result` holds every scene, every word timing and every caption — a
+    -- quarter of a megabyte for a long video — and the list used to read all of
+    -- it for thirty projects to draw thirty cards. Over a network that is
+    -- seconds of waiting on every screen change, for data thrown away on
+    -- arrival. Written whenever `result` is.
+    card         TEXT NOT NULL DEFAULT '{{}}',
     logs         TEXT NOT NULL DEFAULT '[]',
     error        TEXT,
     created_at   TEXT NOT NULL,
@@ -362,6 +369,7 @@ _ADDED_COLUMNS = (
     # channel, not for "videos in general", and a list that does not say which
     # is a list you have to read every row of to use.
     ("plans", "channel", "TEXT NOT NULL DEFAULT ''"),
+    ("jobs", "card", "TEXT NOT NULL DEFAULT '{}'"),
 )
 
 
@@ -948,6 +956,21 @@ def create_job(request: dict[str, Any]) -> str:
     return job_id
 
 
+# What the projects list needs out of a result, and nothing else. Replaced at
+# import time by the pipeline, which knows how to count the stand-in pictures
+# and what is still unfinished — this module cannot import it back.
+CARD_FIELDS = ("title", "duration", "scene_count", "caption_count", "video_url",
+               "download_url", "subtitle_url", "metadata", "thumbnails",
+               "youtube", "warnings")
+
+
+def plain_card(result: dict[str, Any]) -> dict[str, Any]:
+    return {key: result[key] for key in CARD_FIELDS if key in result}
+
+
+card_of = plain_card
+
+
 def update_job(
     job_id: str,
     *,
@@ -958,31 +981,68 @@ def update_job(
     error: str | None = None,
     log: str | None = None,
 ) -> None:
+    # A progress tick is most of the writes a render does — one per scene, and a
+    # long video has hundreds. It has no business reading a quarter of a
+    # megabyte of scenes back out and writing it again unchanged, so when there
+    # is no result to merge, none of it is touched.
+    if result is None:
+        _touch_job(job_id, status=status, step=step, progress=progress,
+                   error=error, log=log)
+        return
     with _conn() as conn:
-        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        row = conn.execute(
+            "SELECT status, step, progress, result, logs, error FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
         if row is None:
             return
         merged_result = json.loads(row["result"] or "{}")
-        if result:
-            merged_result.update(result)
+        merged_result.update(result)
         logs = json.loads(row["logs"] or "[]")
         if log:
             logs.append(f"[{time.strftime('%H:%M:%S')}] {log}")
             logs = logs[-200:]
         conn.execute(
-            "UPDATE jobs SET status=?, step=?, progress=?, result=?, logs=?, error=?, updated_at=?"
-            " WHERE id=?",
+            "UPDATE jobs SET status=?, step=?, progress=?, result=?, card=?, logs=?,"
+            " error=?, updated_at=? WHERE id=?",
             (
                 status or row["status"],
                 step if step is not None else row["step"],
                 progress if progress is not None else row["progress"],
                 json.dumps(merged_result),
+                json.dumps(card_of(merged_result)),
                 json.dumps(logs),
                 error if error is not None else row["error"],
                 _now(),
                 job_id,
             ),
         )
+
+
+def _touch_job(job_id: str, *, status: str | None, step: str | None,
+               progress: int | None, error: str | None, log: str | None) -> None:
+    """Move a job's status along without reading what it has made so far."""
+    sets: list[str] = []
+    values: list[Any] = []
+    for column, value in (("status", status), ("step", step),
+                          ("progress", progress), ("error", error)):
+        if value is not None:
+            sets.append(f"{column}=?")
+            values.append(value)
+    with _conn() as conn:
+        if log:
+            row = conn.execute("SELECT logs FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None:
+                return
+            logs = json.loads(row["logs"] or "[]")
+            logs.append(f"[{time.strftime('%H:%M:%S')}] {log}")
+            sets.append("logs=?")
+            values.append(json.dumps(logs[-200:]))
+        if not sets:
+            return
+        sets.append("updated_at=?")
+        values += [_now(), job_id]
+        conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", values)
 
 
 def clear_logs(job_id: str) -> bool:
@@ -1023,23 +1083,85 @@ def get_job(job_id: str) -> dict[str, Any] | None:
     if row is None:
         return None
     data = dict(row)
+    data.pop("card", None)  # the list's shorthand; the real thing is right here
     data["request"] = json.loads(data["request"] or "{}")
     data["result"] = json.loads(data["result"] or "{}")
     data["logs"] = json.loads(data["logs"] or "[]")
     return data
 
 
-def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
+def job_request(job_id: str) -> dict[str, Any]:
+    """Just the settings, without reading back everything the job has made.
+
+    Asked once per picture by a render that wants to know whether the provider
+    was switched under it, so it must not drag a quarter of a megabyte of scenes
+    along each time.
+    """
+    with _conn() as conn:
+        row = conn.execute("SELECT request FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        return {}
+    try:
+        return json.loads(row["request"] or "{}")
+    except ValueError:
+        return {}
+
+
+def backfill_cards(limit: int = 500) -> int:
+    """Give the projects that predate the card column one, once.
+
+    Without this every project made before this version draws a blank card —
+    no title, no length — which looks exactly like a project that failed.
+    """
+    written = 0
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT id, result FROM jobs WHERE card = '{}' OR card = ''"
+            " ORDER BY created_at DESC LIMIT ?", (limit,),
+        ).fetchall()
+        for row in rows:
+            try:
+                card = card_of(json.loads(row["result"] or "{}"))
+            except ValueError:
+                continue
+            if not card:
+                continue
+            conn.execute("UPDATE jobs SET card = ? WHERE id = ?",
+                         (json.dumps(card), row["id"]))
+            written += 1
+    return written
+
+
+_CARD_COLS = ("id, status, step, progress, request, card, error, "
+              "created_at, updated_at")
+
+
+def list_jobs(limit: int = 50, full: bool = False) -> list[dict[str, Any]]:
+    """The projects, newest first — by default without what they contain.
+
+    `full` reads every scene of every project back. Almost nothing wants that:
+    a list draws a card per project, and a card is a title, a length and a
+    status. Reading a quarter of a megabyte per project to render thirty of
+    those is the difference between a screen that changes instantly and one
+    that waits on a database.
+    """
+    columns = "*" if full else _CARD_COLS
+    with _conn() as conn:
+        rows = conn.execute(
+            f"SELECT {columns} FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
     out = []
     for row in rows:
         data = dict(row)
         data["request"] = json.loads(data["request"] or "{}")
-        data["result"] = json.loads(data["result"] or "{}")
-        data["logs"] = json.loads(data["logs"] or "[]")
+        if full:
+            data["result"] = json.loads(data["result"] or "{}")
+            data["logs"] = json.loads(data["logs"] or "[]")
+        else:
+            # The card stands in for the result. Everything a list shows is in
+            # it; anything that is not is something the list was not showing.
+            data["result"] = json.loads(data.pop("card", None) or "{}")
+            data["logs"] = []
         out.append(data)
     return out
 

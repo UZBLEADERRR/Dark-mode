@@ -249,6 +249,14 @@
             <div class="ov-layer" id="ov-layer"></div>
             <div class="cap-sample" id="cap-sample"><span></span></div>
             <div class="canvas-empty" id="canvas-empty">Sahna tanlanmagan</div>
+            <!-- Swapping one scene's picture used to be four taps down a panel.
+                 It is the most common edit there is, so it sits on the picture
+                 it changes. -->
+            <label class="swap-pic" id="swap-pic" title="Shu sahnaning rasmini almashtirish">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 15l5-4 4 3 3-2 6 5"/></svg>
+              <span>Rasmni almashtirish</span>
+              <input type="file" accept="image/*" hidden id="swap-file" />
+            </label>
           </div>
           <div class="canvas-tools">
             <button class="tool play" id="play-btn" aria-label="Sahnani eshitish">

@@ -105,6 +105,12 @@ async def lifespan(app: FastAPI):
     store.init()
     resumable: list[str] = []
     try:
+        # Projects made before the list stopped reading every scene have no card
+        # to draw from. One pass, once, so they do not all show up blank.
+        store.backfill_cards()
+    except Exception:  # noqa: BLE001 - a blank card is not worth a failed boot
+        pass
+    try:
         # A render is server-side work: closing the browser never stopped it, and
         # now neither does the container being replaced under it. Anything
         # interrupted mid-render is picked straight back up.
@@ -259,7 +265,10 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         # which is the whole reason the editor offers to change it.
         # How many scenes are showing a stand-in. Nothing else can tell: the file
         # exists, so "18/18" looks finished.
-        "placeholders": len(pipeline.placeholder_scenes(scenes)),
+        # From the scenes when they are loaded, from the card when they are not:
+        # the projects list draws this and must not read a scene to do it.
+        "placeholders": (len(pipeline.placeholder_scenes(scenes)) if scenes
+                         else int(result.get("placeholders") or 0)),
         "image_provider": request.get("image_provider") or "",
         "image_provider_now": (request.get("image_provider")
                                or config.IMAGE_PROVIDER).lower(),
@@ -284,8 +293,9 @@ def _job_payload(job: dict[str, Any], *, with_scenes: bool = True) -> dict[str, 
         "scenes": [pipeline.public_scene(job["id"], s) for s in scenes] if with_scenes else None,
         # What is still missing, so a job that stopped halfway can say how far
         # it got rather than only that it failed.
-        "progress_detail": pipeline.unfinished(
-            scenes, uploaded_audio=bool(request.get("narration_audio"))) if scenes else None,
+        "progress_detail": (pipeline.unfinished(
+            scenes, uploaded_audio=bool(request.get("narration_audio"))) if scenes
+            else result.get("progress_detail")),
         "warnings": result.get("warnings") or [],
         "logs": job.get("logs", [])[-40:],
         "created_at": job.get("created_at"),
@@ -1620,7 +1630,7 @@ def _tree_bytes(path: Path) -> int:
 @app.get("/api/storage")
 async def storage_used() -> dict[str, Any]:
     """What is taking up room, so clearing it is a decision rather than a guess."""
-    jobs = store.list_jobs(limit=500)
+    jobs = store.list_jobs(limit=500)  # cards only: this needs a count, not scenes
     return {
         "jobs": len(jobs),
         # The three places a project's bytes end up. They are separate on
@@ -1784,7 +1794,14 @@ def _editable_job(job_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 async def edit_job(job_id: str, patch: JobPatch) -> dict[str, Any]:
     """Change what applies to the whole video: caption look, music, burn-in."""
     job = _get_job_or_404(job_id)
-    if job["status"] in _BUSY:
+    # Switching the picture provider is the one change worth making *while* a
+    # project is running: a key runs out at scene nine, and the alternative used
+    # to be to let the remaining scenes fail and start the whole thing again
+    # somewhere else. The image stage reads the choice again for every picture,
+    # so it lands on the next one. Everything else here rewrites settings the
+    # running render is already holding, and still waits.
+    only_provider = patch.model_dump(exclude_none=True).keys() <= {"image_provider"}
+    if job["status"] in _BUSY and not only_provider:
         raise HTTPException(status_code=409,
                             detail="This job is still working — wait for it to finish.")
 
