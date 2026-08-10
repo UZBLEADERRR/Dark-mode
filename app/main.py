@@ -1857,6 +1857,13 @@ async def edit_job(job_id: str, patch: JobPatch) -> dict[str, Any]:
         request["music_id"] = patch.music_id or None
     if patch.music_start is not None:
         request["music_start"] = float(patch.music_start)
+    if patch.part_size is not None:
+        was = int(request.get("part_size") or 0)
+        request["part_size"] = int(patch.part_size)
+        if was != patch.part_size:
+            store.update_job(job_id, log=(
+                f"Bo'laklab render: har {patch.part_size} sahnadan"
+                if patch.part_size else "Bo'laklash o'chirildi — bitta video"))
 
     dropped = 0
     if patch.image_provider is not None:

@@ -2905,6 +2905,7 @@ function syncEditor(job) {
       ? 'Rasm ustidan sudrab joylashtiring. O‘zgarishlar o‘zi saqlanadi.'
       : 'Video tayyor. O‘zgartirsangiz qayta render qiling.';
   drawJobProvider(job, rendering);
+  drawJobParts(job, rendering);
   $('#render-btn').disabled = rendering;
   $('#render-btn').textContent = rendering
     ? (job.status === 'queued' ? 'Navbatda…' : 'Render ketmoqda…')
@@ -2933,6 +2934,59 @@ function syncEditor(job) {
  *  the running job carries on asking the old one, and nothing on screen explains
  *  the disagreement. This is where one project is brought across.
  */
+/** Cut this video into several short ones — decided on the project, not at the
+ *  start of it.
+ *
+ *  A ninety-scene video that will not render whole is already made: every
+ *  picture drawn, every line recorded, all of it paid for. Telling somebody to
+ *  create it again with a different setting is telling them to buy it twice. So
+ *  the choice lives here, beside Render, and applies to what is already on disk.
+ */
+const PART_SIZES = [0, 5, 10, 15, 20, 30];
+
+function drawJobParts(job, rendering) {
+  const wrap = $('#job-parts-wrap');
+  const select = $('#job-parts');
+  const total = job.scene_count || (job.scenes || []).length;
+  // Nothing to divide, and a control offering to divide it would only be a
+  // question about a video that does not have the problem.
+  if (total < 8) { wrap.hidden = true; return; }
+
+  const now = Number(job.part_size || 0);
+  const sizes = PART_SIZES.filter((n) => !n || n < total);
+  const signature = `${total}|${now}`;
+  if (select.dataset.sig !== signature) {
+    select.dataset.sig = signature;
+    select.innerHTML = sizes.map((n) => {
+      const count = n ? Math.ceil(total / n) : 1;
+      const label = n ? `Har ${n} sahnadan — ${count} ta video` : "Yo‘q — bitta video";
+      return `<option value="${n}"${n === now ? ' selected' : ''}>${esc(label)}</option>`;
+    }).join('');
+  }
+  select.disabled = !!rendering || ED.locked;
+  wrap.hidden = false;
+}
+
+$('#job-parts')?.addEventListener('change', async (e) => {
+  if (!ED.job) return;
+  const wanted = Number(e.target.value || 0);
+  e.target.disabled = true;
+  try {
+    await api(`/api/jobs/${ED.job.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ part_size: wanted }),
+    });
+    ED.job.part_size = wanted;
+    toast(wanted
+      ? `Render har ${wanted} sahnadan alohida video qilib beradi`
+      : 'Render bitta video qilib beradi');
+  } catch (err) {
+    toast(err.message || 'O‘zgartirib bo‘lmadi');
+  }
+  e.target.disabled = false;
+});
+
 function drawJobProvider(job, rendering) {
   const wrap = $('#job-provider-wrap');
   const select = $('#job-provider');
