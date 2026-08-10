@@ -1911,6 +1911,7 @@ async function tick() {
   if (!state.activeId) return;
   try {
     const job = await api(`/api/jobs/${state.activeId}`);
+    state.misses = 0;
     drawLive(job);
     drawStage(job);
     syncEditor(job);
@@ -1922,9 +1923,27 @@ async function tick() {
       loadJobs({ fresh: true });
     }
   } catch (e) {
-    clearInterval(state.poll);
-    state.poll = null;
-    $('#stage').innerHTML = `<p class="msg err">${esc(e.message)}</p>`;
+    // A render outlives the browser and it outlives the server: a container
+    // that restarts answers 502 for a few seconds and then carries on. Killing
+    // the poll and replacing the whole card with the bare number "502" made a
+    // blip look like the end of the project. So the card stays, the trouble is
+    // said in words above it, and asking carries on until it answers.
+    state.misses = (state.misses || 0) + 1;
+    const gone = /50\d|Failed to fetch|NetworkError|Load failed/i.test(e.message);
+    const note = gone
+      ? `Server javob bermayapti (${state.misses}-urinish) — render davom etmoqda,
+         qayta ulanmoqda…`
+      : e.message;
+    const box = $('#stage');
+    if (!box.querySelector('.stall.offline')) {
+      box.insertAdjacentHTML('afterbegin',
+        `<div class="stall long offline"><span></span></div>`);
+    }
+    box.querySelector('.stall.offline span').textContent = note;
+    if (!gone && state.misses > 3) {
+      clearInterval(state.poll);
+      state.poll = null;
+    }
   }
 }
 
@@ -2124,11 +2143,23 @@ function drawStage(job) {
       render tugagach o‘zi boshlanadi. Ilovani yopsangiz ham davom etadi.</span></div>`);
   }
 
+  // Silence means two completely different things and this used to report only
+  // one of them. Waiting on a provider is somebody else not answering; the
+  // stages that stitch the video are this machine working, flat out, with
+  // nothing to say until a batch of twelve scenes is joined. Calling that "the
+  // provider is not answering" was alarming and wrong.
   if (busy && idle >= IDLE_WARN) {
-    p.push(`<div class="stall${idle >= IDLE_STOP ? ' long' : ''}">
-      <span>${idle >= IDLE_STOP
-        ? `Provayder ${idle} soniyadan beri javob bermayapti.`
-        : `Kutilmoqda… ${idle} s`}</span>
+    const OWN_WORK = { clips: 'Kadrlar birlashtirilmoqda',
+                       render: 'Video yig‘ilmoqda',
+                       captions: 'Subtitrlar yozilmoqda',
+                       publish: 'Yakunlanmoqda' };
+    const mine = OWN_WORK[job.step];
+    p.push(`<div class="stall${!mine && idle >= IDLE_STOP ? ' long' : ''}">
+      <span>${mine
+        ? `${mine} — bu bir necha daqiqa olishi mumkin (${clock(idle)}).`
+        : idle >= IDLE_STOP
+          ? `Provayder ${idle} soniyadan beri javob bermayapti.`
+          : `Kutilmoqda… ${idle} s`}</span>
     </div>`);
   }
 

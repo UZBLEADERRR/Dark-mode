@@ -590,6 +590,10 @@ input[type="range"]::-moz-range-thumb {
 .stall .btn { flex: none; }
 .stall.long .btn { color: #ffd79a; border-color: rgba(255, 189, 82, .35); }
 .stall.long .btn:hover { background: rgba(255, 189, 82, .14); border-color: rgba(255, 189, 82, .6); }
+/* Losing the server for a moment is not the same as a provider going quiet:
+   the render is still running on the other side of it. Stated, then dropped. */
+.stall.offline { margin: 0 0 10px; }
+
 /* Waiting a turn is normal, so it is stated calmly — not in the warning colour
    the stall notice uses. */
 .stall.queue { background: rgba(120, 160, 255, .1); color: #b8ccff; }

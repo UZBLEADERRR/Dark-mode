@@ -27,6 +27,7 @@ from . import config, pgstore, skills, store
 from .providers import align, batch, images, storage, tts
 from .render import overlays as ov
 from .render import shots
+from .render import stills
 from .render import subtitles as subs
 from .render import video
 
@@ -214,6 +215,10 @@ def replace_scene_image(job_id: str, index: int, data: bytes,
     # or alpha-channel surprise halfway through a render.
     with Image.open(target) as img:
         img.convert("RGB").save(target, format="PNG")
+    # A photograph off a phone is twelve megapixels and the canvas is two.
+    fmt = config.FORMATS.get(job["request"].get("video_format", "16:9"),
+                             config.FORMATS["16:9"])
+    stills.fit(target, (fmt["width"], fmt["height"]))
 
     holder["image_path"] = str(target)
     holder["needs_image"] = False
@@ -293,6 +298,8 @@ async def arrange_uploaded_images(
     if job is None:
         return
 
+    fmt = config.FORMATS.get(job["request"].get("video_format", "16:9"),
+                             config.FORMATS["16:9"])
     try:
         scenes = _load_scenes(job)
         if not scenes:
@@ -343,6 +350,7 @@ async def arrange_uploaded_images(
 
             with Image.open(picture["path"]) as img:
                 img.convert("RGB").save(target, format="PNG")
+            stills.fit(target, (fmt["width"], fmt["height"]))
             scene["image_path"] = str(target)
             scene["needs_image"] = False
             scene["image_version"] = int(scene.get("image_version", 0)) + 1
@@ -1661,6 +1669,11 @@ async def _render_images(
             job_id=job_id, scene=scene["index"],
             on_wait=_flow_note(job_id, label),
         )
+        # Whatever the provider felt like returning, brought down to a size the
+        # animation can actually use. A still four times the canvas is decoded in
+        # full on every frame and then thrown away to the same size it would have
+        # been — per encoder, several at a time.
+        stills.fit(path, size)
         holder["image_path"] = str(path)
         holder["needs_image"] = False
         holder["image_version"] = int(holder.get("image_version", 0)) + 1
@@ -2167,6 +2180,13 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
                 audio_paths=[Path(s["audio_path"]) for s in scenes],
                 out_path=workdir / "narration.wav",
             )
+            # Compressed now rather than after the video is written: a WAV is a
+            # megabyte every six seconds, so an hour of narration is seven
+            # hundred of them sitting on the box for the whole of the render —
+            # the stage that has the least room to spare. FLAC is the same
+            # samples and everything downstream reads it without being told.
+            if await shrink_narration(workdir):
+                narration_path = workdir / "narration.flac"
             total_audio = sum(float(s["audio_duration"]) for s in scenes)
 
         # --- captions ---------------------------------------------------------
@@ -2301,6 +2321,13 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
             await _gather_limited([one_clip(s) for s in wave], speed["workers"])
             if not streaming:
                 continue
+            # Said before it starts, not after. Joining twelve scenes is one
+            # ffmpeg call with twelve decoders and eleven cross-fades: minutes of
+            # work with nothing to report, and a screen that had gone quiet for
+            # four minutes was telling the user a provider had stopped answering.
+            _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
+                      f"{start + 1}–{start + len(wave)} sahna birlashtirilmoqda",
+                      status="rendering")
             path, length, carried = await video.fuse_wave(
                 [clips[start + i] for i in range(len(wave))],
                 clip_durations[start:start + len(wave)], transition,

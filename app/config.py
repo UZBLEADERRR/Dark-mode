@@ -409,7 +409,29 @@ def _cpu_allowance() -> int:
     return max(1, _os.cpu_count() or 2)
 
 
+def _memory_allowance() -> int:
+    """How many bytes this container may use, or 0 when nothing says.
+
+    The same problem as the cores: the machine has plenty and the plan does not.
+    Read so the render can size itself to the box it is actually on rather than
+    to the one it can see.
+    """
+    for name in ("memory.max", "memory/memory.limit_in_bytes"):
+        try:
+            raw = (Path("/sys/fs/cgroup") / name).read_text().strip()
+            if raw in ("max", ""):
+                continue
+            limit = int(raw)
+            # cgroup v1 reports a number near 2^63 for "no limit".
+            if 0 < limit < 1 << 50:
+                return limit
+        except (OSError, ValueError):
+            continue
+    return 0
+
+
 CPU_COUNT = _int("CPU_COUNT", _cpu_allowance())
+MEMORY_LIMIT = _int("MEMORY_LIMIT", _memory_allowance())
 RENDER_SPEED = _env("RENDER_SPEED", "balanced").lower()
 
 SPEED_PROFILES: dict[str, dict] = {
@@ -421,18 +443,27 @@ SPEED_PROFILES: dict[str, dict] = {
         # stretches. Less headroom is softer under a hard zoom, but zoompan cost
         # scales with the square of this number, so it is the biggest lever.
         "supersample": 1.35,
+        "fuse_preset": "superfast", "fuse_crf": 21,
+        "fuse_maxrate": "9M", "fuse_bufsize": "18M",
     },
     "balanced": {
         "label": "Muvozanat",
         "clip_preset": "veryfast", "clip_crf": 16,
         "final_preset": "faster", "final_crf": 20,
         "supersample": 1.7,
+        # What a half-joined batch is written at. See `_fuse_group`: this file is
+        # read once by the final encode and deleted, so what matters is that the
+        # last pass cannot see the difference — not that it is pristine.
+        "fuse_preset": "superfast", "fuse_crf": 20,
+        "fuse_maxrate": "12M", "fuse_bufsize": "24M",
     },
     "quality": {
         "label": "Sifat",
         "clip_preset": "veryfast", "clip_crf": 14,
         "final_preset": "medium", "final_crf": 18,
         "supersample": 2.0,
+        "fuse_preset": "veryfast", "fuse_crf": 18,
+        "fuse_maxrate": "16M", "fuse_bufsize": "32M",
     },
 }
 
@@ -444,7 +475,14 @@ def speed_profile(name: str | None = None) -> dict:
     # Clips run several at a time, but each ffmpeg also threads internally, so
     # the two have to be divided rather than both given the whole machine —
     # oversubscribing costs more in context switching than it wins in overlap.
-    workers = max(2, min(CPU_COUNT, 4))
+    workers = max(1, min(CPU_COUNT, 4))
+    if MEMORY_LIMIT:
+        # Each 1080p encoder holds a decoded frame, a supersampled copy and the
+        # zoompan buffer at once. Roughly a quarter of a gigabyte at the default
+        # settings, so on a box that has said how much it has, the count is
+        # brought down rather than discovered by being killed.
+        workers = max(1, min(workers, int(MEMORY_LIMIT / (768 * 1024 * 1024))))
+    workers = max(1, _int("RENDER_WORKERS", workers))
     return {**profile, "workers": workers, "threads": max(1, CPU_COUNT // workers)}
 
 
