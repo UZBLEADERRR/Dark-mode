@@ -5762,13 +5762,35 @@ function drawSpace() {
       <div><span>Saqlangan nusxalar (baza)</span><b>${size(s.media_bytes)}</b></div>
       <div><span>Siz yuklagan fayllar</span><b>${size(s.upload_bytes)}</b></div>
       <div><span>Baza fayli</span><b>${size(s.db_bytes)}</b></div>
+      <div><span>Ishchi fayllar (keraksiz)</span><b>${size(s.scratch_bytes)}</b></div>
     </div>
     <p class="note">«Saqlangan nusxalar» — servis qayta ishga tushganda disk
       tozalanadi, shuning uchun rasmlar bazaga ham yoziladi. Diskda 0 bo‘lsa
       ham videolaringiz shu yerdan qayta tiklanadi.</p>
+    <button class="btn" id="space-tidy"${s.scratch_bytes ? '' : ' disabled'}>
+      Ishchi fayllarni tozalash${s.scratch_bytes ? ` — ${size(s.scratch_bytes)}` : ''}
+    </button>
+    <p class="note">Video yasalayotganda har bir sahna uchun vaqtinchalik kadr
+      fayllari yoziladi. Video tayyor bo‘lgach ular kerak emas — rasmlar,
+      ovozlar va tayyor videolaringizga tegilmaydi.</p>
     <button class="btn danger" id="space-wipe">Barcha loyihalarni o‘chirish</button>
     <p class="note">Herolar, brend, musiqa va API kalitlari o‘chmaydi — faqat
       loyihalar va ularning fayllari.</p>`;
+
+  $('#space-tidy').addEventListener('click', async () => {
+    const btn = $('#space-tidy');
+    btn.disabled = true;
+    btn.textContent = 'Tozalanmoqda…';
+    try {
+      const out = await api('/api/storage/tidy', { method: 'POST' });
+      toast(out.freed_bytes
+        ? `${size(out.freed_bytes)} bo‘shadi`
+        : 'Tozalaydigan narsa yo‘q edi');
+    } catch (err) {
+      toast(err.message || 'Tozalab bo‘lmadi');
+    }
+    await loadSpace();
+  });
 
   $('#space-wipe').addEventListener('click', async () => {
     // Typed, not tapped. This is the only button in the app that cannot be

@@ -1634,7 +1634,55 @@ async def storage_used() -> dict[str, Any]:
         # outside any project folder, which is exactly why they are worth
         # counting separately — they used to outlive the project they belonged to.
         "upload_bytes": _tree_bytes(config.DATA_DIR / "uploads"),
+        # The part of that which is nobody's video: scene clips and half-joined
+        # batches, left behind by renders that finished before they were cleaned
+        # up after. Counted apart from the rest because it can be thrown away
+        # without losing anything at all, which is not true of the other numbers.
+        "scratch_bytes": _scratch_bytes(),
     }
+
+
+def _scratch_bytes() -> int:
+    total = 0
+    if not config.PROJECTS_DIR.exists():
+        return 0
+    for folder in config.PROJECTS_DIR.iterdir():
+        if not folder.is_dir():
+            continue
+        for pattern in [*pipeline.SCRATCH, "narration.wav"]:
+            for path in folder.glob(pattern):
+                try:
+                    total += path.stat().st_size
+                except OSError:  # noqa: PERF203 - a file that vanished is zero
+                    continue
+    return total
+
+
+@app.post("/api/storage/tidy")
+async def tidy_storage() -> dict[str, Any]:
+    """Throw away every render's working files, keeping every video.
+
+    A render makes a clip per scene and joins them in batches; both are rebuilt
+    from the pictures next time and neither is ever looked at again. They used
+    to be left where they fell, so a box filled up with the leavings of videos
+    that finished successfully weeks ago. This is that, swept — no project loses
+    a picture, a voice clip, or a finished video.
+    """
+    freed, touched = 0, 0
+    if config.PROJECTS_DIR.exists():
+        for folder in sorted(config.PROJECTS_DIR.iterdir()):
+            if not folder.is_dir():
+                continue
+            was = pipeline.drop_scratch(folder)
+            # The joined voice-over is kept — swapping the music mixes against
+            # it — but losslessly compressed rather than left as a WAV. Somebody
+            # else's own recording is left exactly as they gave it to us.
+            job = store.get_job(folder.name) or {}
+            if not (job.get("request") or {}).get("narration_audio"):
+                was += await pipeline.shrink_narration(folder)
+            freed += was
+            touched += 1 if was else 0
+    return {"freed_bytes": freed, "projects": touched}
 
 
 @app.delete("/api/jobs")
