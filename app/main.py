@@ -41,6 +41,7 @@ from .models import (
     RegenerateRequest,
     RepurposeRequest,
     SceneInsert,
+    SceneNumbers,
     SceneOrder,
     ScenePatch,
     ScriptNote,
@@ -431,12 +432,39 @@ def _get_job_or_404(job_id: str) -> dict[str, Any]:
 
 # ── pages ─────────────────────────────────────────────────────────────────────
 
+def _asset_stamp() -> str:
+    """A short token that changes when the front end does.
+
+    Without one, a deploy that changes a button changes nothing anybody can see.
+    `/static/app.js` is served with no `Cache-Control`, so a browser applies its
+    own heuristic and keeps a version from before the deploy — for hours on a
+    desktop, and until it is evicted on a phone that has the app on its home
+    screen. Every "you added that but it is not there" was this.
+    """
+    newest = 0.0
+    for name in ("app.js", "style.css", "index.html"):
+        try:
+            newest = max(newest, (STATIC_DIR / name).stat().st_mtime)
+        except OSError:
+            continue
+    return f"{int(newest):x}"
+
+
 @app.get("/", include_in_schema=False)
-async def index() -> FileResponse:
+async def index() -> HTMLResponse:
     page = STATIC_DIR / "index.html"
     if not page.exists():
         raise HTTPException(status_code=404, detail="UI not found.")
-    return FileResponse(page)
+    stamp = _asset_stamp()
+    html = page.read_text(encoding="utf-8")
+    # The page names its own script and stylesheet; here they are given the
+    # version they were built at, so a new deploy asks for a URL the browser has
+    # never seen instead of one it thinks it already has.
+    html = (html.replace('href="/static/style.css"', f'href="/static/style.css?v={stamp}"')
+                .replace('src="/static/app.js"', f'src="/static/app.js?v={stamp}"'))
+    # The page itself must never be held: it is the only thing that knows which
+    # version of the rest to ask for.
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -2153,12 +2181,18 @@ async def regenerate_scene(job_id: str, index: int, body: RegenerateRequest) -> 
 
 @app.post("/api/jobs/{job_id}/scenes/{index}/image")
 async def upload_scene_image(
-    job_id: str, index: int, image: UploadFile = File(...)
+    job_id: str, index: int, image: UploadFile = File(...), shot: int = Form(-1),
 ) -> dict[str, Any]:
-    """Use your own still for a scene instead of a generated one."""
+    """Use your own still for a scene instead of a generated one.
+
+    `shot` names which picture of a split scene is being replaced. Omitted, it
+    means the scene itself — which for a split scene is its first shot, because
+    that is the picture the scene is showing.
+    """
     _editable_job(job_id)
     data, _mime, _ext = await _read_upload(image, IMAGE_TYPES)
-    scene = pipeline.replace_scene_image(job_id, index, data)
+    scene = pipeline.replace_scene_image(job_id, index, data,
+                                         shot=None if shot < 0 else shot)
     if scene is None:
         raise HTTPException(status_code=404, detail=f"Scene {index} does not exist.")
     return pipeline.public_scene(job_id, scene)
@@ -2181,6 +2215,50 @@ async def redo_placeholder_images(job_id: str) -> dict[str, Any]:
     store.update_job(job_id, status="running", step="images", progress=55,
                      log=f"{len(wanted)} ta rasm qayta yasalmoqda")
     _launch(lambda: pipeline.redo_placeholders(job_id), job_id)
+    return {"id": job_id, "status": "running", "scenes": wanted}
+
+
+# "3, 5, 8-12" — the way a person writes down which scenes they mean. Accepted
+# as typed rather than as a JSON array, because the point of it is that naming
+# nine scenes is one line instead of nine trips through a panel.
+SCENE_LIST = re.compile(r"(\d+)\s*(?:[-–—]\s*(\d+))?")
+
+
+def parse_scene_numbers(said: str, total: int) -> list[int]:
+    """Turn "3, 5, 8-12" into scene indexes. Counted from 1, as written."""
+    out: list[int] = []
+    for first, last in SCENE_LIST.findall(said or ""):
+        start = int(first)
+        end = int(last) if last else start
+        if end < start:
+            start, end = end, start
+        for number in range(start, min(end, total) + 1):
+            if 1 <= number <= total and number - 1 not in out:
+                out.append(number - 1)
+    return out
+
+
+@app.post("/api/jobs/{job_id}/images/regenerate", status_code=202)
+async def regenerate_named_images(job_id: str, body: SceneNumbers) -> dict[str, Any]:
+    """Draw the pictures for the scenes named, all in one go.
+
+    Redrawing scene three, then scene seven, then scene twelve meant opening
+    each one, pressing its own button, and waiting for the whole stage to run
+    between them. This takes the numbers as they would be said out loud.
+    """
+    job, scenes = _editable_job(job_id)
+    wanted = (parse_scene_numbers(body.scenes, len(scenes))
+              if isinstance(body.scenes, str)
+              else [n - 1 for n in body.scenes if 1 <= n <= len(scenes)])
+    if not wanted:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sahna raqamlarini yozing — 1 dan {len(scenes)} gacha "
+                   f"(masalan: 3, 5, 8-12).")
+    store.update_job(job_id, status="running", step="images", progress=55,
+                     log=f"{len(wanted)} ta sahna rasmi qayta yasalmoqda: "
+                         + ", ".join(str(i + 1) for i in wanted[:20]))
+    _launch(lambda: pipeline.redraw_scenes(job_id, wanted), job_id)
     return {"id": job_id, "status": "running", "scenes": wanted}
 
 

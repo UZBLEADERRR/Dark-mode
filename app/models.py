@@ -266,6 +266,16 @@ class ScenePatch(BaseModel):
     shots: list[ShotIn] | None = None
 
 
+class SceneNumbers(BaseModel):
+    """Which scenes, written the way somebody would say them: "3, 5, 8-12".
+
+    A list of integers is accepted too, for anything calling this that already
+    has them — but the string is the point: the reason to name several scenes at
+    once is that typing them is faster than opening each one.
+    """
+    scenes: str | list[int] = Field(default="", max_length=400)
+
+
 class RegenerateRequest(BaseModel):
     image: bool = True
     voice: bool = False

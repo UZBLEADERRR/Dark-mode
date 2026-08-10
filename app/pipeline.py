@@ -175,8 +175,18 @@ def _materialize_heroes(workdir: Path, hero_ids: list[str]) -> dict[str, Path]:
     return paths
 
 
-def replace_scene_image(job_id: str, index: int, data: bytes) -> dict | None:
-    """Drop a user-supplied still into a scene, in place of the generated one."""
+def replace_scene_image(job_id: str, index: int, data: bytes,
+                        shot: int | None = None) -> dict | None:
+    """Drop a user-supplied still into a scene, in place of the generated one.
+
+    A scene split into shots does not draw from `scene["image_path"]` — each
+    shot has its own picture and the render reads those. Writing the scene's
+    copy for a split scene therefore did nothing anybody could see: the file was
+    saved, the upload reported success, and the video came out with the picture
+    that was already there. So a shot can be named, and when the scene is split
+    and none is, the first shot is the one meant — it is the one whose thumbnail
+    the scene is showing.
+    """
     from PIL import Image
 
     job = store.get_job(job_id)
@@ -187,7 +197,17 @@ def replace_scene_image(job_id: str, index: int, data: bytes) -> dict | None:
     if scene is None:
         return None
 
-    target = workdir_for(job_id) / "images" / f"scene_{scene['sid']}.png"
+    cuts = scene.get("shots") or []
+    holder = scene
+    label = f"Scene {index + 1}"
+    if cuts:
+        position = min(max(int(shot or 0), 0), len(cuts) - 1)
+        holder = cuts[position]
+        label += f" shot {position + 1}"
+
+    name = (f"shot_{holder['sid']}.png" if holder is not scene
+            else f"scene_{scene['sid']}.png")
+    target = workdir_for(job_id) / "images" / name
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
     # Normalise the same way generated stills are, so ffmpeg never meets a CMYK
@@ -195,11 +215,19 @@ def replace_scene_image(job_id: str, index: int, data: bytes) -> dict | None:
     with Image.open(target) as img:
         img.convert("RGB").save(target, format="PNG")
 
-    scene["image_path"] = str(target)
-    scene["needs_image"] = False
-    scene["image_version"] = int(scene.get("image_version", 0)) + 1
+    holder["image_path"] = str(target)
+    holder["needs_image"] = False
+    holder["placeholder"] = False
+    holder["image_version"] = int(holder.get("image_version", 0)) + 1
+    if holder is not scene and cuts and cuts[0] is holder:
+        # The scene's thumbnail follows its first shot, the same way it does
+        # when the picture was generated rather than uploaded.
+        scene["image_path"] = str(target)
+        scene["image_version"] = int(scene.get("image_version", 0)) + 1
+    if cuts:
+        scene["needs_image"] = any(c.get("needs_image") for c in cuts)
     store.update_job(job_id, result={"scenes": scenes},
-                     log=f"Scene {index + 1}: image replaced by upload")
+                     log=f"{label}: image replaced by upload")
     return scene
 
 
@@ -514,6 +542,16 @@ async def redo_placeholders(job_id: str) -> None:
     picture. The cost is that "18/18" can be eighteen grey rectangles, and the
     only way back used to be regenerating each scene by hand. This is that, once.
     """
+    await redraw_scenes(job_id)
+
+
+async def redraw_scenes(job_id: str, only: list[int] | None = None) -> None:
+    """Draw the pictures for these scenes again — or for every stand-in.
+
+    `only` is a list of scene indexes, which is what "sahna 3, 7 va 12 ni qayta
+    yasa" turns into. Doing it one scene at a time is a page of taps and three
+    minutes of waiting between each; naming them is one instruction.
+    """
     job = store.get_job(job_id)
     if job is None:
         return
@@ -522,7 +560,9 @@ async def redo_placeholders(job_id: str) -> None:
 
     try:
         scenes = _load_scenes(job)
-        wanted = placeholder_scenes(scenes)
+        known = {s["index"] for s in scenes}
+        wanted = (sorted(i for i in dict.fromkeys(only) if i in known)
+                  if only is not None else placeholder_scenes(scenes))
         if not wanted:
             _progress(job_id, "review", 72, "Qayta yasaydigan rasm yo'q", status="review")
             return
@@ -552,7 +592,10 @@ async def redo_placeholders(job_id: str) -> None:
         _save_scenes(job_id, scenes, warnings=warnings)
         _kept_note(job_id, scenes, await keep_media(scenes, job_id))
 
-        left = placeholder_scenes(scenes)
+        # Only the ones that were asked for: a stand-in in some other scene is
+        # not this instruction's failure and reporting it as one would make
+        # "redraw scene 3" look like it went wrong.
+        left = [i for i in placeholder_scenes(scenes) if i in set(wanted)]
         done = len(wanted) - len(left)
         store.update_job(job_id, error="")
         _progress(job_id, "review", 72,
@@ -1351,9 +1394,23 @@ async def _voice_scenes(
     lock = asyncio.Lock()
     cast = cast_voices()
 
+    def narrator_now() -> tuple[str, str | None]:
+        """Which narrator reads *this* line, asked again for every one.
+
+        The same reason the picture provider is asked again: changing the voice
+        in Kutubxona while a fifty-scene voice-over is running should be heard
+        from the next line, not next project. What the job itself was given
+        still wins — that is a choice about this video — and the app-wide
+        setting stands in when it has none.
+        """
+        asked = store.job_request(job_id)
+        return ((asked.get("tts_provider") or provider or config.TTS_PROVIDER).lower(),
+                asked.get("voice_id") or voice_id)
+
     async def one(scene: dict) -> None:
         nonlocal done
-        say_with, say_as, who = voice_for(scene, cast, provider, voice_id)
+        heard, sounds = narrator_now()
+        say_with, say_as, who = voice_for(scene, cast, heard, sounds)
         label = f"Scene {scene['index'] + 1}" + (f" ({who})" if who else "")
         try:
             path, provider_words = await tts.synthesize(
@@ -1546,8 +1603,13 @@ async def _render_images(
         choice is read from the job each time instead, so switching to another
         provider from the running project's own screen takes effect on the next
         picture and the ones already drawn are kept.
+
+        The app-wide choice counts too, for a project that never named one of
+        its own: changing it in Kutubxona → Modellar while a render is going is
+        the same instruction said in the other place.
         """
-        wanted = (store.job_request(job_id).get("image_provider") or "").lower()
+        wanted = (store.job_request(job_id).get("image_provider")
+                  or config.IMAGE_PROVIDER or "").lower()
         if wanted and wanted != provider and wanted in config.IMAGE_PROVIDERS:
             return wanted
         return provider
