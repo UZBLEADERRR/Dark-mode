@@ -569,8 +569,19 @@ async def _fuse_group(
         "-c:v", "libx264",
         # An intermediate is read once and thrown away, so it is encoded for
         # speed at a quality high enough that the final pass cannot see it.
-        "-preset", "ultrafast",
-        "-crf", "18",
+        #
+        # "High enough" is not "as high as possible". `ultrafast -crf 18` on
+        # moving 1080p is around twenty-eight megabits: a batch of twelve scenes
+        # came out at two hundred and fifty megabytes, and a ninety-two scene
+        # video therefore carried two gigabytes of half-joined batches on top of
+        # every picture, every voice clip and the finished file. The room that
+        # costs is the scarce thing on the box this runs on; the bitrate it buys
+        # is thrown away by the next encode. So the peak is capped as well as
+        # the quality, which bounds the worst case rather than the average.
+        "-preset", profile.get("fuse_preset", "superfast"),
+        "-crf", str(profile.get("fuse_crf", 20)),
+        "-maxrate", profile.get("fuse_maxrate", "12M"),
+        "-bufsize", profile.get("fuse_bufsize", "24M"),
         "-pix_fmt", "yuv420p",
         "-r", str(config.FPS),
         "-threads", str(profile.get("threads", 1)),
