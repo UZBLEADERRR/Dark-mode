@@ -2240,3 +2240,27 @@ textarea.flow-prompt:focus { outline: none; border-color: var(--accent); }
 .plan .f.tight select { padding: 6px 9px; font-size: .78rem; }
 
 .swap-pic.busy { opacity: .6; pointer-events: none; }
+
+/* ── a video delivered in pieces ───────────────────────────────────
+   Numbered, in order, with the scenes each one covers — because the next thing
+   that happens to these files is that somebody lines them up in a phone editor,
+   and the only question they have is "which one comes next". */
+.parts {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 2px 0 10px;
+}
+.parts-head {
+  flex: 1 0 100%; font-size: .74rem; color: var(--muted); margin-bottom: 2px;
+}
+.parts-note { font-size: .78rem; color: var(--muted); align-self: center; }
+.part {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 7px 10px; border-radius: var(--r-sm);
+  background: var(--raised); border: 1px solid var(--line);
+  color: var(--text); text-decoration: none;
+  font-size: .74rem; font-variant-numeric: tabular-nums;
+}
+.part:hover { border-color: var(--accent); }
+.part b { font-size: .84rem; }
+.part span { color: var(--muted); }
+.part em { font-style: normal; color: var(--muted); }

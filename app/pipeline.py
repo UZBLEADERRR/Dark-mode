@@ -18,6 +18,7 @@ import asyncio
 import os
 import re
 import shutil
+import hashlib
 import traceback
 import unicodedata
 from pathlib import Path
@@ -2227,6 +2228,7 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
 
         # --- scene clips -------------------------------------------------------
         _progress(job_id, "clips", 78, "Animating the scenes", status="rendering")
+        title = job.get("result", {}).get("title") or request["topic"]
         transition = min(config.TRANSITION_SECONDS,
                          max(0.2, min(s["audio_duration"] for s in scenes) / 2))
         asset_paths = _materialize_assets(workdir, scenes)
@@ -2283,6 +2285,35 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
                 _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
                           f"Animated scene {made}/{len(scenes)}", status="rendering")
 
+        # --- one video, or several -------------------------------------------
+        # A ninety-scene video is easier to check, easier to redo and easier to
+        # finish in pieces — and a phone editor joins them in a minute. Asked for
+        # in scenes rather than in minutes because that is the unit the editor
+        # numbers and the unit the scene list is written in.
+        per_part = max(0, int(request.get("part_size") or 0))
+        chunks = ([scenes[i:i + per_part] for i in range(0, len(scenes), per_part)]
+                  if per_part else [scenes])
+        base_name = _slug(title)
+
+        # What the parts were built from. A part already on disk is not rebuilt —
+        # that is what makes a failure at part seven cost seven parts and not
+        # ten — but a scene edited since then has to invalidate them, or Render
+        # would keep handing back the video from before the edit.
+        stamp = hashlib.sha1(
+            ("|".join(f"{s.get('sid')}:{s.get('image_version', 0)}:"
+                      f"{s.get('voice_version', 0)}:{s.get('audio_duration')}"
+                      for s in scenes)
+             + f"|{per_part}|{caption_style}|{burn_file}|{request.get('music_id')}"
+             ).encode()).hexdigest()[:12]
+        if (job.get("result") or {}).get("parts_stamp") != stamp:
+            for stale in workdir.glob(f"{base_name}-*.mp4"):
+                stale.unlink(missing_ok=True)
+        store.update_job(job_id, result={"parts_stamp": stamp})
+
+        if len(chunks) > 1:
+            _note(job_id, f"{len(scenes)} sahna — {len(chunks)} ta alohida video "
+                          f"tayyorlanadi, har biri {per_part} sahnadan")
+
         # Animated a batch at a time, and each batch joined and freed before the
         # next one starts.
         #
@@ -2294,74 +2325,158 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
         # a long enough video could not be rendered on any box. Joining each
         # batch as it is finished makes the peak the size of one batch: a
         # ten-minute video and a two-hour one now cost the same room.
-        effects = [s.get("transition") or None for s in scenes]
+        effects_all = [s.get("transition") or None for s in scenes]
         batch = video.MAX_GRAPH_INPUTS
-        streaming = len(scenes) > batch
-        pieces: list[Path] = []
-        piece_durations: list[float] = []
-        piece_effects: list[str | None] = []
-
-        for start in range(0, len(scenes), batch):
-            wave = scenes[start:start + batch]
-            joined = workdir / f"wave_{start:04d}.mp4"
-            if streaming and joined.exists():
-                # An earlier attempt got this far. The batch is finished and
-                # moved into place under its own name, so it is not redone —
-                # which is what makes a render that died at scene a hundred and
-                # eighty carry on from there instead of from scene one.
-                made += len(wave)
-                pieces.append(joined)
-                piece_durations.append(max(0.05, await video.probe_duration(joined)))
-                piece_effects.append(effects[start])
-                _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
-                          f"Animated scene {made}/{len(scenes)}", status="rendering")
-                continue
-            # Each clip is independent, and animating them is the slowest stage
-            # of a render, so a batch goes out together rather than one at a time.
-            await _gather_limited([one_clip(s) for s in wave], speed["workers"])
-            if not streaming:
-                continue
-            # Said before it starts, not after. Joining twelve scenes is one
-            # ffmpeg call with twelve decoders and eleven cross-fades: minutes of
-            # work with nothing to report, and a screen that had gone quiet for
-            # four minutes was telling the user a provider had stopped answering.
-            _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
-                      f"{start + 1}–{start + len(wave)} sahna birlashtirilmoqda",
-                      status="rendering")
-            path, length, carried = await video.fuse_wave(
-                [clips[start + i] for i in range(len(wave))],
-                clip_durations[start:start + len(wave)], transition,
-                effects[start:start + len(wave)], workdir, speed, drop_inputs=True,
-                out_path=joined,
-            )
-            pieces.append(path)
-            piece_durations.append(length)
-            piece_effects.append(carried)
-
-        if streaming:
-            _note(job_id, f"{len(scenes)} sahna {len(pieces)} bo'lakka birlashtirildi")
-        else:
-            pieces, piece_durations, piece_effects = clips, clip_durations, effects
-
-        # --- assemble ----------------------------------------------------------
-        _progress(job_id, "render", 90, "Rendering the final video", status="rendering")
         music_path = _materialize_music(workdir, request.get("music_id"))
+        music_start = float(request.get("music_start") or 0.0)
+        by_sid = {s.get("sid"): n for n, s in enumerate(scenes)}
+        built: list[dict] = []
 
-        title = job.get("result", {}).get("title") or request["topic"]
-        out_path = workdir / f"{_slug(title)}.mp4"
-        # ffmpeg runs with the project folder as its cwd so every path in the
-        # filter graph is a bare filename — no escaping of ':' or '\' needed.
-        await video.assemble(
-            clips=pieces, clip_durations=piece_durations, narration=narration_path,
-            total_duration=total_audio, out_path=out_path, workdir=workdir,
-            subtitle_file=ass_path if burn_file else None,
-            music=music_path,
-            music_start=float(request.get("music_start") or 0.0),
-            effects=piece_effects,
-            sfx=_materialize_sfx(workdir, scenes),
-            speed=speed,
-            drop_scratch=True,
-        )
+        for number, chunk in enumerate(chunks, start=1):
+            single = len(chunks) == 1
+            stem = base_name if single else f"{base_name}-{number:02d}"
+            out_path = workdir / f"{stem}.mp4"
+            first = by_sid.get(chunk[0].get("sid"), 0)
+            zero = float(chunk[0].get("start", 0.0))
+            span = sum(float(s["audio_duration"]) for s in chunk)
+
+            if not single and out_path.exists() and out_path.stat().st_size > 4096:
+                # Built by an earlier attempt and still current — the stamp above
+                # would have deleted it otherwise. Seven finished parts are seven
+                # parts a failure at the eighth must not cost.
+                made += len(chunk)
+                built.append({"path": out_path, "from": first + 1,
+                              "to": first + len(chunk),
+                              "duration": await video.probe_duration(out_path)})
+                _note(job_id, f"{number}-qism allaqachon tayyor — o'tkazib yuborildi")
+                continue
+
+            if not single:
+                _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
+                          f"{number}/{len(chunks)}-qism — sahna {first + 1}"
+                          f"–{first + len(chunk)}", status="rendering")
+
+            # --- this part's clips, a batch at a time -------------------------
+            #
+            # Every clip used to be made first and joined afterwards, which meant
+            # a two-hundred-scene project held two hundred clips, then a second
+            # copy of the whole video as half-joined batches, then a third as the
+            # finished file — all at once, on top of every picture and every line
+            # of voice-over. Joining each batch as it is finished makes the peak
+            # the size of one batch, whatever the video's length.
+            streaming = len(chunk) > batch
+            pieces: list[Path] = []
+            piece_durations: list[float] = []
+            piece_effects: list[str | None] = []
+
+            for start in range(0, len(chunk), batch):
+                wave = chunk[start:start + batch]
+                at = first + start
+                joined = workdir / f"wave_{at:04d}.mp4"
+                if streaming and joined.exists():
+                    made += len(wave)
+                    pieces.append(joined)
+                    piece_durations.append(max(0.05, await video.probe_duration(joined)))
+                    piece_effects.append(effects_all[at])
+                    _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
+                              f"Animated scene {made}/{len(scenes)}", status="rendering")
+                    continue
+                # Each clip is independent, and animating them is the slowest
+                # stage of a render, so a batch goes out together.
+                await _gather_limited([one_clip(s) for s in wave], speed["workers"])
+                if not streaming:
+                    continue
+                # Said before it starts, not after. Joining twelve scenes is one
+                # ffmpeg call with twelve decoders and eleven cross-fades:
+                # minutes of work with nothing to report, and a screen that had
+                # gone quiet for four minutes was telling the user a provider had
+                # stopped answering.
+                _progress(job_id, "clips", 78 + int(12 * made / max(len(scenes), 1)),
+                          f"{at + 1}–{at + len(wave)} sahna birlashtirilmoqda",
+                          status="rendering")
+                path, length, carried = await video.fuse_wave(
+                    [clips[at + i] for i in range(len(wave))],
+                    clip_durations[at:at + len(wave)], transition,
+                    effects_all[at:at + len(wave)], workdir, speed,
+                    drop_inputs=True, out_path=joined,
+                )
+                pieces.append(path)
+                piece_durations.append(length)
+                piece_effects.append(carried)
+
+            if not streaming:
+                pieces = [clips[first + i] for i in range(len(chunk))]
+                piece_durations = clip_durations[first:first + len(chunk)]
+                piece_effects = effects_all[first:first + len(chunk)]
+
+            # --- this part's sound and words ---------------------------------
+            if single:
+                part_narration = narration_path
+                part_ass, part_srt = ass_path, srt_path
+                part_captions = captions
+            else:
+                # Rebased to the part's own clock: everything downstream reads
+                # absolute times, so the part is given a timeline that starts at
+                # zero rather than every helper being taught about parts.
+                part_captions = [
+                    {**c, "start": max(0.0, float(c["start"]) - zero),
+                     "end": max(0.0, float(c["end"]) - zero)}
+                    for c in captions
+                    if float(c["end"]) > zero and float(c["start"]) < zero + span
+                ]
+                part_ass = workdir / f"{stem}.ass"
+                part_srt = workdir / f"{stem}.srt"
+                subs.write_ass(part_ass, subs.build_ass(
+                    captions=part_captions, width=width, height=height,
+                    font=config.subtitle_font(language), style=caption_style,
+                    title_cards=[
+                        {**t, "start": t["start"] - zero, "end": t["end"] - zero}
+                        for t in title_cards
+                        if t["end"] > zero and t["start"] < zero + span],
+                    overlays=[
+                        {**t, "start": t["start"] - zero, "end": t["end"] - zero}
+                        for t in text_layers
+                        if t["end"] > zero and t["start"] < zero + span],
+                    include_captions=burn_captions, language=language,
+                ))
+                part_srt.write_text(subs.build_srt(part_captions), encoding="utf-8")
+
+                if uploaded_audio:
+                    part_narration = await video.slice_audio(
+                        narration_path, workdir / f"{stem}-voice.wav", zero, zero + span)
+                else:
+                    part_narration = await video.concat_narration(
+                        audio_paths=[Path(s["audio_path"]) for s in chunk],
+                        out_path=workdir / f"{stem}-voice.wav",
+                    )
+
+            _progress(job_id, "render", 90,
+                      "Rendering the final video" if single
+                      else f"{number}/{len(chunks)}-qism yig'ilmoqda",
+                      status="rendering")
+            # ffmpeg runs with the project folder as its cwd so every path in the
+            # filter graph is a bare filename — no escaping of ':' or '\' needed.
+            await video.assemble(
+                clips=pieces, clip_durations=piece_durations,
+                narration=part_narration, total_duration=span, out_path=out_path,
+                workdir=workdir,
+                subtitle_file=part_ass if burn_file else None,
+                music=music_path,
+                # The bed carries on across the parts rather than restarting on
+                # each: joined back together they are one video, and a track that
+                # began again every ninety seconds would give that away.
+                music_start=music_start + (0.0 if single else zero),
+                effects=piece_effects,
+                sfx=_materialize_sfx(workdir, [
+                    {**s, "start": float(s.get("start", 0.0)) - zero} for s in chunk]),
+                speed=speed,
+                drop_scratch=True,
+            )
+            if not single:
+                (workdir / f"{stem}-voice.wav").unlink(missing_ok=True)
+            built.append({"path": out_path, "from": first + 1,
+                          "to": first + len(chunk), "duration": span})
+
         freed = drop_scratch(workdir)
         if not uploaded_audio:
             freed += await shrink_narration(workdir)
@@ -2375,21 +2490,40 @@ async def run_render(job_id: str, *, may_rebuild: bool = False) -> None:
             language=language, duration=total_audio,
         )
 
-        video_url, upload_warning = await storage.publish(out_path, f"{job_id}/{out_path.name}")
-        await keep_media([{"image_path": str(out_path)}], job_id)
-        if upload_warning:
-            warnings.append(upload_warning)
+        parts: list[dict] = []
+        for number, part in enumerate(built, start=1):
+            url, upload_warning = await storage.publish(
+                part["path"], f"{job_id}/{part['path'].name}")
+            await keep_media([{"image_path": str(part["path"])}], job_id)
+            if upload_warning:
+                warnings.append(upload_warning)
+            parts.append({
+                "number": number,
+                "name": part["path"].name,
+                "from_scene": part["from"],
+                "to_scene": part["to"],
+                "duration": round(float(part["duration"]), 2),
+                "url": url,
+                "download_url": f"/api/jobs/{job_id}/download?part={number}",
+            })
+
         subtitle_url, _ = await storage.publish(srt_path, f"{job_id}/subtitles.srt")
         await keep_media([{"image_path": str(srt_path)}], job_id)
 
         store.update_job(
             job_id, status="done", step="done", progress=100, error="",
-            log=f"Finished — {len(scenes)} scenes, {total_audio:.1f}s",
+            log=(f"Finished — {len(scenes)} scenes, {total_audio:.1f}s"
+                 + (f", {len(parts)} ta alohida video" if len(parts) > 1 else "")),
             result={
                 "scenes": scenes,
-                "video_url": video_url,
+                # The first part is what the player opens; the rest are listed.
+                "video_url": parts[0]["url"] if parts else None,
                 "download_url": f"/api/jobs/{job_id}/download",
                 "subtitle_url": subtitle_url,
+                # Every piece the render produced, in order, so a long video can
+                # be finished in a phone editor rather than waited out whole.
+                "parts": parts if len(parts) > 1 else [],
+                "parts_stamp": stamp,
                 # Kept with the job, not only written to a file. Timing captions
                 # costs a model call, and every other subtitle format is these
                 # same cues in different punctuation — so they are stored once
