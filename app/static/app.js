@@ -4460,7 +4460,12 @@ function drawProjects() {
   $$('#jobs-list [data-del-job]').forEach((b) => b.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!confirm('Loyihani o‘chirasizmi?')) return;
-    await api(`/api/jobs/${b.dataset.delJob}`, { method: 'DELETE' });
+    const out = await api(`/api/jobs/${b.dataset.delJob}`, { method: 'DELETE' });
+    // Said out loud, because "deleted" has to mean deleted: the bucket copy is
+    // the one on the open internet, and it is the one that used to survive.
+    toast(out.remote_removed
+      ? `O‘chirildi — bulutdan ham ${out.remote_removed} ta fayl olindi`
+      : 'O‘chirildi');
     if (state.activeId === b.dataset.delJob) {
       state.activeId = null;
       ED.job = null;
@@ -5773,6 +5778,10 @@ function drawSpace() {
     <p class="note">Video yasalayotganda har bir sahna uchun vaqtinchalik kadr
       fayllari yoziladi. Video tayyor bo‘lgach ular kerak emas — rasmlar,
       ovozlar va tayyor videolaringizga tegilmaydi.</p>
+    <button class="btn" id="space-sweep">Bulutdagi egasiz fayllarni o‘chirish</button>
+    <p class="note">Ilgari loyihani o‘chirganingizda Supabase’dagi rasm va
+      ovozlar o‘chmay qolgan bo‘lishi mumkin. Bu tugma o‘sha egasiz papkalarni
+      topib o‘chiradi — mavjud loyihalarga tegilmaydi.</p>
     <button class="btn danger" id="space-wipe">Barcha loyihalarni o‘chirish</button>
     <p class="note">Herolar, brend, musiqa va API kalitlari o‘chmaydi — faqat
       loyihalar va ularning fayllari.</p>`;
@@ -5790,6 +5799,22 @@ function drawSpace() {
       toast(err.message || 'Tozalab bo‘lmadi');
     }
     await loadSpace();
+  });
+
+  $('#space-sweep').addEventListener('click', async () => {
+    const btn = $('#space-sweep');
+    btn.disabled = true;
+    btn.textContent = 'Tekshirilmoqda…';
+    try {
+      const out = await api('/api/storage/bucket-sweep', { method: 'POST' });
+      toast(out.why ? out.why
+        : out.swept ? `${out.swept} ta egasiz loyiha, ${out.files} ta fayl o‘chirildi`
+        : `Tekshirildi (${out.checked} ta) — egasiz fayl yo‘q`);
+    } catch (err) {
+      toast(err.message || 'Bulutga ulanib bo‘lmadi');
+    }
+    btn.disabled = false;
+    btn.textContent = 'Bulutdagi egasiz fayllarni o‘chirish';
   });
 
   $('#space-wipe').addEventListener('click', async () => {

@@ -1685,6 +1685,29 @@ async def tidy_storage() -> dict[str, Any]:
     return {"freed_bytes": freed, "projects": touched}
 
 
+@app.post("/api/storage/bucket-sweep")
+async def sweep_bucket() -> dict[str, Any]:
+    """Remove from object storage every project this app no longer has.
+
+    Deleting a project asked the bucket for the contents of its folder and got
+    back two folder names and the finished video, because that listing is one
+    level deep. The video went; every picture and every voice clip stayed, for
+    every project ever deleted. Those are still there and nothing else is ever
+    going to look at them — this finds them by asking the bucket what it is
+    holding rather than by consulting our own list, and removes the ones whose
+    project is gone. A project that still exists is not touched.
+    """
+    if storage.backend() != "supabase":
+        return {"swept": 0, "files": 0, "checked": 0,
+                "why": "Supabase Storage sozlanmagan — bucket yo'q."}
+    folders = await storage.project_folders()
+    stranded = [name for name in folders if store.get_job(name) is None]
+    files = 0
+    for name in stranded:
+        files += await storage.remove_folder(name)
+    return {"swept": len(stranded), "files": files, "checked": len(folders)}
+
+
 @app.delete("/api/jobs")
 async def delete_every_job(confirm: str = "") -> dict[str, Any]:
     """Delete every project — the rows, the folders, the kept media, the bucket.

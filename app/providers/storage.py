@@ -196,6 +196,94 @@ async def mirror(local_path: Path, remote_path: str) -> bool:
         return False
 
 
+PAGE = 1000     # how many entries one `list` call is asked for
+BATCH = 500     # how many objects one `delete` call is given
+MAX_DEPTH = 8   # how far down a project folder is followed
+
+
+async def _every_object(client: httpx.AsyncClient, prefix: str) -> list[str]:
+    """Every real object under this prefix, however deep it sits.
+
+    `list` is one level deep and answers with folder rows — a name and no id —
+    rather than with what is inside them. A project's pictures live at
+    `<job>/images/...` and its voice at `<job>/audio/...`, so a single call sees
+    two folders and the finished video, and a delete built from that removes the
+    video and leaves every picture and every voice clip exactly where they were.
+    """
+    url = f"{config.SUPABASE_URL}/storage/v1/object/list/{config.SUPABASE_BUCKET}"
+    found: list[str] = []
+    seen: set[str] = set()
+    todo: list[tuple[str, int]] = [(prefix, 0)]
+
+    while todo:
+        here, depth = todo.pop()
+        if here in seen or depth > MAX_DEPTH:
+            continue
+        seen.add(here)
+        offset, before = 0, len(found)
+        while True:
+            resp = await client.post(
+                url, headers=_headers("application/json"),
+                json={"prefix": here, "limit": PAGE, "offset": offset},
+            )
+            if resp.status_code >= 400:
+                break
+            rows = resp.json() or []
+            for row in rows:
+                name = row.get("name")
+                if not name:
+                    continue
+                full = f"{here}/{name}"
+                # A file carries an id, or at least the metadata that describes
+                # its bytes. Anything with neither is a folder to walk into.
+                if row.get("id") or row.get("metadata"):
+                    found.append(full)
+                else:
+                    todo.append((full, depth + 1))
+            if len(rows) < PAGE:
+                break
+            offset += PAGE
+        if depth and len(found) == before:
+            # Walked into it and found nothing. Either it is an empty folder, in
+            # which case deleting it is a no-op, or it is a file this deployment
+            # described without an id — and that one has to go. Cheap either way.
+            found.append(here)
+    return found
+
+
+async def project_folders() -> list[str]:
+    """The project folders the bucket is holding, whether or not we still know them.
+
+    A project deleted before the bucket sweep was recursive left its pictures
+    and its voice-over behind, and nothing since has ever looked at them. This
+    is how they are found: the bucket's own answer to "what is in here", rather
+    than our list of what ought to be.
+    """
+    if backend() != "supabase":
+        return []
+    url = f"{config.SUPABASE_URL}/storage/v1/object/list/{config.SUPABASE_BUCKET}"
+    names: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=30.0)) as client:
+            offset = 0
+            while True:
+                resp = await client.post(
+                    url, headers=_headers("application/json"),
+                    json={"prefix": "", "limit": PAGE, "offset": offset},
+                )
+                if resp.status_code >= 400:
+                    break
+                rows = resp.json() or []
+                names += [row["name"] for row in rows
+                          if row.get("name", "").startswith("job_")]
+                if len(rows) < PAGE:
+                    break
+                offset += PAGE
+    except Exception:  # noqa: BLE001 - a bucket that cannot be reached has nothing to say
+        return names
+    return names
+
+
 async def remove_folder(prefix: str) -> int:
     """Delete everything stored under one project. Returns how many files went.
 
@@ -209,31 +297,34 @@ async def remove_folder(prefix: str) -> int:
     worth refusing to delete the project over — the local copies going is still
     better than nothing going.
     """
-    if backend() != "supabase" or not prefix:
+    if backend() != "supabase" or not prefix.strip("/"):
         return 0
+    prefix = prefix.strip("/")
     base = f"{config.SUPABASE_URL}/storage/v1/object"
+    gone = 0
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0)) as client:
-            # `list` is per-folder and not recursive, so the project folder is
-            # asked for by name rather than swept for.
-            resp = await client.post(
-                f"{base}/list/{config.SUPABASE_BUCKET}",
-                headers=_headers("application/json"),
-                json={"prefix": prefix, "limit": 1000},
-            )
-            if resp.status_code >= 400:
-                return 0
-            names = [row.get("name") for row in resp.json() if row.get("name")]
-            if not names:
-                return 0
-            gone = await client.request(
-                "DELETE", f"{base}/{config.SUPABASE_BUCKET}",
-                headers=_headers("application/json"),
-                json={"prefixes": [f"{prefix}/{name}" for name in names]},
-            )
-            return len(names) if gone.status_code < 400 else 0
+            keys = await _every_object(client, prefix)
+            for start in range(0, len(keys), BATCH):
+                batch = keys[start:start + BATCH]
+                resp = await client.request(
+                    "DELETE", f"{base}/{config.SUPABASE_BUCKET}",
+                    headers=_headers("application/json"),
+                    json={"prefixes": batch},
+                )
+                if resp.status_code >= 400:
+                    continue
+                # It answers with what it actually removed. Counted from that
+                # rather than from what was asked: a number that says nine when
+                # two went is worse than no number, because it reads as proof.
+                try:
+                    removed = resp.json()
+                except ValueError:
+                    removed = None
+                gone += len(removed) if isinstance(removed, list) else len(batch)
     except Exception:  # noqa: BLE001 - a delete that cannot reach the bucket
-        return 0
+        return gone
+    return gone
 
 
 async def fetch(remote_path: str, local_path: Path) -> bool:
