@@ -154,6 +154,12 @@ class JobPatch(BaseModel):
     # video behind — this is how one of them is brought across. An empty string
     # means "follow the app", which is a different answer from not saying.
     image_provider: str | None = Field(default=None, max_length=20)
+    # Hand this video back as several short ones, this many scenes each; 0 keeps
+    # it whole. Settable after the fact and deliberately: a long video that will
+    # not render in one piece is already made and paid for — every picture, every
+    # line of voice — and telling somebody to start again is telling them to buy
+    # it twice.
+    part_size: int | None = Field(default=None, ge=0, le=200)
 
 
 class MusicSwap(BaseModel):
