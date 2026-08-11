@@ -1,0 +1,86 @@
+# Sarideo on your own machine.
+#
+# The point of this file is the render. A video is made by animating one still
+# per scene and encoding the result, and that is pure CPU — a laptop has more of
+# it than a small cloud box, does not charge by the minute, has no memory cap to
+# be killed by, and has as much disk as the disk. A ninety-scene video that will
+# not finish on a hosted plan finishes here.
+#
+#   docker compose up -d      start it
+#   docker compose logs -f    watch it
+#   docker compose down       stop it
+#
+# Everything it makes lands in ./data, beside this file, and survives restarts,
+# updates and reinstalls.
+
+services:
+  sarideo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Reachable from the phone on the same Wi-Fi, not only from the laptop
+    # itself — the point is to run the work here and drive it from there.
+    ports: ["${PORT:-8000}:8000"]
+    # Optional: `docker compose up` should work before anyone has written one.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /data
+      # The two services find each other by name inside compose; the browser
+      # extension still talks to localhost:8001 from the laptop.
+      # Defaults, not decisions: anything written in .env wins, so pointing
+      # this at a database or a Flow Agent somewhere else needs no edit here.
+      FLOW_AGENT_URL: ${FLOW_AGENT_URL:-http://flow-agent:8001}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://sarideo:sarideo@db:5432/sarideo}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+    volumes:
+      - ./data:/data
+    depends_on:
+      db: {condition: service_healthy}
+    restart: unless-stopped
+    # No memory limit on purpose. The app sizes the render to whatever the
+    # container says it may use, and on a laptop the honest answer is "what the
+    # machine has" — capping it here would recreate the problem this exists to
+    # get away from.
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sarideo
+      POSTGRES_PASSWORD: sarideo
+      POSTGRES_DB: sarideo
+    volumes:
+      # A named volume, not ./data: the database's files are owned by the
+      # postgres user, and putting them beside the videos means every listing of
+      # your own project folder is full of things you must not touch.
+      - sarideo-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sarideo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # Google Flow, reached through the browser extension on this laptop. Left out
+  # of the default start — `docker compose --profile flow up -d` brings it in —
+  # because it is only useful to somebody who has the extension installed and
+  # signed in, and starting a service that nothing is talking to is noise.
+  flow-agent:
+    profiles: ["flow"]
+    build:
+      context: .
+      dockerfile: flowagent/Dockerfile
+    ports: ["8001:8001"]
+    environment:
+      FLOW_OUTPUT_DIR: /data/flow
+      # Set DEFAULT_PROJECT in .env to your own Flow project id, or set it from
+      # Sarideo's library panel once it is running.
+      DEFAULT_PROJECT: ${DEFAULT_PROJECT:-}
+      SERVER_API_KEY: ${FLOW_AGENT_KEY:-}
+    volumes:
+      - ./data/flowagent:/data
+    restart: unless-stopped
+
+volumes:
+  sarideo-db:
