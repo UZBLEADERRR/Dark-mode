@@ -10,6 +10,22 @@ ilova ularni navbat bilan ishlatadi va limitga urilganda kutmaydi —
 
 ---
 
+## O'z noutbukingizda ishlatish
+
+Videoni yig'ish — sof protsessor ishi, va noutbukda protsessor kichik bulut
+servisidan ko'proq, daqiqasiga pul olmaydi va xotira chegarasi yo'q. Bulutda
+tugamaydigan uzun video shu yerda tugaydi; telefondan boshqarasiz, og'ir ishni
+noutbuk qiladi.
+
+```
+git clone https://github.com/UZBLEADERRR/Dark-mode.git
+cd Dark-mode
+./start.sh          # Windows: start.bat ni ikki marta bosing
+```
+
+Ekranda ikkita manzil chiqadi — biri noutbuk uchun, biri bir xil Wi-Fi'dagi
+telefon uchun. To'liq qo'llanma: **[NOUTBUKDA.md](NOUTBUKDA.md)**.
+
 ## Nima qiladi
 
 ```
