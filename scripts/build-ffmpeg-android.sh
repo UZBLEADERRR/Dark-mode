@@ -16,9 +16,11 @@
 #
 # **libass without fontconfig.** There is no font database on Android to ask, so
 # libass is built with only its directory provider and the app names a folder in
-# `SUBTITLE_FONTSDIR`. harfbuzz is left out with it: it shapes Arabic and the
-# Indic scripts, it no longer builds with autotools, and the languages this app
-# is written in are set in Latin and Cyrillic.
+# `SUBTITLE_FONTSDIR`. That is the only piece of libass that is optional:
+# fribidi and harfbuzz are hard requirements of 0.17 with no flag to turn them
+# off, which is why both are built here — and why harfbuzz is pinned to 2.9.1,
+# the last release that still ships an autotools `configure` and so needs no
+# second build system for one library.
 #
 # Usage:  ANDROID_NDK_HOME=/path/to/ndk scripts/build-ffmpeg-android.sh out/
 # Result: out/libffmpeg.so and out/libffprobe.so, both arm64-v8a executables.
@@ -31,6 +33,8 @@ WORK="${WORK_DIR:-$(pwd)/.ffmpeg-build}"
 
 X264_TAG="${X264_TAG:-stable}"
 FREETYPE_VERSION="${FREETYPE_VERSION:-2.13.3}"
+HARFBUZZ_VERSION="${HARFBUZZ_VERSION:-2.9.1}"
+FRIBIDI_VERSION="${FRIBIDI_VERSION:-1.0.16}"
 LIBASS_VERSION="${LIBASS_VERSION:-0.17.3}"
 FFMPEG_VERSION="${FFMPEG_VERSION:-7.1}"
 
@@ -67,12 +71,34 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
 
 JOBS="$(nproc 2>/dev/null || echo 4)"
 
-fetch() {  # fetch <url> <directory-it-unpacks-to>
-  local url="$1" dir="$2" file="${1##*/}"
+fetch() {  # fetch <directory-it-unpacks-to> <url> [mirror...]
+  local dir="$1"; shift
   if [ -d "$WORK/$dir" ]; then echo "→ have $dir"; return; fi
-  echo "→ fetching $file"
-  curl -fsSL --retry 4 --retry-delay 3 -o "$WORK/$file" "$url"
-  tar -xf "$WORK/$file" -C "$WORK"
+  local url
+  for url in "$@"; do
+    echo "→ fetching ${url##*/}"
+    # Mirrors, because a project's own download host going down should not be
+    # the reason a phone build cannot be made. The first one that answers wins.
+    if curl -fsSL --retry 3 --retry-delay 3 --max-time 600 -o "$WORK/$dir.tar" "$url"; then
+      local top
+      top="$(tar -tf "$WORK/$dir.tar" | head -1 | cut -d/ -f1)"
+      tar -xf "$WORK/$dir.tar" -C "$WORK"
+      # A mirror is allowed to name its folder differently — a tag archive from
+      # GitHub unpacks to `FFmpeg-n7.1` where the project's own tarball says
+      # `ffmpeg-7.1` — so the folder is renamed rather than the build taught
+      # about every mirror's habits.
+      #
+      # Written as `if`, not as `&&`: this script runs under `set -e`, where a
+      # test that is merely false ends the whole build.
+      if [ "$top" != "$dir" ] && [ -d "$WORK/$top" ]; then
+        mv "$WORK/$top" "$WORK/$dir"
+      fi
+      if [ -d "$WORK/$dir" ]; then return; fi
+      echo "  ($url unpacked to '$top', which is not a source tree)" >&2
+    fi
+  done
+  echo "could not fetch $dir from any of: $*" >&2
+  return 1
 }
 
 # ── x264 ──────────────────────────────────────────────────────────────────────
@@ -100,8 +126,9 @@ fi
 # ── freetype ──────────────────────────────────────────────────────────────────
 if [ ! -f "$PREFIX/lib/libfreetype.a" ]; then
   echo "══ freetype"
-  fetch "https://download.savannah.gnu.org/releases/freetype/freetype-$FREETYPE_VERSION.tar.xz" \
-        "freetype-$FREETYPE_VERSION"
+  fetch "freetype-$FREETYPE_VERSION" \
+        "https://download.savannah.gnu.org/releases/freetype/freetype-$FREETYPE_VERSION.tar.xz" \
+        "https://downloads.sourceforge.net/project/freetype/freetype2/$FREETYPE_VERSION/freetype-$FREETYPE_VERSION.tar.xz"
   (
     cd "$WORK/freetype-$FREETYPE_VERSION"
     # Everything optional is off: this build renders glyphs from a .ttf and does
@@ -118,23 +145,70 @@ if [ ! -f "$PREFIX/lib/libfreetype.a" ]; then
   )
 fi
 
+# ── harfbuzz ──────────────────────────────────────────────────────────────────
+# Built after freetype and against it, because libass asks harfbuzz to shape
+# glyphs that freetype loaded. 2.9.1 is deliberate: every release after it is
+# meson-only.
+if [ ! -f "$PREFIX/lib/libharfbuzz.a" ]; then
+  echo "══ harfbuzz"
+  fetch "harfbuzz-$HARFBUZZ_VERSION" \
+        "https://github.com/harfbuzz/harfbuzz/releases/download/$HARFBUZZ_VERSION/harfbuzz-$HARFBUZZ_VERSION.tar.xz"
+  (
+    cd "$WORK/harfbuzz-$HARFBUZZ_VERSION"
+    ./configure \
+      --prefix="$PREFIX" \
+      --host="$TRIPLE" \
+      --enable-static --disable-shared \
+      --with-freetype=yes \
+      --with-glib=no --with-gobject=no --with-cairo=no \
+      --with-icu=no --with-graphite2=no
+    make -j"$JOBS"
+    make install
+  )
+fi
+
+# ── fribidi ───────────────────────────────────────────────────────────────────
+if [ ! -f "$PREFIX/lib/libfribidi.a" ]; then
+  echo "══ fribidi"
+  fetch "fribidi-$FRIBIDI_VERSION" \
+        "https://github.com/fribidi/fribidi/releases/download/v$FRIBIDI_VERSION/fribidi-$FRIBIDI_VERSION.tar.xz"
+  (
+    cd "$WORK/fribidi-$FRIBIDI_VERSION"
+    # fribidi builds table generators and runs them during the build, so it
+    # needs a compiler for *this* machine as well as one for the phone. Naming
+    # the build flags explicitly keeps the cross flags above from leaking into
+    # a program that has to run here.
+    ./configure \
+      --prefix="$PREFIX" \
+      --host="$TRIPLE" \
+      --enable-static --disable-shared \
+      --disable-debug --disable-deprecated \
+      CC_FOR_BUILD=cc \
+      CFLAGS_FOR_BUILD="-O2" \
+      CPPFLAGS_FOR_BUILD="" \
+      LDFLAGS_FOR_BUILD=""
+    make -j"$JOBS"
+    make install
+  )
+fi
+
 # ── libass ────────────────────────────────────────────────────────────────────
 if [ ! -f "$PREFIX/lib/libass.a" ]; then
   echo "══ libass"
-  fetch "https://github.com/libass/libass/releases/download/$LIBASS_VERSION/libass-$LIBASS_VERSION.tar.gz" \
-        "libass-$LIBASS_VERSION"
+  fetch "libass-$LIBASS_VERSION" \
+        "https://github.com/libass/libass/releases/download/$LIBASS_VERSION/libass-$LIBASS_VERSION.tar.gz"
   (
     cd "$WORK/libass-$LIBASS_VERSION"
     # `--disable-require-system-font-provider` is the one that matters: without
     # it configure refuses a build that has no way to look a font family up, and
-    # the directory provider this app uses is exactly that build.
+    # the directory provider this app uses is exactly that build. libunibreak
+    # only improves line breaking for scripts that have no spaces.
     ./configure \
       --prefix="$PREFIX" \
       --host="$TRIPLE" \
       --enable-static --disable-shared \
       --disable-fontconfig \
-      --disable-harfbuzz \
-      --disable-fribidi \
+      --disable-libunibreak \
       --disable-require-system-font-provider
     make -j"$JOBS"
     make install
@@ -143,7 +217,9 @@ fi
 
 # ── ffmpeg ────────────────────────────────────────────────────────────────────
 echo "══ ffmpeg"
-fetch "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" "ffmpeg-$FFMPEG_VERSION"
+fetch "ffmpeg-$FFMPEG_VERSION" \
+      "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" \
+      "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n$FFMPEG_VERSION.tar.gz"
 (
   cd "$WORK/ffmpeg-$FFMPEG_VERSION"
   [ -f config.h ] || ./configure \
@@ -157,7 +233,7 @@ fetch "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz" "ffmpeg-$FFMPE
     --sysroot="$SYSROOT" \
     --pkg-config=pkg-config --pkg-config-flags=--static \
     --extra-cflags="$CFLAGS" \
-    --extra-ldflags="$LDFLAGS" \
+    --extra-ldflags="$LDFLAGS -static-libstdc++" \
     --extra-libs="-lm" \
     --enable-static --disable-shared \
     --enable-pic \

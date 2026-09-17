@@ -96,9 +96,10 @@ Halol ro'yxat:
   YouTube ilovasidan joylaysiz.
 - **Flow (brauzer kengaytmasi orqali rasm).** Kengaytma kompyuter brauzeriga
   o'rnatiladi. Telefonda rasmlarni Gemini yoki fal.ai yasaydi.
-- **Koreys, arab, hind yozuvlaridagi subtitr.** Telefon versiyasidagi ffmpeg
-  harfbuzz'siz yig'ilgan va ichida DejaVu shrifti bor — lotin va kirill to'liq
-  ishlaydi, boshqa yozuvlar esa yo'q. O'zbek tili uchun ikkisi ham yetarli.
+- **Koreys, xitoy, yapon yozuvlaridagi subtitr.** Ilova ichida bitta shrift
+  bor — DejaVu, va unda ieroglif yo'q. libass yo'q harfni xato deb bermaydi,
+  shunchaki hech narsa chizmaydi, ya'ni subtitr bo'sh chiqadi. Lotin, kirill va
+  yunon to'liq ishlaydi. O'zbek tili uchun ikkisi ham yetarli.
 
 Qolgan hammasi — suhbat, reja, studio, tarjima, Shorts, brend, multfilm rejimi,
 o'z ovozingizni yuklash — bulutdagidek ishlaydi, chunki bu o'sha kod.
