@@ -26,6 +26,20 @@ cd Dark-mode
 Ekranda ikkita manzil chiqadi — biri noutbuk uchun, biri bir xil Wi-Fi'dagi
 telefon uchun. To'liq qo'llanma: **[NOUTBUKDA.md](NOUTBUKDA.md)**.
 
+## Telefonning o'zida — `.apk`
+
+Yuqoridagi yo'lda og'ir ishni noutbuk qiladi va telefon unga ulanadi. Ikkinchi
+yo'lda **noutbuk umuman yo'q**: bitta `.apk` o'rnatasiz, va ilova — Python,
+ffmpeg, web oyna, hammasi — telefonning ichida turadi.
+
+Server yo'q, Railway yo'q, Supabase yo'q, bir xil Wi-Fi ham shart emas. Kalitni
+ilovaning o'zida **API kalitlari** bo'limiga yozasiz va u o'sha telefonda,
+ilovaning ichki bazasida qoladi. Internet faqat Gemini'ga murojaat uchun kerak;
+videoni telefonning protsessori yig'adi.
+
+APK **Actions → APK** ishining artifacts'idan olinadi. To'liq qo'llanma:
+**[TELEFONDA.md](TELEFONDA.md)**.
+
 ## Nima qiladi
 
 ```

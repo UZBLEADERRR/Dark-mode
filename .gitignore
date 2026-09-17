@@ -10,3 +10,13 @@ data/
 .DS_Store
 node_modules/
 agent/profile/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+# ffmpeg is built by CI and dropped in here; it is 40 MB and reproducible.
+android/app/src/main/jniLibs/
+.ffmpeg-build/
+*.apk

@@ -397,6 +397,15 @@ def _database() -> dict[str, Any]:
     """What is holding the library, and whether it will still be there tomorrow."""
     files = storage.backend()
     if not pgstore.enabled():
+        if config.LOCAL_DEVICE:
+            # The same SQLite file, on a machine that is not rebuilt under it.
+            # Telling someone to attach a cloud database to keep their own
+            # phone's data safe is advice that costs money and buys nothing.
+            return {
+                "backend": "sqlite", "ok": True, "durable": True, "files": files,
+                "note": "Hamma narsa shu qurilmada — hech qayerga yuborilmaydi. "
+                        "Ilovani o'chirmasangiz, hammasi joyida qoladi.",
+            }
         return {
             "backend": "sqlite", "ok": True, "durable": False, "files": files,
             "note": "Hamma narsa shu konteynerda — deploy qilinsa o'chadi. "

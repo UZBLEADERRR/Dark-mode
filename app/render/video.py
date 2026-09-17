@@ -62,11 +62,54 @@ class RenderError(RuntimeError):
     pass
 
 
+def _binary(name: str) -> str:
+    """Turn the bare name this file writes into the executable to actually run.
+
+    Everywhere else in the tree `ffmpeg` is on PATH and this returns it
+    unchanged. Android is the exception: since API 29 a process may only execute
+    files that shipped inside the package's library folder, so the two binaries
+    are installed there under `lib*.so` names and pointed at by environment
+    variable. Resolving here, rather than at every call site, keeps the twenty
+    argument lists below readable and impossible to get half-right.
+    """
+    configured = config.FFPROBE_BIN if name == "ffprobe" else config.FFMPEG_BIN
+    return configured or name
+
+
 def ffmpeg_available() -> bool:
-    return bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+    def present(name: str) -> bool:
+        resolved = _binary(name)
+        # An absolute path is a claim about a file; a bare name is a claim about
+        # PATH. Checking the wrong one of the two reports a working install as
+        # missing, which is how a phone build looks when `which` is asked about
+        # a path it will never find.
+        if "/" in resolved:
+            return Path(resolved).exists()
+        return bool(shutil.which(resolved))
+
+    return present("ffmpeg") and present("ffprobe")
+
+
+def subtitles_filter(subtitle_file: str) -> str:
+    """The `subtitles=` filter, told where the fonts are when nothing else knows.
+
+    libass asks the system for a font by family name, and on a system with no
+    font database it finds nothing and draws nothing — a video that renders
+    cleanly with every caption blank. Naming a folder gives libass its own
+    provider and the family resolves from the files in it.
+    """
+    filter_args = f"subtitles={subtitle_file}"
+    fontsdir = config.SUBTITLE_FONTSDIR
+    if fontsdir:
+        # Inside a filtergraph `:` ends the option and `\` escapes, so a path
+        # holding either has to say so.
+        escaped = fontsdir.replace("\\", "\\\\").replace(":", "\\:")
+        filter_args += f":fontsdir={escaped}"
+    return filter_args
 
 
 async def _run(args: list[str], cwd: Path | None = None) -> str:
+    args = [_binary(args[0]), *args[1:]]
     process = await asyncio.create_subprocess_exec(
         *args,
         cwd=str(cwd) if cwd else None,
@@ -274,7 +317,7 @@ async def burn_onto(
     await _run([
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(video_path.resolve()),
-        "-vf", f"subtitles={subtitle_file.name}",
+        "-vf", subtitles_filter(subtitle_file.name),
         "-c:v", "libx264", "-preset", profile["final_preset"],
         "-crf", str(profile["final_crf"]), "-pix_fmt", "yuv420p",
         "-c:a", "copy", "-movflags", "+faststart", out_path.name,
@@ -395,7 +438,7 @@ async def mux_dub(
 
     args = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *inputs]
     if subtitle_file:
-        graph = f"[0:v]subtitles={subtitle_file.name}[vout]"
+        graph = f"[0:v]{subtitles_filter(subtitle_file.name)}[vout]"
         if audio_graph:
             graph += ";" + audio_graph
         args += ["-filter_complex", graph, "-map", "[vout]", "-map", audio_map,
@@ -508,7 +551,7 @@ def _video_graph(
     # bracketed and a bare input stream is not — ffmpeg rejects `-map "[0:v]"`.
     if clip_count == 1:
         if subtitle_file:
-            return f"[0:v]subtitles={subtitle_file}[vout]", "[vout]"
+            return f"[0:v]{subtitles_filter(subtitle_file)}[vout]", "[vout]"
         return "", "0:v"
 
     parts: list[str] = []
@@ -533,7 +576,7 @@ def _video_graph(
         current = label
 
     if subtitle_file:
-        parts.append(f"{current}subtitles={subtitle_file}[vout]")
+        parts.append(f"{current}{subtitles_filter(subtitle_file)}[vout]")
         current = "[vout]"
 
     return ";".join(parts), current

@@ -1,0 +1,9 @@
+// Versions are pinned rather than ranged because Chaquopy — the plugin that puts
+// CPython inside the package — tracks the Android Gradle Plugin closely, and a
+// newer AGP than it knows about fails at configuration time with a message about
+// an internal API rather than about the version. Raise these together.
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
+    id 'com.chaquo.python' version '16.0.0' apply false
+}

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The play button from the web UI's favicon, drawn on the adaptive icon's
+     inner 72x72 safe area of a 108x108 canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF5C47"
+        android:pathData="M27,33 L81,33 A11,11 0 0 1 92,44 L92,64 A11,11 0 0 1 81,75 L27,75 A11,11 0 0 1 16,64 L16,44 A11,11 0 0 1 27,33 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,43 L46,65 L65,54 Z" />
+</vector>

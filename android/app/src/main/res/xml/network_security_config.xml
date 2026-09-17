@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- The one address allowed to be plain HTTP is this phone talking to
+         itself. Everything the app fetches from a provider is HTTPS, and this
+         config is what keeps it that way while still letting the WebView reach
+         the server in the same process. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

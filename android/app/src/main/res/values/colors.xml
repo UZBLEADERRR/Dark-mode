@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The same two colours the web UI opens with, so the window before the
+         page loads is not a white flash in front of a dark app. -->
+    <color name="background">#08090C</color>
+    <color name="foreground">#EEF1F7</color>
+    <color name="accent">#FF5C47</color>
+    <color name="icon_background">#0E1117</color>
+</resources>

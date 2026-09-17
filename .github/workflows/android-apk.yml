@@ -1,0 +1,116 @@
+name: APK
+
+# Builds the phone version: a single .apk holding CPython, the `app/` package,
+# a static ffmpeg and the web UI. It needs no server of any kind at run time.
+#
+# Two jobs, because the halves have very different costs. ffmpeg takes about
+# half an hour and changes only when its build script does, so it is cached and
+# the APK job usually starts with it already built.
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - "android/**"
+      - "app/**"
+      - "scripts/build-ffmpeg-android.sh"
+      - ".github/workflows/android-apk.yml"
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  ffmpeg:
+    name: ffmpeg (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the built binaries
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ffmpeg-out
+          # Keyed on the script and on nothing else: the script pins every
+          # version it builds, so the same script is the same pair of binaries.
+          key: ffmpeg-android-arm64-${{ hashFiles('scripts/build-ffmpeg-android.sh') }}
+
+      - name: Build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake libtool pkg-config nasm yasm
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        # Read from the process environment, not the `env` context: the NDK path
+        # is set by the runner image, and the `env` context only holds what a
+        # workflow put there itself.
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_ROOT:-$ANDROID_NDK_HOME}}"
+          echo "NDK: $ANDROID_NDK_HOME"
+          scripts/build-ffmpeg-android.sh ffmpeg-out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-arm64-v8a
+          path: ffmpeg-out/*.so
+          retention-days: 7
+
+  apk:
+    name: APK
+    needs: ffmpeg
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-arm64-v8a
+          # `lib*.so` in the package's library folder is the only place Android
+          # will execute a binary from, which is why ffmpeg is packaged as one.
+          path: android/app/src/main/jniLibs/arm64-v8a
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Cache Chaquopy's wheels
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches/chaquopy
+          key: chaquopy-${{ hashFiles('android/app/build.gradle') }}
+          restore-keys: chaquopy-
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build
+        working-directory: android
+        # Debug, not release: the debug key is what makes the file installable
+        # at all, and it is the same key on every run, so one build upgrades the
+        # one before it instead of having to be uninstalled first.
+        run: gradle --no-daemon assembleDebug
+
+      - name: Name it
+        id: name
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "dist/sarideo-${GITHUB_SHA::7}.apk"
+          ls -lh dist
+          echo "apk=dist/sarideo-${GITHUB_SHA::7}.apk" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sarideo-apk
+          path: dist/*.apk
+          retention-days: 30

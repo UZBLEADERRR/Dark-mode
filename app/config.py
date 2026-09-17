@@ -43,6 +43,13 @@ DATABASE_URL = _env("DATABASE_URL", "").strip()
 # Hero photos and music live in SQLite as blobs, not loose files — one database
 # file is the whole library, so a single Railway volume keeps everything.
 STORAGE_BACKEND = _env("STORAGE_BACKEND", "local").lower()  # local | supabase
+
+# Whether `DATA_DIR` outlives the process that writes it. On a platform that
+# rebuilds the container on every deploy it does not, which is why the app tells
+# you to attach a database; on a phone or a laptop the folder is simply a folder
+# and the warning would be a lie. Off by default: a deployment that has said
+# nothing is the deployment that needs warning.
+LOCAL_DEVICE = _flag("LOCAL_DEVICE", False)
 SUPABASE_URL = _env("SUPABASE_URL").rstrip("/")
 SUPABASE_SERVICE_KEY = _env("SUPABASE_SERVICE_KEY")
 SUPABASE_BUCKET = _env("SUPABASE_BUCKET", "videos")
@@ -166,6 +173,18 @@ VIDEO_PRESET = _env("VIDEO_PRESET", "medium")
 SECONDS_PER_SCENE = float(_env("SECONDS_PER_SCENE", "6.5"))
 MAX_SCENES = _int("MAX_SCENES", 90)
 SUBTITLE_FONT = _env("SUBTITLE_FONT", "DejaVu Sans")
+
+# Where libass looks for the font files themselves. Empty means "ask the system"
+# — fontconfig, which every Linux image has and Android has not. A phone build
+# carries its own fonts inside the package and names the folder here, so the same
+# `SUBTITLE_FONT` family resolves on a machine with no font database at all.
+SUBTITLE_FONTSDIR = _env("SUBTITLE_FONTSDIR")
+
+# Where the two binaries live. A name is looked up on PATH, as before; an
+# absolute path is used as given. Android forbids executing anything outside the
+# package's own library folder, so on a phone these are full paths into it.
+FFMPEG_BIN = _env("FFMPEG_BIN", "ffmpeg")
+FFPROBE_BIN = _env("FFPROBE_BIN", "ffprobe")
 
 MUSIC_VOLUME = float(_env("MUSIC_VOLUME", "0.10"))
 GEMINI_USE_IMAGE_CONFIG = _flag("GEMINI_USE_IMAGE_CONFIG", True)

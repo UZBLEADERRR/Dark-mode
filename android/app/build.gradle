@@ -1,0 +1,144 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'com.chaquo.python'
+}
+
+// The Python that runs on the phone is the same `app/` package the server runs,
+// copied in at build time rather than forked. Nothing below edits it.
+def repoRoot = rootProject.projectDir.parentFile
+def pyPayload = layout.buildDirectory.file("payload/sarideo-python.zip")
+
+android {
+    namespace 'uz.sarideo.phone'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "uz.sarideo.phone"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "2.0.0"
+
+        // One ABI. Every Android phone sold since 2019 is arm64, and each extra
+        // ABI carries its own copy of CPython, of Pillow and of a 20 MB static
+        // ffmpeg — four ABIs would be most of a gigabyte to serve a rounding
+        // error of devices.
+        ndk { abiFilters "arm64-v8a" }
+
+        python {
+            version "3.12"
+            pip {
+                // pydantic 1, not 2, and this is the one substitution in the
+                // whole build: pydantic 2 keeps its validator in `pydantic-core`,
+                // a Rust extension with no Android wheel. 1.10 is pure Python and
+                // `pydantic_v1_bridge` covers the two places the spellings differ.
+                install "pydantic==1.10.22"
+
+                install "fastapi==0.115.6"
+                // Deliberately not uvicorn[standard]: the extras are uvloop and
+                // httptools, both C, neither built for Android, and neither
+                // needed to serve one browser on the loopback interface.
+                install "uvicorn==0.34.0"
+                install "httpx==0.28.1"
+                install "python-multipart==0.0.20"
+
+                install "Pillow"
+
+                // The free narrator, and the only dependency here that is
+                // optional at runtime: `app/providers/edge.py` imports it inside
+                // the function, so dropping this line costs the Edge voices and
+                // nothing else. Do that if Chaquopy ever lacks an aiohttp build.
+                install "edge-tts==7.2.8"
+            }
+        }
+    }
+
+    // `app/` and the Flow extension are handed to Python as ordinary files on
+    // the filesystem, unpacked from this zip on first run — not as importable
+    // assets. `app/main.py` locates its own web UI with
+    // `Path(__file__).parent / "static"`, and that only answers truthfully when
+    // the package really is a directory.
+    sourceSets {
+        main {
+            assets.srcDirs += [layout.buildDirectory.dir("payload").get().asFile]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+
+    packaging {
+        jniLibs {
+            // ffmpeg is shipped as `libffmpeg.so` because since Android 10 a
+            // process may only execute files that arrived inside the package's
+            // own library folder — an executable copied into app storage is
+            // refused by the kernel. Legacy packaging is what extracts it there
+            // as a real file instead of leaving it mapped inside the APK.
+            useLegacyPackaging true
+        }
+    }
+
+    buildTypes {
+        // The debug key is what makes the artifact this repository publishes
+        // installable at all — an unsigned release APK is refused by the
+        // installer, and a key generated fresh on each CI run would make every
+        // build refuse to upgrade the one before it.
+        release {
+            minifyEnabled false
+        }
+    }
+
+    lint { abortOnError false }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.activity:activity-ktx:1.9.1'
+}
+
+// ── the Python payload ────────────────────────────────────────────────────────
+tasks.register('packPython', Zip) {
+    description = "Pack app/ and the Flow extension for unpacking on the phone."
+    archiveFileName = "sarideo-python.zip"
+    destinationDirectory = layout.buildDirectory.dir("payload")
+    // Same sources, same bytes, same digest — so a rebuild that changed nothing
+    // does not make every phone unpack the payload again.
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+
+    from(new File(repoRoot, "app")) {
+        into "app"
+        exclude "**/__pycache__/**", "**/*.pyc"
+    }
+    from(new File(repoRoot, "flowagent/upstream/flow-extension")) {
+        into "flowagent/upstream/flow-extension"
+    }
+    // The phone re-unpacks when this file changes and not otherwise, so it has
+    // to be a digest of the contents rather than a size or a version number: a
+    // one-character edit to a Python file leaves both of those identical and
+    // would strand the old copy on every device that already had it.
+    doLast {
+        def zip = archiveFile.get().asFile
+        def digest = java.security.MessageDigest.getInstance("SHA-256")
+        zip.withInputStream { stream ->
+            def buffer = new byte[64 * 1024]
+            int read
+            while ((read = stream.read(buffer)) > 0) digest.update(buffer, 0, read)
+        }
+        new File(destinationDirectory.get().asFile, "sarideo-python.version")
+                .text = digest.digest().encodeHex().toString()
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name == "preBuild"
+            || task.name.startsWith("merge") && task.name.endsWith("Assets")
+            || task.name.startsWith("generate") && task.name.endsWith("Assets")) {
+        task.dependsOn "packPython"
+    }
+}

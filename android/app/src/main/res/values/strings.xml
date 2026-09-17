@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sarideo</string>
+
+    <string name="splash_starting">Sarideo ishga tushmoqda…</string>
+    <string name="splash_first_run">Birinchi ishga tushirish — bir necha soniya.\nIlova o\'zini telefonga yoyyapti.</string>
+    <string name="splash_slow">Kutish uzayib ketdi. Ilovani yopib, qaytadan oching.</string>
+    <string name="splash_failed">Ishga tushmadi:\n%1$s</string>
+
+    <string name="channel_name">Render</string>
+    <string name="notification_title">Sarideo ishlamoqda</string>
+    <string name="notification_text">Video shu telefonda yig\'ilmoqda. Ekranni o\'chirsangiz ham davom etadi.</string>
+    <string name="notification_stop">To\'xtatish</string>
+
+    <string name="saving">Saqlanmoqda: %1$s</string>
+    <string name="saved">Saqlandi: %1$s</string>
+    <string name="save_failed">Saqlanmadi: %1$s</string>
+</resources>
