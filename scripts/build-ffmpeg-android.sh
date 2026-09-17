@@ -81,7 +81,11 @@ fetch() {  # fetch <directory-it-unpacks-to> <url> [mirror...]
     # the reason a phone build cannot be made. The first one that answers wins.
     if curl -fsSL --retry 3 --retry-delay 3 --max-time 600 -o "$WORK/$dir.tar" "$url"; then
       local top
-      top="$(tar -tf "$WORK/$dir.tar" | head -1 | cut -d/ -f1)"
+      # `awk`, not `head`: `head` closes the pipe on the first line, tar is
+      # killed writing to it, and under `pipefail` that failure ends the build
+      # with "tar: stdout: write error" and nothing about why. awk reads the
+      # listing to the end, so tar always finishes.
+      top="$(tar -tf "$WORK/$dir.tar" | awk -F/ 'NR==1 {print $1}')"
       tar -xf "$WORK/$dir.tar" -C "$WORK"
       # A mirror is allowed to name its folder differently — a tag archive from
       # GitHub unpacks to `FFmpeg-n7.1` where the project's own tarball says
@@ -222,7 +226,10 @@ fetch "ffmpeg-$FFMPEG_VERSION" \
       "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n$FFMPEG_VERSION.tar.gz"
 (
   cd "$WORK/ffmpeg-$FFMPEG_VERSION"
-  [ -f config.h ] || ./configure \
+  # `ffbuild/config.mak` is written at the very end of a successful configure,
+  # so it is the marker that says "this tree is configured" — `config.h` is
+  # written earlier and a configure that failed after it would be skipped.
+  [ -f ffbuild/config.mak ] || ./configure \
     --prefix="$PREFIX" \
     --target-os=android \
     --arch="$ARCH" \
