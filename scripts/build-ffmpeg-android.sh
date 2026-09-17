@@ -61,7 +61,14 @@ export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
 export NM="$TOOLCHAIN/bin/llvm-nm"
 export SYSROOT="$TOOLCHAIN/sysroot"
-export CFLAGS="-O3 -fPIC -DANDROID -I$PREFIX/include"
+# `-Wno-error` is not laziness. These are releases from 2021 to 2024 being
+# compiled by whatever clang the newest NDK ships, and harfbuzz in particular
+# turns its own warnings into errors — so it fails on
+# `-Wcast-function-type-strict`, a check that did not exist when it was
+# released, over a cast FreeType's own API asks for. A warning invented after
+# the code was written is not a reason to refuse to build it. Last on the
+# command line, where it overrides the `-Werror` a project adds itself.
+export CFLAGS="-O3 -fPIC -DANDROID -I$PREFIX/include -Wno-error"
 export CXXFLAGS="$CFLAGS"
 export LDFLAGS="-L$PREFIX/lib"
 # Only our own prefix, never the build machine's: a host .pc file found here
