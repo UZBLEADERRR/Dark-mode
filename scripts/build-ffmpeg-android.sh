@@ -61,14 +61,19 @@ export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
 export NM="$TOOLCHAIN/bin/llvm-nm"
 export SYSROOT="$TOOLCHAIN/sysroot"
-# `-Wno-error` is not laziness. These are releases from 2021 to 2024 being
-# compiled by whatever clang the newest NDK ships, and harfbuzz in particular
-# turns its own warnings into errors — so it fails on
-# `-Wcast-function-type-strict`, a check that did not exist when it was
-# released, over a cast FreeType's own API asks for. A warning invented after
-# the code was written is not a reason to refuse to build it. Last on the
-# command line, where it overrides the `-Werror` a project adds itself.
-export CFLAGS="-O3 -fPIC -DANDROID -I$PREFIX/include -Wno-error"
+# These are releases from 2021 to 2024 compiled by whatever clang the newest NDK
+# ships, and the NDK promotes some of its warnings to errors on its own —
+# harfbuzz has none of its own. So `hb-ft.cc` fails on
+# `-Wcast-function-type-strict`, a check that did not exist when 2.9.1 was
+# released, over a cast FreeType's own generic-finalizer API asks for.
+#
+# Turning the warning off is what works, and `-Wno-error` on its own is not:
+# `-Werror=<name>` promotes one diagnostic and a bare `-Wno-error` only undoes
+# the blanket kind, so the compile still fails. Both are here because they undo
+# different things, and `-Wno-unknown-warning-option` keeps an older clang from
+# objecting to a name it has never heard of.
+export CFLAGS="-O3 -fPIC -DANDROID -I$PREFIX/include \
+  -Wno-error -Wno-unknown-warning-option -Wno-cast-function-type-strict"
 export CXXFLAGS="$CFLAGS"
 export LDFLAGS="-L$PREFIX/lib"
 # Only our own prefix, never the build machine's: a host .pc file found here
