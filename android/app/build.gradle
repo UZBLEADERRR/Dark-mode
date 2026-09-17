@@ -7,7 +7,6 @@ plugins {
 // The Python that runs on the phone is the same `app/` package the server runs,
 // copied in at build time rather than forked. Nothing below edits it.
 def repoRoot = rootProject.projectDir.parentFile
-def pyPayload = layout.buildDirectory.file("payload/sarideo-python.zip")
 
 android {
     namespace 'uz.sarideo.phone'

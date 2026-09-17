@@ -22,6 +22,13 @@
 # the last release that still ships an autotools `configure` and so needs no
 # second build system for one library.
 #
+# **One patch to harfbuzz.** 2.9.1 casts its two FreeType finalizers at each use
+# instead of declaring them the way FreeType does, and the NDK's clang now
+# refuses that cast. Three attempts to turn the diagnostic off from the command
+# line changed nothing — whatever promotes it is not reachable from CFLAGS — so
+# `harfbuzz-ft-signature.py` applies upstream's own 3.x fix and the casts are
+# gone rather than silenced.
+#
 # Usage:  ANDROID_NDK_HOME=/path/to/ndk scripts/build-ffmpeg-android.sh out/
 # Result: out/libffmpeg.so and out/libffprobe.so, both arm64-v8a executables.
 
@@ -29,6 +36,9 @@ set -euo pipefail
 
 mkdir -p "${1:-out}"
 OUT_DIR="$(cd "${1:-out}" && pwd)"
+# Resolved once, and absolutely: the build cds into each source tree, and the
+# patch beside this script has to be findable from all of them.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK="${WORK_DIR:-$(pwd)/.ffmpeg-build}"
 
 X264_TAG="${X264_TAG:-stable}"
@@ -61,19 +71,11 @@ export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
 export STRIP="$TOOLCHAIN/bin/llvm-strip"
 export NM="$TOOLCHAIN/bin/llvm-nm"
 export SYSROOT="$TOOLCHAIN/sysroot"
-# These are releases from 2021 to 2024 compiled by whatever clang the newest NDK
-# ships, and the NDK promotes some of its warnings to errors on its own —
-# harfbuzz has none of its own. So `hb-ft.cc` fails on
-# `-Wcast-function-type-strict`, a check that did not exist when 2.9.1 was
-# released, over a cast FreeType's own generic-finalizer API asks for.
-#
-# Turning the warning off is what works, and `-Wno-error` on its own is not:
-# `-Werror=<name>` promotes one diagnostic and a bare `-Wno-error` only undoes
-# the blanket kind, so the compile still fails. Both are here because they undo
-# different things, and `-Wno-unknown-warning-option` keeps an older clang from
-# objecting to a name it has never heard of.
-export CFLAGS="-O3 -fPIC -DANDROID -I$PREFIX/include \
-  -Wno-error -Wno-unknown-warning-option -Wno-cast-function-type-strict"
+# `-w`: nobody reads these warnings and nobody acts on them. Four upstream
+# projects compiled by a clang years newer than any of them produce thousands of
+# lines of them, and every one is noise between a reader and the error that
+# actually stopped the build. Errors still print.
+export CFLAGS="-O3 -fPIC -DANDROID -I$PREFIX/include -w"
 export CXXFLAGS="$CFLAGS"
 export LDFLAGS="-L$PREFIX/lib"
 # Only our own prefix, never the build machine's: a host .pc file found here
@@ -169,6 +171,10 @@ if [ ! -f "$PREFIX/lib/libharfbuzz.a" ]; then
   echo "══ harfbuzz"
   fetch "harfbuzz-$HARFBUZZ_VERSION" \
         "https://github.com/harfbuzz/harfbuzz/releases/download/$HARFBUZZ_VERSION/harfbuzz-$HARFBUZZ_VERSION.tar.xz"
+  # One file does not compile under a clang this new, and no compiler flag
+  # reaches it — see the script's header. The patch is upstream's own fix.
+  python3 "$SCRIPT_DIR/harfbuzz-ft-signature.py" \
+          "$WORK/harfbuzz-$HARFBUZZ_VERSION/src/hb-ft.cc"
   (
     cd "$WORK/harfbuzz-$HARFBUZZ_VERSION"
     ./configure \
@@ -178,7 +184,14 @@ if [ ! -f "$PREFIX/lib/libharfbuzz.a" ]; then
       --with-freetype=yes \
       --with-glib=no --with-gobject=no --with-cairo=no \
       --with-icu=no --with-graphite2=no
-    make -j"$JOBS"
+    # Silent rules hide the compile command, and the command is the only thing
+    # that answers "did that flag reach the compiler at all". Printed for one
+    # object, and only once the build has already failed.
+    make -j"$JOBS" || {
+      echo "── harfbuzz failed; the full command line for one object ──" >&2
+      make V=1 src/libharfbuzz_la-hb-ft.lo || true
+      exit 1
+    }
     make install
   )
 fi
