@@ -127,6 +127,83 @@ jobs:
         # one before it instead of having to be uninstalled first.
         run: gradle --no-daemon assembleDebug
 
+      - name: Check what is actually in it
+        # A green build says the project compiled. It does not say Chaquopy
+        # found an Android wheel for Pillow, or that pip resolved pydantic 1
+        # rather than quietly pulling 2, or that the ffmpeg binaries landed
+        # where Android will execute them. Each of those fails at run time, on
+        # a phone, with nothing in this log — so they are asserted here.
+        run: |
+          set -euo pipefail
+          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          python3 - "$apk" <<'CHECK'
+          import io, sys, zipfile
+
+          apk = zipfile.ZipFile(sys.argv[1])
+          names = set(apk.namelist())
+
+          required = [
+              # Executable only from here, which is the whole reason for the name.
+              "lib/arm64-v8a/libffmpeg.so",
+              "lib/arm64-v8a/libffprobe.so",
+              # The app itself, unpacked to real files on first run.
+              "assets/sarideo-python.zip",
+              "assets/sarideo-python.version",
+              # libass has no font database to ask on a phone.
+              "assets/fonts/DejaVuSans.ttf",
+          ]
+          missing = [name for name in required if name not in names]
+          if missing:
+              sys.exit("missing from the APK:\n  " + "\n  ".join(missing))
+
+          # The Python package the phone runs, checked for the two files whose
+          # absence would leave the app serving nothing.
+          payload = zipfile.ZipFile(io.BytesIO(apk.read("assets/sarideo-python.zip")))
+          inside = set(payload.namelist())
+          for name in ("app/main.py", "app/static/index.html", "app/render/video.py"):
+              if name not in inside:
+                  sys.exit(f"the Python payload has no {name}")
+
+          # What pip actually installed, as Chaquopy stored it.
+          wheels = sorted(n for n in names
+                          if n.startswith("assets/chaquopy/requirements"))
+          if not wheels:
+              sys.exit("Chaquopy installed no requirements at all")
+
+          found = set()
+          for wheel in wheels:
+              for entry in zipfile.ZipFile(apk.open(wheel)).namelist():
+                  top = entry.split("/")[0]
+                  if top.endswith(".dist-info"):
+                      found.add(top[: -len(".dist-info")])
+
+          print("installed:")
+          for name in sorted(found):
+              print("  " + name)
+
+          def need(prefix, why):
+              hit = [f for f in found if f.lower().startswith(prefix.lower())]
+              if not hit:
+                  sys.exit(f"{prefix} is not in the APK — {why}")
+              return hit[0]
+
+          pydantic = need("pydantic-", "the models cannot load without it")
+          if not pydantic.startswith("pydantic-1."):
+              sys.exit(f"expected pydantic 1.x on Android, got {pydantic}")
+          if any(f.startswith("pydantic_core-") for f in found):
+              sys.exit("pydantic-core was installed; that has no Android build")
+
+          need("fastapi-", "there is no server without it")
+          need("uvicorn-", "there is nothing to run the server")
+          need("pillow-", "no scene image can be prepared")
+          need("httpx-", "no provider can be called")
+
+          print()
+          print(f"APK entries: {len(names)}")
+          for name in required:
+              print(f"  {apk.getinfo(name).file_size / 1e6:7.1f} MB  {name}")
+          CHECK
+
       - name: Name it
         id: name
         run: |
