@@ -138,7 +138,24 @@ tayyor APK'ni artifacts'dan olasiz.
 | **Web UI** | O'sha `app/static`. WebView uni `127.0.0.1` dan oladi. |
 
 Server faqat **loopback** manzilini eshitadi — ya'ni Wi-Fi'dagi boshqa hech
-qaysi qurilma unga ulana olmaydi.
+qaysi qurilma unga ulana olmaydi. APK `debuggable` emas: debug kaliti bilan
+imzolangan, ya'ni o'rnatiladi va yangilanadi, lekin unga ADB orqali ulanib
+ichidagi kalitlarni o'qib bo'lmaydi.
+
+Yig'ilgan APK **44 MB**, va har bir build'dan keyin ichi ochib tekshiriladi —
+ikkita binar joyidami, paketda web UI bormi, pip nima o'rnatgan. Oxirgi
+tekshiruvdan:
+
+```
+24.6 MB  lib/arm64-v8a/libffmpeg.so
+24.6 MB  lib/arm64-v8a/libffprobe.so
+ 0.8 MB  assets/fonts/DejaVuSans.ttf
+ 0.4 MB  assets/sarideo-python.zip     (app/ + flow-extension)
+```
+
+Ichidagi Python paketlari: `fastapi`, `starlette`, `uvicorn`, `httpx`,
+`pydantic 1.10`, `pillow`, `edge-tts` (`aiohttp` bilan), `python-multipart` va
+ularning bog'liqliklari.
 
 Bitta o'zgartirish bor: telefonda **pydantic 2** emas, **pydantic 1** ishlatiladi.
 Pydantic 2 ning yuragi Rust'da yozilgan va Android uchun yig'ilmagan. Ikkalasi
