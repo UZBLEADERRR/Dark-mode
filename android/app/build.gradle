@@ -86,6 +86,16 @@ android {
         // installable at all — an unsigned release APK is refused by the
         // installer, and a key generated fresh on each CI run would make every
         // build refuse to upgrade the one before it.
+        debug {
+            // Signed with the debug key, but not debuggable. The two are
+            // separate switches, and only the first one is wanted here: a
+            // debuggable app can be attached to by anything holding
+            // `android.permission.SET_DEBUG_APP` or by anyone with ADB, and
+            // what it would read out of this process is the person's API keys.
+            // For an app whose whole claim is that the keys stay on the phone,
+            // that is the claim itself.
+            debuggable false
+        }
         release {
             minifyEnabled false
         }
